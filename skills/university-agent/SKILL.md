@@ -25,6 +25,9 @@ Run from this skill directory:
 python3 scripts/run_agent.py ask --text "아직 안 낸 과제 있어?"
 python3 scripts/run_agent.py context
 python3 scripts/run_agent.py assignments --unsubmitted
+python3 scripts/run_agent.py assignment-add --title '직접 받은 과제' --course-id '<조회된 과목 ID>' --due-at '2026-10-10'
+python3 scripts/run_agent.py assignment-complete --id '<직접 등록한 과제 ID>'
+python3 scripts/run_agent.py assignment-delete --id '<직접 등록한 과제 ID>'
 python3 scripts/run_agent.py lectures --unfinished
 python3 scripts/run_agent.py todos
 python3 scripts/run_agent.py notices
@@ -48,10 +51,11 @@ The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answ
 ## Behavior
 
 - No sample user or coursework is created. Run `sync_tls.py` first; the saved TLS username selects the local user. `UNIVERSITY_AGENT_DB` can select another local path. Unknown profile fields remain null.
+- When the user asks to register coursework absent from TLS, collect the title and use `assignment-add`. Course ID, due date, and description are optional; use a course ID returned by `context`, or omit it for a general task. Accept due dates as `YYYY-MM-DD` (no assumed time) or an ISO-8601 datetime with timezone. Do not invent missing fields. These assignments appear in `assignments`, `todos`, and context and survive TLS sync. Only `assignment-complete` and `assignment-delete` may change manual assignments; never change TLS records through those commands.
 - Pass the user's exact, unmodified message to `ask`. Never rewrite a paraphrase into a checkpoint command.
 - Natural-language checkpoint save/load requests return a command template and perform no checkpoint database read or write. The user must send the canonical command before checkpoint data is read or changed.
 - If a paraphrase clearly asks to save or resume a checkpoint but the runner does not recognize it, show the matching template without invoking another data command. If it could mean either operation, show both templates and wait for the user to send one.
-- The only user-facing save command is `과제 저장 --과제ID <id>`; load with `과제 불러오기`, optionally adding `--과제ID <id>`. An omitted ID on load selects the latest checkpoint. Never ask the user to write progress, blocker, next action, or completed-item fields.
+- For checkpoint saves, the user-facing command is `과제 저장 --과제ID <id>`; load with `과제 불러오기`, optionally adding `--과제ID <id>`. This is separate from registering a new assignment. An omitted ID on load selects the latest checkpoint. Never ask the user to write progress, blocker, next action, or completed-item fields.
 - After the user submits the exact save command, ChatGPT or Codex must summarize the current conversation into Korean `progress`, `blocker`, `nextAction`, and optional `completedItems`, then pass that JSON separately with `--checkpoint-json`. Do not call another model or external AI service to generate checkpoint text. Use only the current conversation: don't invent progress or completed items; say `없음` for a blocker only when the conversation establishes that there is none, otherwise record `대화에서 확인되지 않음`. Clearly prefix an inferred next-step recommendation with `AI 제안:`. If the assignment ID is missing, show registered assignments and ask which one to use; if the supplied ID is ambiguous, ask for clarification.
 - Verify the supplied assignment ID against provider assignment data; never invent or rewrite IDs. If there is not enough conversation evidence to summarize the current state safely, ask a focused follow-up and do not save until the user answers.
 - The hidden `--checkpoint-json` runner argument is for ChatGPT/Codex integration. The user-facing command remains ID-only. Reject malformed commands, unknown flags, invalid payload fields, and extra prose without saving or loading.

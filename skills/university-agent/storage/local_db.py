@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -88,7 +88,41 @@ class LocalDatabase:
 
     def get_assignments(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute("SELECT a.id, a.course_id AS courseId, a.title, a.description, a.due_at AS dueAt, s.submission_status AS submissionStatus, s.submitted_at AS submittedAt, a.source FROM assignments a JOIN assignment_submissions s ON s.assignment_id=a.id AND s.user_id=? JOIN enrollments e ON e.course_id=a.course_id AND e.user_id=? ORDER BY a.due_at", (user_id, user_id))
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        manual = self.connection.execute("SELECT id, course_id AS courseId, title, description, due_at AS dueAt, completed_at AS submittedAt FROM manual_assignments WHERE user_id=?", (user_id,))
+        result.extend(dict(row, submissionStatus="SUBMITTED" if row["submittedAt"] else "NOT_SUBMITTED", source="manual") for row in manual)
+        return sorted(result, key=lambda item: (item["dueAt"] is None, item["dueAt"] or ""))
+
+    def add_manual_assignment(self, user_id: str, title: str, *, course_id: str | None = None, due_at: str | None = None, description: str | None = None) -> dict[str, Any]:
+        title = title.strip()
+        if not title:
+            raise ValueError("과제 제목이 필요합니다.")
+        if due_at:
+            try:
+                if len(due_at) == 10:
+                    date.fromisoformat(due_at)
+                elif datetime.fromisoformat(due_at).utcoffset() is None:
+                    raise ValueError
+            except ValueError:
+                raise ValueError("마감일은 YYYY-MM-DD 또는 시간대가 포함된 ISO-8601 날짜·시간이어야 합니다.") from None
+        if course_id and not self.connection.execute("SELECT 1 FROM enrollments WHERE user_id=? AND course_id=?", (user_id, course_id)).fetchone():
+            raise ValueError("수강 중인 과목 ID를 확인해 주세요.")
+        now = datetime.now(timezone.utc).isoformat()
+        assignment_id = f"manual-{uuid4().hex}"
+        self.connection.execute("INSERT INTO manual_assignments(id, user_id, course_id, title, description, due_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (assignment_id, user_id, course_id, title, description, due_at, now, now))
+        self.connection.commit()
+        return {"id": assignment_id, "courseId": course_id, "title": title, "description": description, "dueAt": due_at, "submissionStatus": "NOT_SUBMITTED", "submittedAt": None, "source": "manual"}
+
+    def complete_manual_assignment(self, user_id: str, assignment_id: str) -> bool:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self.connection.execute("UPDATE manual_assignments SET completed_at=?, updated_at=? WHERE id=? AND user_id=?", (now, now, assignment_id, user_id))
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def delete_manual_assignment(self, user_id: str, assignment_id: str) -> bool:
+        cursor = self.connection.execute("DELETE FROM manual_assignments WHERE id=? AND user_id=?", (assignment_id, user_id))
+        self.connection.commit()
+        return cursor.rowcount > 0
 
     def get_lectures(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute("SELECT l.id, l.course_id AS courseId, l.title, l.duration_seconds AS durationSeconds, l.available_from AS availableFrom, l.available_until AS availableUntil, p.watched_seconds AS watchedSeconds, p.watch_progress AS watchProgress, p.completed, l.source FROM lectures l JOIN lecture_progress p ON p.lecture_id=l.id AND p.user_id=? JOIN enrollments e ON e.course_id=l.course_id AND e.user_id=? ORDER BY l.title", (user_id, user_id))
@@ -98,7 +132,10 @@ class LocalDatabase:
         courses = {course["id"]: {"courseId": course["id"], "courseName": course["name"], "items": []} for course in self.get_courses(user_id)}
         for item in self.get_assignments(user_id):
             if item["submissionStatus"] != "SUBMITTED":
-                courses[item["courseId"]]["items"].append({"type": "ASSIGNMENT", "id": item["id"], "title": item["title"], "dueAt": item["dueAt"], "status": item["submissionStatus"]})
+                course = courses.get(item["courseId"])
+                if course is None:
+                    course = courses.setdefault("manual-other", {"courseId": None, "courseName": "기타 과제", "items": []})
+                course["items"].append({"type": "ASSIGNMENT", "id": item["id"], "title": item["title"], "dueAt": item["dueAt"], "status": item["submissionStatus"]})
         for item in self.get_lectures(user_id):
             if not item["completed"]:
                 courses[item["courseId"]]["items"].append({"type": "LECTURE", "id": item["id"], "title": item["title"], "dueAt": item["availableUntil"], "availableFrom": item["availableFrom"], "watchProgress": item["watchProgress"]})

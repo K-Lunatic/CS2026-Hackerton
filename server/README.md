@@ -35,6 +35,8 @@ Mac에 열리는 `.university-agent/chatgpt/settings.html`을 따라 설정합�
 
 GPT Instructions에는 [gpt-instructions.md](gpt-instructions.md)를 넣습니다. OAuth 콜백은 입력한 GPT ID의 `https://chatgpt.com/aip/g-.../oauth/callback`과 `https://chat.openai.com/aip/g-.../oauth/callback`만 허용합니다.
 
+기존 Custom GPT에도 새 저장·목록 Actions를 적용하려면 GPT 편집 화면에서 Action schema를 현재 `/openapi.json`으로 다시 가져오고 Instructions를 최신 [gpt-instructions.md](gpt-instructions.md)로 교체한 뒤 저장합니다.
+
 OpenAI의 [GPT Action 인증](https://developers.openai.com/api/docs/actions/authentication)과 [HTTPS·시간 제한](https://developers.openai.com/api/docs/actions/production)을 따릅니다. 계정의 GPT/Actions 사용 가능 여부와 웹·iOS·Android 인증 동작은 실제 대상 계정에서 확인해야 합니다.
 
 ## 데이터와 실패 처리
@@ -48,7 +50,7 @@ OpenAI의 [GPT Action 인증](https://developers.openai.com/api/docs/actions/aut
 - 페이지 기본 20개, 최대 50개이며 `nextOffset`을 따라 조회합니다. 공지 본문은 1,000자 미리보기입니다. 할 일은 과목명이 있는 항목 목록입니다.
 - 연결 해제는 계정의 모든 토큰을 폐기합니다. 데이터까지 삭제하려면 Mac 운영자가 진행 중인 동기화 종료 후 해당 DB와 백업을 삭제합니다.
 
-현재 모바일 지원: 과목·과제·강의·공지·할 일 조회, 동기화, 연결 해제. 일반 과제 편집·북마크·체크포인트·파일 다운로드·팀플 저장은 아직 Actions에 연결하지 않았습니다. 이 기능의 기존 로컬 CLI는 유지합니다.
+현재 모바일 지원: 과목·과제·강의·공지·할 일 조회, 동기화, 연결 해제, 과제 진행 기록 저장·불러오기, 미완성 저장 목록, 직접 등록한 과제 제출 확인 후 완료 처리. TLS 과제는 `save "과제명"`, 캡처 문제처럼 TLS에 없는 과제는 `save new "제목"`으로 저장합니다. 직접 등록한 과제는 사용자 답변이 정확히 `예`일 때만 완료 처리하고 체크포인트를 제거합니다. `아니요`나 다른 답변에는 유지합니다. TLS 과제는 동기화에서 `SUBMITTED` 또는 `LATE`가 확인될 때 제거합니다. `load "과제명"`으로 기록을 불러오고 정확한 `list` 명령으로 저장 목록을 조회합니다. 응답의 `nextCommands`에는 이어서 사용할 명령이 있습니다. 일반 과제 편집·학사 북마크·파일 다운로드·팀플 저장은 아직 Actions에 연결하지 않았습니다. 이 기능의 기존 로컬 CLI는 유지합니다.
 
 이 실행기는 단일 Mac에서 연결을 확인하는 용도입니다. 표준 라이브러리 WSGI 실행기와 메모리 토큰을 사용합니다. 여러 프로세스나 장기 운영용으로 확대할 때는 HTTP 실행기·공유 토큰 저장소를 교체해야 합니다.
 

@@ -103,8 +103,10 @@ def selection_guidance(items: list[dict[str, Any]], operation: str = "save") -> 
     candidates = [dict(courseName=item["courseName"] or "기타 과제", title=item["title"],
                        dueAt=item.get("dueAt"), command=selection_command(item, operation)) for item in items]
     if not items:
-        intro = ('비슷한 과제를 찾지 못했습니다. TLS에 없는 과제인가요, 아니면 TLS의 제목이 다른가요? '
-                 '제목이 다르면 TLS에 표시된 과제명을 알려주세요. TLS에 없다면 새 과제 제목을 알려주세요.')
+        intro = ('관련 과제를 TLS에서 찾지 못했습니다. TLS에 표시된 제목이 다른가요, '
+                 '아니면 학교 과제 목록에 없는 과제인가요?\n\n'
+                 '- 제목이 다르면 TLS 과제명을 알려주세요.\n'
+                 '- 목록에 없다면 저장할 제목을 정해 주세요. 예: `save new "복소수 자료형 과제"`')
     elif len(items) == 1:
         action = "저장" if operation == "save" else "불러오기"
         intro = f"해당 과제를 찾았습니다. 진행 기록의 {action}을 요청하려면 아래 명령을 보내 주세요."

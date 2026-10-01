@@ -36,6 +36,9 @@ Run from this skill directory:
 python3 scripts/run_agent.py ask --text "아직 안 낸 과제 있어?"
 python3 scripts/run_agent.py context
 python3 scripts/run_agent.py assignments --unsubmitted
+python3 scripts/run_agent.py assignments --this-week
+python3 scripts/run_agent.py assignments --upcoming
+python3 scripts/run_agent.py ask --text "나.. 지금은 어때?"
 python3 scripts/run_agent.py assignment-add --title '직접 받은 과제' --course-id '<조회된 과목 ID>' --due-at '2026-10-10'
 python3 scripts/run_agent.py assignment-complete --id '<직접 등록한 과제 ID>'
 python3 scripts/run_agent.py assignment-delete --id '<직접 등록한 과제 ID>'
@@ -61,6 +64,14 @@ The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answ
 
 ## Behavior
 
+- Help beginners through their goal, not feature names. Use ordinary Korean such as “남은 과제”, “덜 본 강의”, “하던 과제 기록”, and “다음 담당자에게 넘길 내용”; keep CLI commands and internal JSON out of conversational answers except the required checkpoint confirmation command. `ask` offers examples for usage questions and unfamiliar requests without requiring a school account.
+- Use the current conversation to interpret short follow-ups such as “그거 추가해줘” or a title supplied after a registration question. Pass the exact message to `ask`, then use the appropriate existing command when the user's intended action and required values are clear. The runner's keyword routing is a fallback, not the limit of the calling AI's understanding. Do not claim that the CLI alone understands arbitrary conversation.
+- Do not ask again for details the user already supplied. For a new assignment only the title is required; use supplied course/deadline details, resolve course IDs through `context`, and ask one focused question only if a target or required detail is ambiguous. Never guess which assignment to delete or complete. School assignments are submitted at school, not through a local completion command.
+- When a user asks what to do now, show urgent recorded items and one practical next action. Offer at most a few relevant example requests when helpful, not the entire feature catalog after every response. Ask for clarification when “지금은 어때?” lacks academic context rather than assuming it is about school or emotional wellbeing.
+- Academic lookups read saved local data, not live TLS. State this when reporting status; `context.lastSyncedAt` is the user's last TLS import time and `asOf` is the query time. Do not imply that repeated queries refresh submission or viewing status. A requested refresh uses `sync_tls.py`, then reruns the lookup.
+- Interpret deadlines in Asia/Seoul. This week means Monday through Sunday, including deadlines already passed within that week. Upcoming excludes overdue and unknown deadlines. Date-only deadlines retain their date without an invented submission time; overdue starts the following day. Report unknown deadlines or submission statuses separately rather than declaring them complete or unsubmitted.
+- `watchProgress` is a percentage from 0 to 100: `1.0` means **1%**, not 100%. Keep the provider's `completed` flag authoritative; even 100% does not by itself prove completion. Missing lecture deadlines do not mean lectures are overdue.
+- For conversational academic-status questions such as “나.. 지금은 어때?”, use the returned context and status answer. Describe recorded workload without inferring the user's emotional state or treating all future coursework as late.
 - No sample user or coursework is created. Run `sync_tls.py` first; the saved TLS username selects the local user. `UNIVERSITY_AGENT_DB` can select another local path. Unknown profile fields remain null.
 - When the user asks to register coursework absent from TLS, collect the title and use `assignment-add`. Course ID, due date, and description are optional; use a course ID returned by `context`, or omit it for a general task. Accept due dates as `YYYY-MM-DD` (no assumed time) or an ISO-8601 datetime with timezone. Do not invent missing fields. These assignments appear in `assignments`, `todos`, and context and survive TLS sync. Only `assignment-complete` and `assignment-delete` may change manual assignments; never change TLS records through those commands.
 - Pass the user's exact, unmodified message to `ask`. Never rewrite a paraphrase into a checkpoint command.

@@ -5,6 +5,20 @@
 - **ChatGPT 웹·모바일:** 이 Mac에서 실행하는 로컬 게이트웨이에 HTTPS 터널로 연결합니다. 별도 호스팅 서버·도메인은 필요 없습니다. Mac에서 [University Agent.command](University%20Agent.command)를 더블클릭하고 Custom GPT Actions를 설정합니다. 휴대폰 사용자는 GPT 로그인 화면을 사용하며 Python을 실행하지 않습니다. [로컬 연결 안내](server/README.md)를 참고하세요. 실제 GPT 연결은 GPT ID와 Actions 설정이 필요합니다.
 - **로컬 Codex:** 기존 플러그인과 현재 기기의 SQLite·macOS Keychain을 사용합니다. 아래 설치 안내는 이 모드에만 해당합니다.
 
+## 처음 사용한다면
+
+기능 이름이나 명령어를 외울 필요 없이 대화에서 원하는 일을 말하세요.
+
+- “뭘 할 수 있어?” — 사용할 수 있는 일을 예시로 안내합니다.
+- “오늘 뭐 해야 해?” — 기한 지난 과제, 다음 마감과 급한 강의를 확인합니다.
+- “이번 주 안 낸 과제 알려줘” — 이번 주 마감되는 미제출 과제를 확인합니다.
+- “할 일 추가해줘” — 제목을 물어보고, 과목·마감일은 아는 경우만 받습니다.
+- “팀플 진행 상황 정리해줘” — 회의 내용이나 작업 메모를 받아 정리합니다.
+
+대화의 앞뒤 문맥은 Codex가 해석하고 필요한 기능을 선택합니다. 로컬 실행기는 정해진
+표현을 처리하는 보조 도구이며, 혼자서 모든 자연어를 이해하는 모델은 아닙니다.
+기능 안내는 로그인 없이 볼 수 있고 학교 데이터 조회에는 아래 최초 연결이 필요합니다.
+
 ## 로컬 플러그인 설치·테스트
 
 이 저장소를 받은 Mac에서 다음을 실행합니다. 설치 후 새 Codex 대화를 시작하고 `$university-agent`로 호출합니다.
@@ -44,6 +58,10 @@ cp -R skills/university-agent ~/.codex/skills/
 cd ~/.codex/skills/university-agent
 python3 scripts/run_agent.py ask --text "아직 안 낸 과제 있어?"
 python3 scripts/run_agent.py context
+python3 scripts/run_agent.py assignments --this-week
+python3 scripts/run_agent.py assignments --upcoming
+python3 scripts/run_agent.py assignments --overdue
+python3 scripts/run_agent.py ask --text "나.. 지금은 어때?"
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
 python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘"
 python3 scripts/run_agent.py ask --text '과제 불러오기 --과제ID assignment-network-5'
@@ -57,6 +75,12 @@ python3 scripts/tls_fetch.py --path /my/ --output /tmp/tls-my.html
 불러오기는 `과제 불러오기`이며, 특정 기록은 뒤에 `--과제ID <id>`를 추가합니다. 직접 CLI 실행은 대화 기록을 볼 수 없으므로 자동 요약하지 않습니다. 자동 저장 요약은 ChatGPT 또는 Codex에서 Skill을 통해 사용하세요.
 
 DB 기본 경로는 `~/.university-agent/university.db`입니다. `UNIVERSITY_AGENT_DB` 환경 변수로 현재 기기의 다른 로컬 경로를 지정할 수 있습니다.
+
+학업 조회는 저장된 데이터 기준입니다. 최신 제출·시청 상태는 TLS 동기화 후 반영됩니다.
+“이번 주 미제출 과제”는 한국 시간 월~일 마감만, “앞으로 해야 하는 과제”는 기한이 남은
+미제출 과제만 반환합니다. 마감 미상은 별도로 안내하며, 날짜만 있는 마감에 시간을 덧붙이지 않습니다.
+“나.. 지금은 어때?”는 마지막 동기화 시각, 기한 지난 과제, 다음 마감, 급한 미완료 강의를 요약합니다.
+시청률은 0~100 단위이므로 `1.0`은 1%이며, 완료 여부는 별도 필드를 따릅니다.
 
 TLS 동기화는 수강 과목별 과제(마감·제출 상태), 영상(길이·시청 진행률·완료 여부·표시된 시청 기간), 공지(제목·본문·게시일), PDF/PPT 자료를 저장합니다. `todos`는 미제출 과제와 미완료 영상을 과목별로 묶어 보여줍니다. TLS에 기간이 표시되지 않은 영상의 시청 기한은 비워 둡니다.
 

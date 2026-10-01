@@ -31,6 +31,7 @@
 6. 이 DB는 의도적으로 기기별 단일 저장소다. 기기 간 공유와 충돌 해결은 제공하지 않는다.
 7. 과제 Context Bookmark는 사용자가 보낸 정형 명령에서만 읽거나 쓴다. 저장은 진행 이력을 append-only로 남긴다.
 8. 직접 등록한 과제는 `manual_assignments`에 사용자별로 저장하며 TLS 재동기화에서 삭제하지 않는다. 과목과 마감일은 선택 사항이고, 완료 처리는 TLS 제출 상태를 변경하지 않는다.
+9. 조회 컨텍스트의 `asOf`는 한국 시간 조회 시각, `lastSyncedAt`는 사용자 행의 마지막 TLS 가져오기 시각, `dataSource`는 `local`이다. `upcomingAssignments`, `overdueAssignments`, `undatedAssignments`는 미제출 과제를 마감으로 구분하고 `unknownSubmissionAssignments`는 제출 상태 미상 과제를 별도로 반환한다. 새 DB 테이블은 만들지 않는다.
 
 ## 기능팀이 받는 형태
 

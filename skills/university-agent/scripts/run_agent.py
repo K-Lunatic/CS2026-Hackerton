@@ -15,13 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from features.assignments import get_assignments
+from features.assignments import assignment_answer, get_assignments
 from features.bookmarks import add_bookmark, delete_bookmark, list_bookmarks, validate_bookmark_target
-from features.context import get_current_context
+from features.context import format_current_context, get_current_context
 from features.context_bookmarks import format_resume_card, get_context_bookmark, save_context_bookmark
 from features.context_commands import command_template, detect_context_intent, parse_context_command
 from features.handover import HandoverError, create_handover, format_handover, prepare_handover, is_handover_request
 from features.lectures import get_lectures
+from features.guidance import guidance_request, is_status_request, usage_guide
 from providers.credentials import CONFIG_PATH
 from storage.local_db import LocalDatabase
 
@@ -197,12 +198,13 @@ def ask(
     checkpoint_json: str | None = None,
     **options,
 ) -> dict[str, Any]:
-    if re.search(r"과제.{0,20}(?:등록|추가)|(?:등록|추가).{0,20}과제", text):
-        return {"toolCalls": [], "data": None, "needsInput": True,
-                "answer": "등록할 과제 제목을 알려주세요. 과목과 마감일은 선택 사항입니다. 확인된 값으로 assignment-add 명령을 실행할 수 있습니다."}
     checkpoint = _checkpoint_command(text, checkpoint_json=checkpoint_json)
     if checkpoint:
         return checkpoint
+
+    guidance = guidance_request(text)
+    if guidance:
+        return guidance
 
     intent = detect_context_intent(text)
     if intent:
@@ -241,20 +243,15 @@ def ask(
                 "toolCalls": [],
                 "data": None,
                 "needsInput": True,
-                "answer": "분석할 회의록이나 작업 기록을 --records로 입력해주세요.",
+                "answer": "회의 내용이나 작업 메모를 보내주세요. 누가 무엇을 했고 무엇이 남았는지 정리해 드릴게요. 예: ‘민수는 로그인 구현 완료, 지수는 발표 자료 작성 중.’",
             }
         return handover_result(records, **options)
     if re.search(r"과제|안 낸|미제출|밀린", text):
-        data = get_assignments(database(), USER_ID, unsubmitted=True)
-        answer = "현재 미제출 과제가 없습니다." if not data else "\n".join(f"{x['title']} — 마감 {x['dueAt']}" for x in data)
-        return {"toolCalls": ["get_unsubmitted_assignments"], "data": data, "answer": answer}
+        return assignment_answer(database(), USER_ID, text)
     if re.search(r"강의|시청|안 본", text):
         data = get_lectures(database(), USER_ID, unfinished=True)
         answer = "\n".join(f"{x['title']} — {x['watchProgress']}%" for x in data) or "미시청 강의가 없습니다."
         return {"toolCalls": ["get_unwatched_lectures"], "data": data, "answer": answer}
-    if re.search(r"할 일|해야 할 일|마감 목록", text):
-        data = database().get_todos(USER_ID)
-        return {"toolCalls": ["get_todos"], "data": data, "answer": "과목별 할 일을 조회했습니다."}
     if re.search(r"공지", text):
         data = database().get_notices(USER_ID)
         return {"toolCalls": ["get_notices"], "data": data, "answer": json.dumps(data, ensure_ascii=False)}
@@ -264,15 +261,11 @@ def ask(
     if re.search(r"북마크|즐겨찾기", text):
         data = list_bookmarks(database(), USER_ID)
         return {"toolCalls": ["get_bookmarks"], "data": data, "answer": json.dumps(data, ensure_ascii=False)}
-    if re.search(r"컨텍스트|전체|상태", text):
+    if is_status_request(text):
         store = database()
         data = get_current_context(store, USER_ID, lambda: list_bookmarks(store, USER_ID))
-        return {"toolCalls": ["get_current_context"], "data": data, "answer": "현재 학업 컨텍스트를 조회했습니다."}
-    return {
-        "toolCalls": [],
-        "data": None,
-        "answer": "과제, 강의, 북마크, 학업 컨텍스트, 팀플 진행 상황이나 인수인계를 물어보세요.",
-    }
+        return {"toolCalls": ["get_current_context"], "data": data, "answer": format_current_context(data)}
+    return usage_guide(text)
 
 
 def main() -> None:
@@ -282,6 +275,8 @@ def main() -> None:
     assignment_parser = sub.add_parser("assignments")
     assignment_parser.add_argument("--unsubmitted", action="store_true")
     assignment_parser.add_argument("--upcoming", action="store_true")
+    assignment_parser.add_argument("--this-week", action="store_true")
+    assignment_parser.add_argument("--overdue", action="store_true")
     manual_add = sub.add_parser("assignment-add", help="TLS에 없는 과제를 로컬에 등록")
     manual_add.add_argument("--title", required=True)
     manual_add.add_argument("--course-id")
@@ -327,7 +322,7 @@ def main() -> None:
     elif args.command == "assignments":
         result = {
             "toolCalls": ["get_assignments"],
-            "data": get_assignments(database(), USER_ID, unsubmitted=args.unsubmitted, upcoming=args.upcoming),
+            "data": get_assignments(database(), USER_ID, unsubmitted=args.unsubmitted, upcoming=args.upcoming, this_week=args.this_week, overdue=args.overdue),
         }
     elif args.command == "assignment-add":
         try:

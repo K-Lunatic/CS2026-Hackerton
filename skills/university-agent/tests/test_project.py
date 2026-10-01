@@ -307,8 +307,7 @@ class ProjectTests(ProjectTestBase):
 
 
 class KnownIntegrationIssues(ProjectTestBase):
-    """Reproduced defects, explicitly expected failures until feature owners fix them."""
-    @unittest.expectedFailure
+    """Regression checks for previously reproduced integration defects."""
     def test_team_progress_intent_reaches_handover(self):
         result = self.cli('ask', '--text', '팀플 진행 상황 알려줘', '--records', '민수는 테스트 완료.', '--prepare')
         self.assertEqual(result['toolCalls'], ['prepare_handover'])

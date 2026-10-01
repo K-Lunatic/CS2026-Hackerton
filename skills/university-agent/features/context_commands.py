@@ -87,6 +87,8 @@ def detect_context_intent(text: str) -> str | None:
     if save:
         return "save"
     if load:
+        if re.search(r"팀플|인수인계", text) and not re.search(r"체크포인트|컨텍스트|불러|복귀|재개", text):
+            return None
         return "load"
     return None
 

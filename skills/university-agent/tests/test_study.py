@@ -40,7 +40,8 @@ class StudyFlowTests(ProjectTestBase):
         return q
 
     def test_intent_offer_direct_request_and_unrelated_short_reply(self):
-        self.assertEqual(study_intent('운영체제 시험 준비해야 하는데'), 'offer')
+        self.assertEqual(study_intent('운영체제 시험 준비해야 하는데'), 'request')
+        self.assertEqual(event_from_text('운영체제 시험 준비해야 하는데', [])['settings']['mode'], 'concepts')
         self.assertEqual(study_intent('자료구조 객관식 5문제 만들어줘'), 'request')
         self.assertIsNone(study_intent('수업자료 목록 보여줘'))
         s = self.session()
@@ -58,12 +59,9 @@ class StudyFlowTests(ProjectTestBase):
     def test_cli_routes_study_without_changing_academic_lookup(self):
         lookup = self.cli('ask', '--text', '수업자료 목록 보여줘')
         self.assertEqual(lookup['toolCalls'], ['get_resources'])
-        offer = self.cli('ask', '--text', '자료구조 공부 좀 해야겠다', '--conversation', 'cli-study')
-        self.assertEqual(offer['status'], 'offered')
-        self.assertNotIn('question', offer)
-        prepared = self.cli('study', '--conversation', 'cli-study', '--event-json', json.dumps({
-            'action': 'accept', 'replyTo': offer['offerId']}, ensure_ascii=False))
+        prepared = self.cli('ask', '--text', '자료구조 공부 좀 해야겠다', '--conversation', 'cli-study')
         self.assertEqual(prepared['status'], 'prepared')
+        self.assertEqual(prepared['hostOnly']['settings']['mode'], 'concepts')
         self.assertEqual(prepared['hostOnly']['SOURCE'][0]['courseId'], 'course-1')
         direct = self.cli('ask', '--text', '자료구조 3주차 자료로 객관식 5문제 만들어줘', '--conversation', 'direct-study')
         self.assertEqual(direct['status'], 'prepared')
@@ -71,14 +69,14 @@ class StudyFlowTests(ProjectTestBase):
         self.assertEqual(direct['hostOnly']['SOURCE'][0]['name'], '3주차 탐색')
         unrelated = self.cli('ask', '--text', '과제 알려줘', '--conversation', 'unrelated-study')
         self.assertNotEqual(unrelated['toolCalls'], ['study'])
-        old_offer = self.cli('ask', '--text', '자료구조 공부해야겠다', '--conversation', 'unrelated-study')
+        old_offer = self.session('unrelated-study').call({'action': 'offer'})
         self.cli('ask', '--text', '과제 알려줘', '--conversation', 'unrelated-study')
         with self.assertRaises(ValueError):
             self.session('unrelated-study').call({'action': 'accept', 'replyTo': old_offer['offerId']})
 
     def test_grounded_question_flow_and_no_early_answer(self):
         s = self.session()
-        offer = s.call({'action': 'offer', 'selection': {'courseId': 'course-1'}})
+        offer = s.call({'action': 'offer', 'selection': {'courseId': 'course-1'}, 'settings': {'count': 5, 'delivery': 'single'}})
         prepared = s.call({'action': 'accept', 'replyTo': offer['offerId']})
         self.assertEqual(prepared['status'], 'prepared')
         self.assertEqual(prepared['hostOnly']['settings']['types'], ['mcq', 'mcq', 'mcq', 'short', 'essay'])
@@ -176,6 +174,61 @@ class StudyFlowTests(ProjectTestBase):
                          'data': {'questions': [], 'shortageReason': '출제 근거가 부족함'}})
         self.assertEqual(result['status'], 'insufficient')
         self.assertNotIn('question', result)
+
+    def test_concepts_then_ten_or_twenty_questions_and_bulk_grading(self):
+        for count in (10, 20):
+            s = self.session(f'batch-{count}')
+            prepared = s.call(event_from_text('자료구조 공부하고 싶어', [{'id': 'course-1', 'name': '자료구조 (8218)'}]))
+            concepts = s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'concepts': [{
+                'concept': '이진 탐색', 'explanation': '정렬된 배열에서 탐색한다.', 'evidence': self.question()['evidence']}]}})
+            self.assertIn('문제 10개 풀기', concepts['nextCommands'])
+            with self.assertRaises(ValueError): s.call({'action': 'accept', 'replyTo': 'unrelated'})
+            prepared = s.call({'action': 'accept', 'replyTo': concepts['offerId'], 'settings': {'count': count}})
+            self.assertEqual(prepared['hostOnly']['settings']['mode'], 'quiz')
+            types = prepared['hostOnly']['settings']['types']
+            questions = [self.question(t, i) for i, t in enumerate(types, 1)]
+            public = s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': questions}})
+            self.assertEqual(len(public['questions']), count)
+            for q in public['questions']:
+                self.assertEqual(set(q), {'id', 'type', 'question', 'options'})
+            self.assertNotIn('explanation', json.dumps(public))
+            s.call({'action': 'hint', 'questionId': f'q{count}'})
+            answers = [{'questionId': q['id'], 'text': '1' if q['type'] == 'mcq' else '정렬된 리스트를 탐색'} for q in questions]
+            with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': answers[:-1]})
+            invalid = [*answers[:-1], answers[0]]
+            with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': invalid})
+            self.assertEqual(len(s.call({'action': 'status'})['questions']), count)
+            grading = s.call({'action': 'submit', 'answers': answers})
+            self.assertEqual(len(grading['hostOnly']['answers']), count * 2 // 5)
+            self.assertNotIn('feedback', grading)
+            grades = [{'questionId': q['id'], 'criteria': [{'criterion': '정렬 조건', 'met': True, 'feedback': '정렬 조건 충족'}]}
+                      for q in questions if q['type'] != 'mcq']
+            with self.assertRaises(ValueError): s.call({'action': 'grade_batch', 'gradeId': 'stale', 'grades': grades})
+            with self.assertRaises(ValueError): s.call({'action': 'grade_batch', 'gradeId': grading['gradeId'], 'grades': grades[:-1]})
+            final = s.call({'action': 'grade_batch', 'gradeId': grading['gradeId'], 'grades': grades})
+            self.assertEqual(final['summary']['counts']['correct'], count)
+            self.assertEqual(final['summary']['selfCorrect'], count - 1)
+            self.assertEqual(s.call({'action': 'status'})['counts']['correct'], count)
+
+    def test_batch_skip_reveal_and_atomic_invalid_answer(self):
+        s = self.session()
+        prepared = s.call({'action': 'request', 'selection': {'courseId': 'course-1'}, 'settings': {'count': 3, 'types': ['mcq'] * 3}})
+        s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': [self.question(index=i) for i in (1, 2, 3)]}})
+        with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': [
+            {'questionId': 'q1', 'text': '1'}, {'questionId': 'q2', 'text': '9'}, {'questionId': 'q3', 'text': '1'}]})
+        self.assertEqual(len(s.call({'action': 'status'})['questions']), 3)
+        self.assertEqual(s.call({'action': 'reveal', 'questionId': 'q3'})['outcome'], 'revealed')
+        s.call({'action': 'skip', 'questionId': 'q1'})
+        final = s.call({'action': 'submit', 'answers': [{'questionId': 'q2', 'text': '2'}]})
+        self.assertEqual(final['summary']['counts'], {'correct': 0, 'incorrect': 1, 'partial': 0, 'skipped': 1, 'revealed': 1})
+
+    def test_concept_followup_is_cleared_by_topic_change(self):
+        s = self.session()
+        p = s.call({'action': 'request', 'selection': {'courseId': 'course-1'}, 'settings': {'mode': 'concepts'}})
+        c = s.call({'action': 'generate', 'requestId': p['requestId'], 'data': {'concepts': [{
+            'concept': '탐색', 'explanation': '자료 설명', 'evidence': self.question()['evidence']}]}})
+        s.call({'action': 'observe'})
+        with self.assertRaises(ValueError): s.call({'action': 'accept', 'replyTo': c['offerId']})
 
     def test_attachment_concepts_and_cancel(self):
         attachment = self.db_path.parent / 'attachments' / 'uploaded.txt'

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "university-agent",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "터틀넥: 대학생활 관리와 읽은 수업자료 기반 대화형 학습보조",
   "author": {
     "name": "K-Lunatic"
@@ -25,7 +25,7 @@
         "defaultPrompt": [
           "이번 주 미제출 과제 알려줘",
           "자료구조 공부 좀 해야겠다",
-          "이 수업자료로 5문제 만들어줘"
+          "이 수업자료로 10문제 만들어줘"
         ]
       }
     }

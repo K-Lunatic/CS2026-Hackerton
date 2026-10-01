@@ -44,5 +44,22 @@ def format_current_context(data: dict[str, Any]) -> str:
         if due is not None and due.date() <= now.date():
             state = "기한 지남" if due < now else "오늘 마감"
             lines.append(f"{state}: {courses.get(item.get('courseId'), '과목 확인 필요')} / {item['title']} — {format_deadline(item.get('availableUntil'))} · 시청률 {item['watchProgress']:g}% · 미완료")
+    actionable = [(deadline(item.get("dueAt")), item, "과제") for item in data["upcomingAssignments"]]
+    for item in data["unfinishedLectures"]:
+        due, start = deadline(item.get("availableUntil")), deadline(item.get("availableFrom"))
+        available = start is None or (start.date() <= now.date() if len(item.get("availableFrom") or "") == 10 else start <= now)
+        if due and due >= now and available:
+            actionable.append((due, item, "강의"))
+    if actionable:
+        _, item, kind = min(actionable, key=lambda entry: entry[0])
+        lines.append(f"지금 할 일: {courses.get(item.get('courseId'), '기타 과제')} / {item['title']} — 가장 가까운 마감의 {kind}부터 진행해 보세요.")
+    elif data["overdueAssignments"]:
+        lines.append("지금 할 일: 기한 지난 과제가 아직 제출 가능한지 TLS에서 확인해 보세요.")
+    elif data["undatedAssignments"] or data["unknownSubmissionAssignments"]:
+        lines.append("지금 할 일: 마감이나 제출 여부가 확인되지 않은 과제부터 확인해 보세요.")
+    elif data["unfinishedLectures"]:
+        lines.append("지금 할 일: 미완료 강의의 시청 가능 기간을 확인해 보세요.")
+    else:
+        lines.append("현재 기록에는 남은 과제·강의가 없어요. 최근 변경 여부가 궁금하면 TLS 새로고침을 요청해 주세요.")
     lines.append("실시간 TLS 조회 결과가 아닙니다. 이후 제출·시청한 내용은 동기화 후 반영됩니다.")
     return "\n".join(lines)

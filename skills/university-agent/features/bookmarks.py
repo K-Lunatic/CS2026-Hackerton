@@ -25,6 +25,21 @@ def list_bookmarks(store: BookmarkStore, user_id: str) -> list[dict[str, Any]]:
     return store.list_bookmarks(user_id)
 
 
+def bookmark_answer(provider, user_id: str, records: list[dict[str, Any]]) -> str:
+    targets = {}
+    for kind, getter, field in (("ASSIGNMENT", provider.get_assignments, "title"), ("LECTURE", provider.get_lectures, "title"),
+                                ("COURSE", provider.get_courses, "name"), ("NOTICE", provider.get_notices, "title")):
+        if any(record["targetType"] == kind for record in records):
+            targets.update({(kind, item["id"]): item[field] for item in getter(user_id)})
+    lines = [f"학사 북마크: {len(records)}개"]
+    for record in records:
+        title = targets.get((record["targetType"], record["targetId"]), "이전 북마크 (대상 정보 확인 필요)")
+        lines.append(title + (f" — {record['note']}" if record.get("note") else ""))
+    if not records:
+        lines.append("아직 학사 북마크가 없어요. 과제 진행 기록을 찾으려면 `list`를 보내 주세요.")
+    return "\n".join(lines)
+
+
 def add_bookmark(store: BookmarkStore, user_id: str, target_type: str, target_id: str, note: str) -> dict[str, Any]:
     validate_bookmark_target(target_type)
     return store.add_bookmark(user_id, target_type, target_id, note)

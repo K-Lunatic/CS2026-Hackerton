@@ -201,7 +201,10 @@ class ProjectTests(ProjectTestBase):
             with self.subTest(text=text):
                 result = self.cli('ask', '--text', text)
                 self.assertEqual(result['toolCalls'], ['prompt_context_command'])
-                self.assertEqual(result['data'], {'operation': operation, 'performed': False})
+                self.assertEqual(result['data']['operation'], operation)
+                self.assertFalse(result['data']['performed'])
+                if operation == 'save':
+                    self.assertTrue(result['needsAssignmentQuery'])
                 self.assertFalse(self.db_path.exists())
 
     def test_custom_bookmark_bypass_is_rejected(self):

@@ -39,7 +39,9 @@ def assignment_answer(provider: TLSProvider, user_id: str, text: str, *, now: da
         label = "앞으로 마감되는 " + label
     elif overdue:
         label = "기한 지난 " + label
-    lines = [f"저장된 학사 데이터 기준 · {now:%Y-%m-%d %H:%M} (한국 시간)", f"{label}: {len(data)}개"]
+    synced = (provider.get_user(user_id) or {}).get("lastSyncedAt")
+    lines = [f"저장된 학사 데이터 기준 · 조회 {now:%Y-%m-%d %H:%M} (한국 시간)",
+             f"마지막 TLS 동기화: {format_deadline(synced) if synced else '확인 불가'}", f"{label}: {len(data)}개"]
     for item in data:
         due = deadline(item.get("dueAt"))
         state = "기한 지남" if due is not None and due < now else "미제출"
@@ -52,4 +54,6 @@ def assignment_answer(provider: TLSProvider, user_id: str, text: str, *, now: da
         undated = sum(item['submissionStatus'] == 'NOT_SUBMITTED' and deadline(item.get('dueAt')) is None for item in all_items)
         if undated:
             lines.append(f"마감 확인 필요: {undated}개 (기간 목록에서 제외)")
+    if not data:
+        lines.append("이 조건에 해당하는 미제출 과제는 기록되어 있지 않아요. 최신 제출 상태가 필요하면 TLS 새로고침을 요청해 주세요.")
     return {"toolCalls": ["get_unsubmitted_assignments"], "data": data, "answer": "\n".join(lines)}

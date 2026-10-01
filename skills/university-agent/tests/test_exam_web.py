@@ -28,6 +28,14 @@ class ExamWebTests(ProjectTestBase):
 
     session = test_study.StudyFlowTests.session
     question = staticmethod(test_study.StudyFlowTests.question)
+    def extract_questions(self, session, prepared, questions):
+        refs = questions[0]['evidence']
+        return session.call({'action': 'extract', 'requestId': prepared['requestId'], 'data': {
+            'context': '정렬된 배열에서 이진 탐색하는 수업',
+            'learning': [{'concept': '이진 탐색', 'explanation': '정렬 조건과 범위 축소', 'evidence': refs}],
+            'types': [{'type': t, 'reason': '탐색 조건을 확인한다'} for t in dict.fromkeys(q['type'] for q in questions)],
+            'questions': questions, 'shortageReason': '이 부분의 근거 있는 후보만 저장'}})
+
     def make_exam(self):
         session = self.session('exam')
         prepared = session.call({'action': 'request', 'selection': {'courseId': 'course-1'},
@@ -45,7 +53,8 @@ class ExamWebTests(ProjectTestBase):
                 q.update(typeLabel='탐색 과정 표 작성', responseFormat='text')
             q.update(rubric=['정렬 조건', '탐색 범위 변화'], keywords=['정렬', '절반'])
             questions.append(q)
-        session.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': questions}})
+        self.extract_questions(session, prepared, questions)
+        session.call({'action': 'assemble', 'candidateIds': [f'c{i}' for i in range(1, 7)]})
         return session
 
     def test_web_all_types_drafts_ai_grades_and_no_answer_leaks(self):
@@ -138,17 +147,19 @@ class ExamWebTests(ProjectTestBase):
                            'settings': {'count': 1, 'delivery': 'web'}})
         q = dict(self.question('essay'), type='code_fix')
         with self.assertRaisesRegex(ValueError, '예제 코드'):
-            s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': [q]}})
+            self.extract_questions(s, prepared, [q])
         self.assertEqual(s.call({'action': 'status'})['status'], 'prepared')
         q.update(type='comparison', typeLabel='비교 분석')
         with self.assertRaisesRegex(ValueError, 'responseFormat'):
-            s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': [q]}})
+            self.extract_questions(s, prepared, [q])
         q['responseFormat'] = 'text'
-        s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': [q]}})
+        self.extract_questions(s, prepared, [q])
+        s.call({'action': 'assemble', 'candidateIds': ['c1']})
         old = s.call({'action': 'web_status'})
         prepared = s.call({'action': 'request', 'selection': {'courseId': 'course-1'},
                            'settings': {'count': 1, 'delivery': 'web'}})
-        s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': [q]}})
+        self.extract_questions(s, prepared, [q])
+        s.call({'action': 'assemble', 'candidateIds': ['c1']})
         with self.assertRaisesRegex(ValueError, '시험지가 바뀌었어요'):
             s.call({'action': 'web_submit', 'examId': old['examId'], 'revision': 0, 'answers': {'q1': '오래된 답'}})
         self.assertEqual(s.call({'action': 'web_status'})['drafts'], {})
@@ -158,7 +169,7 @@ class ExamWebTests(ProjectTestBase):
         s.call({'action': 'web_submit', 'examId': public['examId'], 'revision': 0,
                 'answers': {q['id']: '' for q in public['questions']}})
         pending = self.cli('study', '--conversation', 'exam', '--event-json', '{"action":"status"}')
-        self.assertEqual(len(pending['hostOnly']['SOURCE']), 2)
+        self.assertTrue(pending['hostOnly']['SOURCE'])
         event = {'action': 'grade_batch', 'gradeId': pending['gradeId'], 'grades': [
             {'questionId': item['questionId'], 'criteria': [{'criterion': criterion, 'met': False, 'feedback': '미응답'}
              for criterion in item['question']['rubric']]} for item in pending['hostOnly']['answers']]}

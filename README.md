@@ -23,3 +23,17 @@ python3 scripts/ingest_tls.py --input tls_snapshot.json
 ```
 
 상세 동작은 [skills/university-agent/SKILL.md](skills/university-agent/SKILL.md)에 있습니다. TLS 담당자는 [provider-contract.md](skills/university-agent/references/provider-contract.md)와 `providers/tls_provider.py`를 기준으로 연동하고, 나머지 팀원은 `features/` 아래에서 기능을 추가합니다. 로컬 DB는 [data-model.md](skills/university-agent/references/data-model.md)와 `database/schema.sql`에 있습니다.
+
+## 팀플 진행 정리·인수인계 (Python)
+
+DB 없이 회의록·작업 기록 텍스트로 사용할 수 있습니다. 현재 스킬을 호출한 AI가
+`--prepare`로 분석 요청을 받고 `--analysis-json`으로 결과를 검증하는 방식과,
+향후 Chat Completions 호환 API를 직접 호출하는 방식을 지원합니다.
+
+```bash
+python3 skills/university-agent/scripts/run_agent.py ask --text "팀플 진행 상황 정리해줘." --records "민수는 로그인 구현 중. 현우는 DB 생성 완료." --prepare
+```
+
+호출 방법, 결과 구조, 팀원 연결 인터페이스와 실제 API 검증 방법은
+[handover.md](skills/university-agent/references/handover.md)를 참고하세요.
+분석 요청과 테스트용 응답은 실제 API 분석 결과로 취급하지 않습니다.

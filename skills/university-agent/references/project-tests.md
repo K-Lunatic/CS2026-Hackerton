@@ -1,5 +1,29 @@
 # 프로젝트 전체 테스트 결과
 
+## 모바일 사용 흐름 추가 검증 (2026-10-01)
+
+Chromium의 iPhone 13 (390×844), Pixel 5 (393×851) 장치 에뮬레이션으로
+처음부터 끝까지 테스트했다. 모바일 viewport, user agent, 터치 설정을 사용한다.
+기존 테스트의 마지막 화면 크기 변경에 더해 모바일 환경에서 전체 흐름을 실행한다.
+
+```bash
+HANDOVER_MOBILE_DEVICE='iPhone 13' \
+PLAYWRIGHT_MODULE=/private/tmp/handover-browser/node_modules/playwright \
+  node skills/university-agent/tests/handover_browser.cjs
+# Android: HANDOVER_MOBILE_DEVICE='Pixel 5'로 동일 명령 실행
+```
+
+두 환경 모두 통과: 대화 호출, 빈 입력 안내, 분석 진행 표시, 실패 시 입력 보존·재시도,
+작업 상태·담당자·기한 수정, 원문 근거 보존, 특정 담당자 초안에 수정 반영,
+미정 항목 확인 사항 표시, 편집 초안 재생성 거부와 생성 중 편집 보호,
+실제 브라우저 클립보드 내용 일치, 세로 작업 목록과 가로 넘침 없음.
+브라우저 JavaScript 오류 없음. iPhone 전체 화면 캡처도 확인했다.
+
+분석은 명시적인 임시 규칙 모드이고, 제안 구분은 모의 응답으로 검증했다.
+실제 AI 호출·실물 휴대폰·iOS Safari·모바일 키보드·OS 클립보드 권한은 검증하지 않았다.
+이 화면은 localhost 서버이므로 다른 휴대폰에서 데스크톱의 127.0.0.1 주소로 접근할 수 없다.
+Codex 플러그인의 TLS·로컬 DB 기능도 웹·모바일 앱 지원을 의미하지 않는다.
+
 검증일: 2026-10-01 (Asia/Seoul). 기능 코드 기준 커밋: `ba48c3a`.
 이번 작업은 테스트 추가 및 결과 기록이며, 발견한 다른 기능의 로직은 변경하지 않았다.
 

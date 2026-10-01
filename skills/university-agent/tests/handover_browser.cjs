@@ -1,5 +1,5 @@
 // Real browser + local Python server. No real AI calls; offline mode is explicitly tested.
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { chromium, devices } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
@@ -17,7 +17,12 @@ const fs = require('node:fs/promises');
       server.once('exit', code => { clearTimeout(timeout); reject(new Error('Server exited: ' + code)); });
     });
     browser = await chromium.launch({headless: true});
-    const context = await browser.newContext({viewport: {width: 1440, height: 1100}, permissions: ['clipboard-read', 'clipboard-write']});
+    const mobileDevice = process.env.HANDOVER_MOBILE_DEVICE;
+    if (mobileDevice) assert.ok(devices[mobileDevice], 'Unknown mobile device: ' + mobileDevice);
+    const context = await browser.newContext({
+      ...(mobileDevice ? devices[mobileDevice] : {viewport: {width: 1440, height: 1100}}),
+      permissions: ['clipboard-read', 'clipboard-write']
+    });
     const page = await context.newPage();
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     const visible = async selector => { await page.locator(selector).waitFor({state:'visible'}); };
@@ -77,8 +82,8 @@ const fs = require('node:fs/promises');
     await apiTask.locator('.task-deadline').fill('10월 6일'); await visible('#draft-stale');
     const screenshots = process.env.HANDOVER_SCREENSHOTS || path.join(require('node:os').tmpdir(), 'handover-ui'); await fs.mkdir(screenshots, {recursive:true});
     await page.locator('#results').scrollIntoViewIfNeeded();
-    await page.screenshot({path:path.join(screenshots,'desktop.png'),fullPage:true});
-    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:path.join(screenshots,mobileDevice ? 'mobile-flow.png' : 'desktop.png'),fullPage:true});
+    if (!mobileDevice) await page.setViewportSize({width:390,height:844});
     await page.screenshot({path:path.join(screenshots,'mobile.png'),fullPage:true});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Mobile must not overflow');
     assert.equal(await page.locator('.task-controls').first().evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 1);

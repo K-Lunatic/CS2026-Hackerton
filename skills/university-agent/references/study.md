@@ -24,7 +24,7 @@
 - 직접 첨부된 **로컬 파일**은 `~/.university-agent/attachments/`에 복사하고
   `selection.attachmentPath`에 그 실제 경로를 넣는다. 임의의 다른 로컬 경로는 읽지 않는다.
   `UNIVERSITY_AGENT_DB`를 바꿨다면 DB 옆 `attachments/` 폴더를 사용한다.
-  파일은 PDF, PPTX, TXT, MD, 10MB 이하다. 첨부 자료는 학교 자료 ID와
+  파일은 PDF, PPTX, PPT, TXT, MD, 10MB 이하다. 구형 PPT는 변환 도구가 있어야 읽힌다. 첨부 자료는 학교 자료 ID와
   혼합하지 않는다. ChatGPT 웹·모바일 첨부는 아래 별도 경로를 따른다.
 - 별도 설정이 없으면 5문제: 객관식 3, 단답 1, 서술 1. `settings`에 `count`(1~20),
   `types`(문항 수만큼 `mcq`/`short`/`essay`), `choices`(2~6), `difficulty`,

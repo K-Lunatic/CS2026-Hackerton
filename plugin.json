@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "university-agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "터틀넥: 대학생활 관리와 읽은 수업자료 기반 대화형 학습보조",
   "author": {
     "name": "K-Lunatic"
@@ -12,7 +12,7 @@
       "interface": {
         "displayName": "터틀넥",
         "shortDescription": "학사정보와 수업자료 기반 연습문제",
-        "longDescription": "Codex가 이 컴퓨터의 KKU TLS 학사정보와 실제 읽은 수업자료를 사용해 개념 정리와 대화형 연습문제를 돕습니다. 자료 본문이 없으면 출제하지 않습니다. ChatGPT 웹·모바일은 대화에 직접 첨부한 파일의 읽은 범위로 학습합니다.",
+        "longDescription": "Codex가 이 컴퓨터의 KKU TLS 학사정보와 실제 읽은 수업자료를 사용해 개념 정리와 대화형 연습문제를 돕습니다. PDF/PPTX/TXT와 읽을 수 있는 DOCX/HWPX 등을 지원합니다. 본문이 없으면 출제하지 않습니다. ChatGPT 웹·모바일은 대화에 직접 첨부한 파일의 읽은 범위로 학습합니다.",
         "developerName": "K-Lunatic",
         "category": "Productivity",
         "capabilities": [

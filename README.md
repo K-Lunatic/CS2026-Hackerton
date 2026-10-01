@@ -2,8 +2,8 @@
 
 대학생활 관리 기능을 두 방식으로 제공합니다.
 
-- **ChatGPT 웹·모바일:** 이 Mac에서 실행하는 로컬 게이트웨이에 HTTPS 터널로 연결합니다. 별도 호스팅 서버·도메인은 필요 없습니다. Mac에서 [University Agent.command](University%20Agent.command)를 더블클릭하고 Custom GPT Actions를 설정합니다. 휴대폰 사용자는 GPT 로그인 화면을 사용하며 Python을 실행하지 않습니다. [로컬 연결 안내](server/README.md)를 참고하세요. 실제 GPT 연결은 GPT ID와 Actions 설정이 필요합니다. 학교 자료 자동 조회·본문 읽기와 코드가 관리하는 문제 풀이 세션은 로컬 Codex에서 사용합니다. ChatGPT 웹·모바일은 대화에 직접 첨부한 파일의 읽을 수 있는 본문으로 학습할 수 있습니다.
-- **로컬 Codex:** 기존 플러그인과 현재 기기의 SQLite·macOS Keychain을 사용합니다. 아래 설치 안내는 이 모드에만 해당합니다.
+- **ChatGPT 웹·모바일:** 컴퓨터에서 실행하는 로컬 게이트웨이에 HTTPS 터널로 연결합니다. Mac에서는 [University Agent.command](University%20Agent.command), Windows에서는 [University Agent.bat](University%20Agent.bat)을 실행하고 Custom GPT Actions를 설정합니다. 휴대폰 사용자는 GPT 로그인 화면을 사용합니다. [로컬 연결 안내](server/README.md)를 참고하세요. 실제 GPT 연결은 GPT ID와 Actions 설정이 필요합니다. 학교 자료 자동 조회·본문 읽기와 코드가 관리하는 문제 풀이 세션은 로컬 Codex에서 사용합니다. ChatGPT 웹·모바일은 대화에 직접 첨부한 파일의 읽을 수 있는 본문으로 학습할 수 있습니다.
+- **로컬 Codex:** 플러그인과 현재 기기의 SQLite·운영체제 보안 저장소를 사용합니다. 아래 설치 안내는 이 모드에 해당합니다.
 
 ## 처음 사용한다면
 
@@ -24,15 +24,16 @@
 
 ## 로컬 플러그인 설치·테스트
 
-이 저장소를 받은 Mac에서 다음을 실행합니다. 설치 후 새 Codex 대화를 시작하고 `$turtleneck`으로 호출합니다.
+이 저장소를 받은 Mac 또는 Windows에서 다음을 실행합니다. 설치 후 새 Codex 대화를 시작하고 `$turtleneck`으로 호출합니다.
 
 ```bash
 codex plugin marketplace add .
 codex plugin add university-agent@kku-university-agent-local
-python3 skills/university-agent/scripts/sync_tls.py
+# Mac/Linux: python3 skills/university-agent/scripts/sync_tls.py
+# Windows:   py -3 skills/university-agent/scripts/sync_tls.py
 ```
 
-TLS 로그인은 첫 동기화 때 로컬 터미널에서 진행합니다. 자격 증명이 Keychain에 이미 있으면 재사용합니다. 이 플러그인은 **Codex가 해당 Mac의 로컬 파일·Keychain에 접근할 수 있는 환경**에서만 동작합니다. ChatGPT 웹·모바일에서는 별도의 서버/Actions 연결을 사용하며 로컬 DB와 Keychain에 직접 접근하지 않습니다. 로컬 플러그인은 공개 Plugins Directory에 게시된 상태가 아닙니다.
+TLS 로그인은 첫 동기화 때 로컬 숨김 입력으로 진행합니다. Mac은 Keychain, Windows는 현재 사용자의 보호 저장소를 사용합니다. 이 플러그인은 **Codex가 학사 DB와 파일이 있는 컴퓨터에서 실행될 때** 동작합니다. ChatGPT 웹·모바일은 별도 Actions 연결을 사용합니다. 로컬 플러그인은 공개 Plugins Directory에 게시된 상태가 아닙니다.
 
 팀원은 `dev` 브랜치를 직접 등록할 수도 있습니다.
 
@@ -53,11 +54,11 @@ TLS 계정, 실제 DB, API 키는 플러그인에 포함되지 않습니다.
 cp -R skills/university-agent ~/.codex/skills/
 ```
 
-이후 `$turtleneck`을 호출하거나 과제·강의·북마크·수업자료 기반 학습을 자연어로 요청할 수 있습니다. 로컬 학습보조는 내려받은 과목 PDF/PPTX/TXT/MD 또는 사용자가 첨부한 파일의 읽은 본문에서 핵심 개념과 연습문제를 만들고, 페이지·슬라이드·줄을 출처로 표시합니다. 원본은 기기에 남지만 생성에 필요한 추출 텍스트는 호출한 Codex 모델에 전달됩니다. 과제 Context Bookmark의 저장과 불러오기는 정해진 명령 형식을 다시 입력해야 실행됩니다.
+이후 `$turtleneck`을 호출하거나 과제·강의·북마크·수업자료 기반 학습을 자연어로 요청할 수 있습니다. 로컬 학습보조는 내려받은 과목 PDF/PPTX/TXT/MD·DOCX/HWPX 등의 읽은 본문 또는 직접 첨부한 파일에서 핵심 개념과 연습문제를 만들고 출처 위치를 표시합니다. 원본은 기기에 남지만 추출 텍스트는 호출한 Codex 모델에 전달됩니다. 과제 Context Bookmark의 저장과 불러오기는 정해진 명령 형식을 다시 입력해야 실행됩니다.
 
 TLS 강의실 항목이나 해당 파일을 지목한 공지에서 다운로드 금지를 감지하면 동기화 단계에서 파일을 요청하지 않고, 제외된 과목·자료명을 안내합니다. 금지 자료는 학습 자료 생성에서도 열지 않습니다.
 
-문서 페이지의 실제 링크와 리다이렉트 주소도 검사합니다. 다운로드 금지 플래그가 있는 주소는 차단하며, 자료구조에서 확인된 `ubfile/viewer.php` 뷰어 전용 자료는 원본 다운로드 허용이 확인되지 않아 제외합니다. 뷰어 전용 주소만으로 명시적 금지라고 단정하지 않으며, 제외 이유를 안내합니다. `forcedownload=0`은 화면 표시 옵션이므로 금지로 판단하지 않습니다.
+문서 페이지의 보이는 내용과 리다이렉트 주소도 검사합니다. 실제 다운로드 금지 표시나 서버 거부가 있을 때 파일을 가져오지 않습니다. `viewer.php` 주소나 `forcedownload=0`만으로 금지로 판단하지 않습니다.
 
 ## 직접 실행
 
@@ -105,7 +106,7 @@ TLS 동기화는 수강 과목별 과제(마감·제출 상태), 영상(길이·
 “핵심 개념부터 정리해줘”는 개념 정리 모드입니다. 문제와 개념에는 읽은 파일의
 페이지·슬라이드·줄 위치를 연결합니다. 읽지 못한 파일은 출제에 사용하지 않습니다.
 
-로컬 Codex는 TLS 동기화로 내려받은 과목 파일(PDF/PPTX/TXT/MD) 또는 직접 첨부한
+로컬 Codex는 TLS 동기화로 내려받은 과목 파일(PDF/PPTX/TXT/MD·DOCX/HWPX 등) 또는 직접 첨부한
 파일을 사용합니다. `study` 명령의 대화별 세션과 JSON 이벤트 계약은
 [study.md](skills/university-agent/references/study.md)에 있습니다. 호스트 AI가 문제를 생성하고
 단답·서술을 평가하며, 코드는 선택한 과목·자료·범위와 정확한 인용 여부, 풀이 상태를 검증합니다.

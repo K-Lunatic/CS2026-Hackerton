@@ -130,9 +130,9 @@ class MoodleTLSProvider:
                     seen.add(article.group(2))
                     detail = self.session.get(article_href)
                     article_title = _match_text(detail, r'<div[^>]+class=["\'][^"\']*subject[^"\']*["\'][^>]*>.*?<h3[^>]*>(.*?)</h3>')
-                    content = _match_text(detail, r'<div[^>]+class=["\'][^"\']*content[^"\']*["\'][^>]*>(.*?)</div>\s*</div>')
+                    content = _match_text(detail, r'<div[^>]+class=["\'][^"\']*text_to_html[^"\']*["\'][^>]*>(.*?)</div>')
                     text = _plain_text(detail)
-                    result.append({"id": f"tls-notice-{article.group(2)}", "externalId": article.group(2), "courseId": course["id"], "title": article_title or f"TLS notice {article.group(2)}", "content": content or text, "publishedAt": _find_datetime(text, ("작성일", "게시일", "등록일")) or "1970-01-01T00:00:00+09:00", "source": "tls"})
+                    result.append({"id": f"tls-notice-{article.group(2)}", "externalId": article.group(2), "courseId": course["id"], "title": article_title or f"TLS notice {article.group(2)}", "content": content, "publishedAt": _find_datetime(text, ("작성일", "게시일", "등록일")) or "1970-01-01T00:00:00+09:00", "source": "tls"})
         return result
 
     def get_resources(self, user_id: str) -> list[dict[str, Any]]:

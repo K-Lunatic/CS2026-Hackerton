@@ -5,6 +5,7 @@ from io import StringIO
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -47,7 +48,7 @@ class FakeTLSSession:
             '/mod/assign/view.php?id=2': '<p>종료 일시: 2026-10-05 23:59</p><p>제출 완료</p>',
             '/mod/vod/viewer.php?id=3': '<span class="playtime">10:00</span><script>var is_progress = 50; var is_complete = 0;</script>',
             '/mod/ubboard/view.php?id=10': '<a href="/mod/ubboard/article.php?id=10&amp;bwid=11">공지</a>',
-            '/mod/ubboard/article.php?id=10&bwid=11': '<div class="subject"><h3>테스트 공지</h3></div><div class="content">공지 내용</div></div><p>작성일: 2026-10-01 12:00</p>',
+            '/mod/ubboard/article.php?id=10&bwid=11': '<div class="content">강의실 메뉴</div><div class="subject"><h3>테스트 공지</h3></div><div class="content"><div class="text_to_html"><p>실제 공지 내용</p></div></div><p>작성일: 2026-10-01 12:00</p>',
         }
     def get(self, path):
         return self.pages[path]
@@ -87,6 +88,21 @@ class ProjectTests(ProjectTestBase):
         result = subprocess.run([sys.executable, str(ROOT / 'scripts/run_agent.py'), 'assignments'], env=self.env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('동기화', result.stderr)
+        self.assertEqual(self.cli('ask', '--text', '과제 불러오기')['data'], None)
+        self.assertFalse(self.db_path.exists())
+
+    def test_read_commands_open_database_without_schema_writes(self):
+        self.seed()
+        connection = sqlite3.connect(self.db_path)
+        connection.execute('DROP TABLE manual_assignments')
+        connection.commit()
+        connection.close()
+        db = LocalDatabase(self.db_path, read_only=True)
+        self.addCleanup(db.close)
+        with self.assertRaises(sqlite3.OperationalError):
+            db.connection.execute('CREATE TABLE should_not_exist (id INTEGER)')
+        self.assertEqual(len(self.cli('context')['data']['activeCourses']), 1)
+        self.assertEqual(len(self.cli('assignments')['data']), 2)
 
     def test_all_read_commands_and_json(self):
         self.seed()
@@ -187,6 +203,7 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(provider.get_assignments('u')[0]['submissionStatus'], 'SUBMITTED')
         self.assertEqual(provider.get_lectures('u')[0]['watchedSeconds'], 300)
         self.assertEqual(provider.get_notices('u')[0]['title'], '테스트 공지')
+        self.assertEqual(provider.get_notices('u')[0]['content'], '실제 공지 내용')
         self.assertEqual(provider.get_resources('u')[0]['_content'], b'%PDF-test-fixture')
 
     def test_moodle_login_failures_do_not_fetch_data(self):

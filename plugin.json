@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "university-agent",
+  "version": "0.1.0",
+  "description": "기기 로컬에서 KKU TLS 과목·과제·공지·자료와 직접 등록한 과제를 조회·관리하는 Codex 스킬",
+  "author": {"name": "K-Lunatic"},
+  "repository": "https://github.com/K-Lunatic/CS2026-Hackerton",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "University Agent",
+        "shortDescription": "로컬 대학생활 관리",
+        "longDescription": "Codex가 이 컴퓨터에 저장된 KKU TLS 데이터를 조회하고 일반 과제·북마크를 관리합니다. 최초 TLS 로그인은 이 컴퓨터의 터미널과 macOS Keychain이 필요합니다. ChatGPT 웹·모바일에서는 기기 로컬 DB를 사용할 수 없습니다.",
+        "developerName": "K-Lunatic",
+        "category": "Productivity",
+        "capabilities": ["Read local academic data", "Manage local assignments"],
+        "composerIcon": "./assets/university-agent.svg",
+        "logo": "./assets/university-agent.svg",
+        "defaultPrompt": ["이번 주 미제출 과제 알려줘", "수강 과목과 공지 보여줘"]
+      }
+    }
+  }
+}

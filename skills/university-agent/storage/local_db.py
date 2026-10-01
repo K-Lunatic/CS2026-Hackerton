@@ -11,16 +11,18 @@ SCHEMA = Path(__file__).resolve().parents[1] / "database" / "schema.sql"
 
 
 class LocalDatabase:
-    def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(path)
+    def __init__(self, path: Path, *, read_only: bool = False):
+        if not read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True) if read_only else sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
-        self.connection.executescript(SCHEMA.read_text(encoding="utf-8"))
-        lecture_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(lectures)")}
-        for column in ("available_from", "available_until"):
-            if column not in lecture_columns:
-                self.connection.execute(f"ALTER TABLE lectures ADD COLUMN {column} TEXT")
+        if not read_only:
+            self.connection.executescript(SCHEMA.read_text(encoding="utf-8"))
+            lecture_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(lectures)")}
+            for column in ("available_from", "available_until"):
+                if column not in lecture_columns:
+                    self.connection.execute(f"ALTER TABLE lectures ADD COLUMN {column} TEXT")
 
     def close(self) -> None:
         self.connection.close()
@@ -89,8 +91,9 @@ class LocalDatabase:
     def get_assignments(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute("SELECT a.id, a.course_id AS courseId, a.title, a.description, a.due_at AS dueAt, s.submission_status AS submissionStatus, s.submitted_at AS submittedAt, a.source FROM assignments a JOIN assignment_submissions s ON s.assignment_id=a.id AND s.user_id=? JOIN enrollments e ON e.course_id=a.course_id AND e.user_id=? ORDER BY a.due_at", (user_id, user_id))
         result = [dict(row) for row in rows]
-        manual = self.connection.execute("SELECT id, course_id AS courseId, title, description, due_at AS dueAt, completed_at AS submittedAt FROM manual_assignments WHERE user_id=?", (user_id,))
-        result.extend(dict(row, submissionStatus="SUBMITTED" if row["submittedAt"] else "NOT_SUBMITTED", source="manual") for row in manual)
+        if self.connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_assignments'").fetchone():
+            manual = self.connection.execute("SELECT id, course_id AS courseId, title, description, due_at AS dueAt, completed_at AS submittedAt FROM manual_assignments WHERE user_id=?", (user_id,))
+            result.extend(dict(row, submissionStatus="SUBMITTED" if row["submittedAt"] else "NOT_SUBMITTED", source="manual") for row in manual)
         return sorted(result, key=lambda item: (item["dueAt"] is None, item["dueAt"] or ""))
 
     def add_manual_assignment(self, user_id: str, title: str, *, course_id: str | None = None, due_at: str | None = None, description: str | None = None) -> dict[str, Any]:

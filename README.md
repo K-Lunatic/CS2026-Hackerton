@@ -21,7 +21,6 @@ python3 scripts/run_agent.py context
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
 python3 scripts/run_agent.py ask --text '과제 저장 --과제ID assignment-network-5 --진행 "자료 3개 수집 완료" --완료항목 "자료 3개 수집" --막힘 "없음" --다음행동 "두 번째 자료의 통계를 본문에 넣기"'
 python3 scripts/run_agent.py ask --text '과제 불러오기 --과제ID assignment-network-5'
-python3 scripts/sync_tls.py --remember
 python3 scripts/sync_tls.py
 python3 scripts/tls_fetch.py --path /my/ --output /tmp/tls-my.html
 ```
@@ -54,6 +53,6 @@ python3 skills/university-agent/scripts/handover_web.py
 `python3 skills/university-agent/scripts/run_agent.py ask --text "팀플 정리해줘" --ui`를 실행합니다.
 화면은 별도 설치 없이 Python으로 실행되며, 저장소의 DB/TLS 코드와 분리되어 있습니다.
 실행·프론트엔드 API·검증·제한 사항은 [handover.md](skills/university-agent/references/handover.md)에 있습니다.
-`sync_tls.py --remember`를 처음 한 번 실행하면 아이디는 `~/.university-agent/tls-account.json`에 권한 600으로 저장하고, 비밀번호는 macOS Keychain에 저장합니다. 비밀번호와 MoodleSession 쿠키는 코드·SQLite·로그에 저장하지 않습니다. 동기화된 공지·과제·강의와 PPT/PDF 파일은 기기 로컬에만 저장됩니다.
+저장된 TLS 계정이 없으면 `sync_tls.py`가 로컬 터미널에서 아이디와 숨김 비밀번호 입력 양식을 띄웁니다. 로그인 성공 후 아이디는 `~/.university-agent/tls-account.json`(권한 600), 비밀번호는 macOS Keychain에 저장합니다. 비밀번호는 환경변수·SQLite·로그·JSON 출력으로 받거나 노출하지 않으며, 호출한 ChatGPT/Codex 모델이 직접 읽을 수 없습니다. 이 프로젝트의 모델 범위는 ChatGPT/Codex로 고정하며 새 모델 제공자 연동은 추가하지 않습니다.
 
 상세 동작은 [skills/university-agent/SKILL.md](skills/university-agent/SKILL.md)에 있습니다. TLS 담당자는 [provider-contract.md](skills/university-agent/references/provider-contract.md)와 `providers/moodle_provider.py`를 기준으로 연동하고, 나머지 팀원은 `features/` 아래에서 기능을 추가합니다. 로컬 DB는 [data-model.md](skills/university-agent/references/data-model.md)와 `database/schema.sql`에 있습니다.

@@ -4,11 +4,16 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from getpass import getpass
 from pathlib import Path
 
 SERVICE = "university-agent/tls"
 CONFIG_PATH = Path.home() / ".university-agent" / "tls-account.json"
+
+
+class CredentialInputRequired(RuntimeError):
+    pass
 
 
 def save(username: str, password: str) -> None:
@@ -31,11 +36,13 @@ def load() -> tuple[str, str]:
     return username, result.stdout.rstrip("\n")
 
 
-def resolve(username: str | None = None, password: str | None = None) -> tuple[str, str]:
-    if username and password:
-        return username, password
+def resolve(username: str | None = None) -> tuple[str, str]:
     try:
         stored_username, stored_password = load()
     except (OSError, KeyError, ValueError, subprocess.CalledProcessError):
         stored_username, stored_password = "", ""
-    return username or stored_username or input("TLS username: "), password or stored_password or getpass("TLS password: ")
+    if stored_username and stored_password and (not username or username == stored_username):
+        return username or stored_username, stored_password
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise CredentialInputRequired("TLS credentials are not saved. Run sync_tls.py in a local terminal to enter them securely.")
+    return username or stored_username or input("TLS username: "), getpass("TLS password: ")

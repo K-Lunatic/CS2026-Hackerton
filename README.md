@@ -46,7 +46,7 @@ codex plugin add university-agent@kku-university-agent-local
 위처럼 로컬 저장소를 마켓플레이스로 등록했다면 변경 후
 `codex plugin add university-agent@kku-university-agent-local`을 다시 실행해 최신 버전을 설치합니다.
 TLS 계정, 실제 DB, API 키는 플러그인에 포함되지 않습니다.
-학습보조는 대화에서 개념을 정리하고 문제를 한 번에 풀며 별도 화면이 필요하지 않습니다.
+학습보조는 대화에서 개념을 정리하고 문제를 한 번에 풉니다. 원하면 같은 문제를 이 컴퓨터의 문제 풀이 화면에서 풀 수 있습니다.
 
 ## 스킬만 설치
 
@@ -82,6 +82,7 @@ python3 scripts/run_agent.py study-materials --course "자료구조" --resource 
 python3 scripts/run_agent.py ask --text "나.. 지금은 어때?"
 python3 scripts/run_agent.py ask --text "자료구조 공부 좀 해야겠다" --conversation demo-study
 python3 scripts/run_agent.py study --conversation demo-study --event-json '{"action":"status"}'
+python3 scripts/study_web.py --conversation demo-study
 python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘"
 python3 scripts/run_agent.py ask --text 'load "자바 Ex05"'
 python3 scripts/sync_tls.py

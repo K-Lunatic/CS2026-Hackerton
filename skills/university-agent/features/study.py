@@ -176,6 +176,27 @@ def summary(state):
             'remaining': remaining, 'review': review, 'answer': answer}
 
 
+def page_view(state):
+    """Public snapshot for the local quiz page. Answers and evidence appear only for finished questions."""
+    if not state.get('questions') or state['settings'].get('delivery') != 'batch':
+        return {'status': state['phase'], 'questions': [], 'single': bool(state.get('questions'))}
+    done = {h['questionId']: h for h in state['history']}
+    pending = state.get('pendingGrades', {})
+    items = []
+    for q in state['questions']:
+        item = {k: q[k] for k in ('id', 'type', 'question', 'options')}
+        if q['id'] in state['hintedIds']:
+            item['hint'] = q['hint']
+        if q['id'] in done:
+            item['result'] = {**done[q['id']], 'answer': q['answer'], 'explanation': q['explanation']}
+        elif q['id'] in pending:
+            item['submitted'] = pending[q['id']]['text']
+        items.append(item)
+    result = summary(state)
+    return {'status': state['phase'], 'questions': items, 'counts': result['counts'], 'selfCorrect': result['selfCorrect'],
+            'materials': list(dict.fromkeys(s['name'] for s in state['sources']))}
+
+
 class StudySession:
     """One persisted state per authenticated local user and host conversation.
 
@@ -206,6 +227,8 @@ class StudySession:
 
     def transition(self, state, event):
         action = event.get('action')
+        if action == 'view':
+            return page_view(state)
         if action in ('cancel', 'observe'):
             if action == 'cancel' or state['phase'] in ('offered', 'selecting'):
                 state.clear(); state.update(phase='idle', suppressed=True)
@@ -352,7 +375,15 @@ class StudySession:
     def practice(self, state, event):
         if state.get('questions') and state['settings'].get('delivery') == 'batch' and event['action'] not in ('status', 'stop'):
             return self.batch(state, event)
+        if event['action'] == 'status' and state['phase'] == 'grading' and state.get('pendingGrades'):
+            return self.grading_request(state)  # Answers submitted from the quiz page reach the host here.
         return self.practice_one(state, event)
+
+    @staticmethod
+    def grading_request(state):
+        return {'status': 'grading', 'gradeId': state['batchGradeId'], 'needsEvaluation': True,
+                'hostOnly': {'instruction': PROMPT + '\n각 문항의 rubric마다 {criterion, met: boolean, feedback}을 평가하라. 동의어도 의미로 판단하라.',
+                             'answers': [{'questionId': qid, 'question': p['question'], 'submitted': p['text']} for qid, p in state['pendingGrades'].items()]}}
 
     def batch(self, state, event):
         action = event['action']
@@ -403,9 +434,7 @@ class StudySession:
                 result.pop('summary', None); result['hasNext'] = False; feedback.append(result)
         if pending:
             state.update(phase='grading', pendingGrades=pending, batchFeedback=feedback, batchGradeId=secrets.token_hex(12))
-            return {'status': 'grading', 'gradeId': state['batchGradeId'], 'needsEvaluation': True,
-                    'hostOnly': {'instruction': PROMPT + '\n각 문항의 rubric마다 {criterion, met: boolean, feedback}을 평가하라. 동의어도 의미로 판단하라.',
-                                 'answers': [{'questionId': qid, 'question': p['question'], 'submitted': p['text']} for qid, p in pending.items()]}}
+            return self.grading_request(state)
         state['phase'] = 'finished'
         return {'status': 'finished', 'feedback': feedback, 'summary': summary(state)}
 

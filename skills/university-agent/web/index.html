@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>터틀넥 연습문제</title>
+  <link rel="icon" href="/turtleneck.png">
+  <link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/"><img src="/turtleneck.png" alt="" width="36" height="36">터틀넥 연습문제</a>
+  <span class="local-note">답안은 이 컴퓨터에만 저장돼요</span>
+</header>
+
+<main id="waiting" class="waiting" hidden>
+  <img src="/turtleneck.png" alt="" width="120" height="120">
+  <h1 id="waiting-title"></h1>
+  <p id="waiting-text"></p>
+  <p id="waiting-example" class="say" hidden></p>
+</main>
+
+<div id="exam" class="exam" hidden>
+  <main class="paper">
+    <div class="paper-head">
+      <div>
+        <h1 id="title"></h1>
+        <p id="subtitle" class="subtitle"></p>
+      </div>
+      <div id="score" class="score" hidden>
+        <p class="score-number"><span id="score-got"></span><span class="score-total" id="score-total"></span></p>
+        <svg viewBox="0 0 120 14" aria-hidden="true"><path pathLength="1" d="M4 4 C 32 1, 78 6, 116 3"/><path pathLength="1" d="M8 10 C 40 7, 82 12, 112 9"/></svg>
+      </div>
+    </div>
+    <p id="notice" class="notice" role="status" hidden></p>
+    <section id="review" class="review" hidden aria-labelledby="review-title">
+      <h2 id="review-title">다시 볼 개념</h2>
+      <ul id="review-list"></ul>
+    </section>
+    <ol id="questions" class="questions"></ol>
+  </main>
+
+  <aside class="omr" aria-label="답안지">
+    <div class="omr-head">
+      <h2>답안지</h2>
+      <p id="progress" class="progress" aria-live="polite"></p>
+    </div>
+    <ol id="omr-rows" class="omr-rows"></ol>
+    <div id="submit-area" class="submit-area">
+      <p id="blank-warning" class="blank-warning" role="alert" hidden></p>
+      <button id="submit" class="button primary" type="button">답안 제출하기</button>
+      <button id="submit-skip" class="button" type="button" hidden>빈 문제는 건너뛰고 제출하기</button>
+      <button id="stop" class="text-button" type="button">그만 풀기</button>
+    </div>
+    <p id="error" class="error" role="alert" hidden></p>
+  </aside>
+</div>
+</body>
+</html>

@@ -7,6 +7,7 @@ import os
 import sys
 from pathlib import Path
 from urllib.error import URLError
+from socket import timeout as SocketTimeout
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -30,6 +31,8 @@ def main() -> None:
         session.login(username, password)
         save(username, password)
         html = session.get(args.path)
+    except SocketTimeout as error:
+        raise SystemExit("TLS 서버 응답이 30초 동안 없어 중단했습니다. 잠시 후 다시 실행해 주세요.") from error
     except (LoginError, URLError) as error:
         raise SystemExit(str(error)) from error
     if args.output:

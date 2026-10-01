@@ -156,6 +156,17 @@ class StudyFlowTests(ProjectTestBase):
         self.assertEqual(result['status'], 'selecting')
         self.assertNotIn('hostOnly', result)
 
+    def test_viewer_page_failure_is_shown_without_claiming_readable_slides(self):
+        db = LocalDatabase(self.db_path)
+        data = snapshot()
+        data['courses'][0]['name'] = '컴퓨터구조'
+        data['resources'] = [dict(data['resources'][0], title='1장 강의슬라이드 파일', fileName='view.php', extension='', mimeType='text/html', localPath=None, downloadStatus='PROHIBITED', downloadReason='TLS가 실제 파일 대신 문서 뷰어 페이지를 반환해 본문을 가져오지 않았습니다.')]
+        upsert(db, 'fixture-user', data)
+        db.close()
+        result = self.session().call({'action': 'request', 'selection': {'courseId': 'course-1'}})
+        self.assertIn('문서 뷰어 페이지', result['answer'])
+        self.assertNotIn('hostOnly', result)
+
     def test_insufficient_evidence_never_fills_the_requested_count(self):
         s = self.session()
         prepared = s.call({'action': 'request', 'selection': {'courseId': 'course-1'},

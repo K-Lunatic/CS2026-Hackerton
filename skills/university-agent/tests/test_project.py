@@ -44,11 +44,12 @@ class FakeTLSSession:
     def __init__(self):
         self.pages = {
             '/local/ubion/user/': '<a href="/course/view.php?id=1">테스트 과목</a>',
-            '/course/view.php?id=1': ''.join(f'<li class="activity"><a href="/mod/{kind}/view.php?id={id}">{title}</a></li>' for kind, id, title in [('assign', 2, '테스트 과제'), ('vod', 3, '테스트 강의'), ('ubboard', 10, '공지사항'), ('resource', 5, '테스트 자료')]) + '<li class="activity"><a href="/mod/resource/view.php?id=6">보충자료.pdf</a><span>다운로드 금지</span></li><li class="activity"><a href="/mod/resource/view.php?id=7">2주차 보충자료.pdf</a></li><li class="activity"><a href="/mod/resource/view.php?id=8">서버제한.pdf</a></li>',
+            '/course/view.php?id=1': ''.join(f'<li class="activity"><a href="/mod/{kind}/view.php?id={id}">{title}</a></li>' for kind, id, title in [('assign', 2, '테스트 과제'), ('vod', 3, '테스트 강의'), ('ubboard', 10, '공지사항'), ('resource', 5, '테스트 자료')]) + '<li class="activity"><a href="/mod/resource/view.php?id=6">보충자료.pdf</a><span>다운로드 금지</span></li><li class="activity"><a href="/mod/resource/view.php?id=7">2주차 보충자료.pdf</a></li><li class="activity"><a href="/mod/resource/view.php?id=8">서버제한.pdf</a></li><li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>',
             '/mod/assign/view.php?id=2': '<p>종료 일시: 2026-10-05 23:59</p><p>제출 완료</p>',
             '/mod/vod/viewer.php?id=3': '<span class="playtime">10:00</span><script>var is_progress = 50; var is_complete = 0;</script>',
             '/mod/ubboard/view.php?id=10': '<a href="/mod/ubboard/article.php?id=10&amp;bwid=11">공지</a>',
             '/mod/ubboard/article.php?id=10&bwid=11': '<div class="content">강의실 메뉴</div><div class="subject"><h3>테스트 공지</h3></div><div class="content"><div class="text_to_html"><p>실제 공지 내용</p></div></div><p>작성일: 2026-10-01 12:00</p>',
+            '/mod/ubfile/view.php?id=9': '<a href="/mod/ubfile/viewer.php?id=9">open</a>',
         }
         self.byte_requests = []
         self.requests = []
@@ -60,6 +61,9 @@ class FakeTLSSession:
         if path.endswith('id=8'):
             from urllib.error import HTTPError
             raise HTTPError(path, 403, 'Forbidden', None, BytesIO(b'blocked'))
+        if path.endswith('id=9'):
+            headers = Message(); headers['Content-Type'] = 'text/html'
+            return b'<html><body><a href="/mod/ubfile/viewer.php?id=9">open</a></body></html>', SimpleNamespace(headers=headers, geturl=lambda: 'https://fixture.invalid/mod/ubfile/view.php?id=9')
         headers = Message(); headers['Content-Type'] = 'application/pdf'
         return b'%PDF-test-fixture', SimpleNamespace(headers=headers, geturl=lambda: 'https://fixture.invalid/test.pdf')
 
@@ -69,7 +73,7 @@ class ProjectTestBase(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.db_path = Path(self.temp.name) / 'test.db'
-        self.env = dict(os.environ, UNIVERSITY_AGENT_DB=str(self.db_path), UNIVERSITY_AGENT_USER_ID='fixture-user', TEAM_HANDOVER_API_URL='', TEAM_HANDOVER_MODEL='')
+        self.env = dict(os.environ, UNIVERSITY_AGENT_DB=str(self.db_path), UNIVERSITY_AGENT_USER_ID='fixture-user')
 
     def seed(self):
         db = LocalDatabase(self.db_path)
@@ -258,12 +262,13 @@ class ProjectTests(ProjectTestBase):
         resources = provider.get_resources('u', notices=[{'courseId': 'tls-course-1', 'title': '2주차 파일 안내', 'content': '2주차 보충자료.pdf는 다운로드 금지입니다.'}])
         self.assertEqual(resources[0]['_content'], b'%PDF-test-fixture')
         prohibited = [item for item in resources if item['downloadStatus'] == 'PROHIBITED']
-        self.assertEqual(len(prohibited), 3)
+        self.assertEqual(len(prohibited), 4)
         self.assertTrue(all('_content' not in item for item in prohibited))
         self.assertIn('다운로드 제한', prohibited[0]['downloadReason'])
         self.assertIn('과목 공지', prohibited[1]['downloadReason'])
         self.assertIn('서버가 파일 다운로드를 거부', prohibited[2]['downloadReason'])
-        self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8'])
+        self.assertIn('문서 뷰어', prohibited[3]['downloadReason'])
+        self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8', '/mod/ubfile/view.php?id=9'])
 
     def test_moodle_provider_reuses_course_pages_during_one_sync(self):
         session = FakeTLSSession()
@@ -315,7 +320,7 @@ class ProjectTests(ProjectTestBase):
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
         session.pages['/mod/ubfile/view.php?id=9'] = '<a href="/mod/ubfile/viewer.php?id=9">열기</a>'
         item = MoodleTLSProvider(session).get_resources('u')[0]
-        self.assertEqual(item['downloadStatus'], 'NOT_DOWNLOADED')
+        self.assertEqual(item['downloadStatus'], 'PROHIBITED')
         self.assertEqual(session.byte_requests, ['/mod/ubfile/view.php?id=9'])
         session = FakeTLSSession()
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'

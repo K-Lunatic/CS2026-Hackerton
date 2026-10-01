@@ -45,7 +45,7 @@ def collect_local(
 ) -> dict[str, str]:
     """Collect a form without returning secret values to stdout or JSON."""
     if not sys.stdin.isatty() or not sys.stderr.isatty():
-        raise FormUnavailable(f"{form.title} 입력은 로컬 터미널에서만 가능합니다.")
+        raise FormUnavailable(f"{form.title} 연결이 아직 필요해요. 비밀번호는 채팅에 보내지 말고 보안 입력 화면에서 입력해 주세요.")
     values = dict(initial or {})
     for field in form.fields:
         if values.get(field.name):

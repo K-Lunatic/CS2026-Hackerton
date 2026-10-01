@@ -12,7 +12,7 @@
       "interface": {
         "displayName": "터틀넥",
         "shortDescription": "대학생활 정리와 강의 자료 기반 학습",
-        "longDescription": "Codex가 이 컴퓨터에 저장된 KKU TLS 데이터를 조회하고, 내려받은 과목 PDF/PPT 자료를 읽어 출처가 표시된 학습 자료를 만듭니다. 최초 TLS 로그인은 이 컴퓨터의 터미널과 macOS Keychain이 필요합니다.",
+        "longDescription": "데스크탑·랩탑의 Codex가 이 컴퓨터에 저장된 KKU TLS 데이터를 조회하고, 내려받은 HWP/HWPX·DOC/DOCX·텍스트·소스 코드·PDF·PPT 자료를 읽어 출처가 표시된 학습 자료를 만듭니다. TLS 비밀번호는 운영체제의 보안 저장소와 숨김 입력으로 보호합니다.",
         "developerName": "K-Lunatic",
         "category": "Productivity",
         "capabilities": [

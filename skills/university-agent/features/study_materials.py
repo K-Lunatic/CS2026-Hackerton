@@ -5,6 +5,8 @@ import json
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
@@ -35,26 +37,118 @@ def _pptx_sections(path: Path) -> list[dict[str, str]]:
         return sections
 
 
+def _xml_sections(path: Path, names: list[str], location: str) -> list[dict[str, str]]:
+    with zipfile.ZipFile(path) as archive:
+        sections: list[dict[str, str]] = []
+        for name in names:
+            root = ET.fromstring(archive.read(name))
+            paragraphs = []
+            for paragraph in root.iter():
+                if paragraph.tag.rsplit("}", 1)[-1] != "p":
+                    continue
+                text = "".join(node.text or "" for node in paragraph.iter() if node.tag.rsplit("}", 1)[-1] in {"t", "text"}).strip()
+                if text:
+                    paragraphs.append(text)
+            if paragraphs:
+                suffix = f" {len(sections) + 1}" if len(names) > 1 else ""
+                sections.append({"location": f"{location}{suffix}".strip(), "text": "\n".join(paragraphs)})
+        return sections
+
+
+def _docx_sections(path: Path) -> list[dict[str, str]]:
+    return _xml_sections(path, ["word/document.xml"], "DOCX 본문")
+
+
+def _hwpx_sections(path: Path) -> list[dict[str, str]]:
+    with zipfile.ZipFile(path) as archive:
+        names = sorted(name for name in archive.namelist() if re.fullmatch(r"Contents/section\d+\.xml", name))
+    return _xml_sections(path, names, "HWPX 본문")
+
+
+def _legacy_office_sections(path: Path) -> list[dict[str, str]]:
+    extension = path.suffix.lower()
+    commands: list[list[str]] = []
+    if extension == ".hwp":
+        if command := shutil.which("hwp5txt"):
+            commands.append([command, str(path)])
+    else:
+        if command := shutil.which("textutil"):
+            commands.append([command, "-convert", "txt", "-stdout", str(path)])
+        for name in ("antiword", "catdoc"):
+            if command := shutil.which(name):
+                commands.append([command, str(path)])
+    for command in commands:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0 and result.stdout.strip():
+            return [{"location": f"{extension[1:].upper()} 본문", "text": result.stdout.strip()}]
+    for name in ("soffice", "libreoffice"):
+        command = shutil.which(name)
+        if not command:
+            continue
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([command, "--headless", "--convert-to", "txt:Text", "--outdir", directory, str(path)], capture_output=True, text=True, timeout=120)
+            converted = Path(directory) / f"{path.stem}.txt"
+            if result.returncode == 0 and converted.is_file():
+                text = converted.read_text(encoding="utf-8", errors="replace").strip()
+                if text:
+                    return [{"location": f"{extension[1:].upper()} 본문", "text": text}]
+    label = "HWP" if extension == ".hwp" else "DOC"
+    raise RuntimeError(f"{label} 파일을 읽을 변환 도구가 없습니다. {label}X 또는 PDF로 저장해 다시 동기화해 주세요.")
+
+
+def _text_sections(path: Path) -> list[dict[str, str]]:
+    raw = path.read_bytes()
+    if b"\x00" in raw[:4096]:
+        raise RuntimeError("텍스트 파일이 아닙니다.")
+    return [{"location": "문서 본문", "text": raw.decode("utf-8-sig", errors="replace").strip()}]
+
+
 def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path) -> dict[str, list[dict[str, str]]]:
-    swift = shutil.which("swift")
-    if not swift:
-        raise RuntimeError("PDF 텍스트 추출에는 macOS Swift/PDFKit이 필요합니다.")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run([swift, "-module-cache-path", str(cache_dir), str(script), *(str(path) for path in paths)], capture_output=True, text=True, timeout=120)
-    if result.returncode:
-        raise RuntimeError("PDF를 열지 못했습니다. 파일이 손상되었거나 암호화되어 있을 수 있습니다.")
-    decoded = json.loads(result.stdout)
-    return {str(Path(name).resolve()): pages for name, pages in decoded.items()}
+    swift = shutil.which("swift") if sys.platform == "darwin" else None
+    if swift:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run([swift, "-module-cache-path", str(cache_dir), str(script), *(str(path) for path in paths)], capture_output=True, text=True, timeout=120)
+        if result.returncode:
+            raise RuntimeError("PDF를 열지 못했습니다. 파일이 손상되었거나 암호화되어 있을 수 있습니다.")
+        decoded = json.loads(result.stdout)
+        return {str(Path(name).resolve()): pages for name, pages in decoded.items()}
+
+    pdftotext = shutil.which("pdftotext")
+    if not pdftotext:
+        raise RuntimeError("PDF 읽기 도구가 없습니다. Windows에서는 Poppler의 pdftotext를 설치한 뒤 다시 시도해 주세요.")
+    output: dict[str, list[dict[str, str]]] = {}
+    for path in paths:
+        result = subprocess.run([pdftotext, "-layout", str(path), "-"], capture_output=True, text=True, timeout=120)
+        if result.returncode:
+            continue
+        pages = [page.strip() for page in result.stdout.split("\f") if page.strip()]
+        output[str(path.resolve())] = [{"location": f"PDF p.{index}", "text": page} for index, page in enumerate(pages, 1)]
+    return output
 
 
 def _ppt_sections(path: Path) -> list[dict[str, str]]:
     textutil = shutil.which("textutil")
-    if not textutil:
-        raise RuntimeError("구형 PPT 텍스트 추출에는 macOS textutil이 필요합니다. PPTX로 변환해 다시 동기화해 주세요.")
-    result = subprocess.run([textutil, "-convert", "txt", "-stdout", str(path)], capture_output=True, text=True, timeout=60)
-    if result.returncode or not result.stdout.strip():
-        raise RuntimeError("구형 PPT에서 텍스트를 추출하지 못했습니다. PPTX 또는 PDF로 변환해 다시 동기화해 주세요.")
-    return [{"location": "슬라이드 위치 미확인", "text": result.stdout.strip()}]
+    if textutil:
+        result = subprocess.run([textutil, "-convert", "txt", "-stdout", str(path)], capture_output=True, text=True, timeout=60)
+        if result.returncode == 0 and result.stdout.strip():
+            return [{"location": "슬라이드 위치 미확인", "text": result.stdout.strip()}]
+    for name in ("soffice", "libreoffice", "catppt"):
+        command = shutil.which(name)
+        if not command:
+            continue
+        if name == "catppt":
+            result = subprocess.run([command, str(path)], capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and result.stdout.strip():
+                return [{"location": "슬라이드 위치 미확인", "text": result.stdout.strip()}]
+            continue
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([command, "--headless", "--convert-to", "txt:Text", "--outdir", directory, str(path)], capture_output=True, text=True, timeout=120)
+            converted = Path(directory) / f"{path.stem}.txt"
+            if result.returncode == 0 and converted.is_file():
+                text = converted.read_text(encoding="utf-8", errors="replace").strip()
+                if text:
+                    return [{"location": "슬라이드 위치 미확인", "text": text}]
+    raise RuntimeError("구형 PPT를 읽을 변환 도구가 없습니다. PPTX 또는 PDF로 변환해 다시 동기화해 주세요.")
 
 
 def study_materials(
@@ -123,12 +217,18 @@ def study_materials(
                 sections = _pptx_sections(path)
             elif extension == "ppt":
                 sections = _ppt_sections(path)
+            elif extension == "docx":
+                sections = _docx_sections(path)
+            elif extension == "doc":
+                sections = _legacy_office_sections(path)
+            elif extension == "hwpx":
+                sections = _hwpx_sections(path)
+            elif extension == "hwp":
+                sections = _legacy_office_sections(path)
             else:
-                material["error"] = "지원하는 파일 형식은 PDF, PPT, PPTX입니다."
-                materials.append(material)
-                continue
+                sections = _text_sections(path)
         except (OSError, ValueError, zipfile.BadZipFile, ET.ParseError, subprocess.SubprocessError, RuntimeError):
-            material["error"] = "파일 텍스트를 읽지 못했습니다. 파일 형식을 확인하거나 PPTX/PDF로 변환해 주세요."
+            material["error"] = "파일 텍스트를 읽지 못했습니다. 오래된 HWP/DOC 파일은 HWPX/DOCX 또는 PDF로 변환해 주세요."
             materials.append(material)
             continue
         text_found = False
@@ -154,7 +254,7 @@ def study_materials(
     loaded = any(item["sections"] for item in materials)
     answer = "강의 자료 텍스트를 불러왔습니다. 출처 위치가 표시된 내용만 근거로 학습 자료를 만드세요." if loaded else "읽을 수 있는 강의 자료 텍스트가 없습니다."
     if blocked:
-        answer += "\n다운로드 제한 또는 허용 미확인으로 가져오지 않은 자료: " + ", ".join(blocked)
+        answer += "\n다운로드 금지 표시가 있어 가져오지 않은 자료: " + ", ".join(blocked)
     return {
         "needsInput": False,
         "toolCalls": ["read_course_files"],

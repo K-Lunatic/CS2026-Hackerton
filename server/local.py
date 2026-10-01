@@ -1,4 +1,4 @@
-"""Run the gateway on this Mac and optionally start a temporary HTTPS tunnel."""
+"""Run the gateway on this device and optionally start a temporary HTTPS tunnel."""
 from __future__ import annotations
 
 import argparse
@@ -9,6 +9,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import threading
 from html import escape
 from pathlib import Path
@@ -70,7 +71,7 @@ def write_settings(directory, app):
     rows = [('Client ID', app.client_id), ('Client secret', app.client_secret),
             ('Authorization URL', app.base_url + '/oauth/authorize'), ('Token URL', app.base_url + '/oauth/token'), ('Scope', 'academic:read')]
     table = ''.join(f'<tr><th>{escape(name)}</th><td><code>{escape(value)}</code></td></tr>' for name, value in rows)
-    page = f'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>University Agent 연결 설정</title><style>body{{font:18px system-ui;max-width:950px;margin:40px auto;padding:20px}}td,th{{text-align:left;padding:12px;overflow-wrap:anywhere}}code{{user-select:all}}a{{color:#174f3b}}</style><h1>이 Mac을 ChatGPT에 연결</h1><p>Custom GPT 편집 화면의 Actions에 아래 스키마 주소를 가져오고, 인증을 OAuth로 설정하세요.</p><p><a href="{escape(app.base_url)}/openapi.json">{escape(app.base_url)}/openapi.json</a></p><table>{table}</table><p>Token 교환: POST, application/x-www-form-urlencoded.</p><p>Instructions: 저장소의 server/gpt-instructions.md 내용을 넣으세요.</p><p>이 페이지의 Client secret은 학교 비밀번호가 아닙니다. 채팅에 보내지 마세요. 이 설정 페이지는 Mac 파일로만 저장되며 공개 API에서 제공하지 않습니다.</p><p>Mac이나 터널을 끄면 연결이 끊깁니다. 임시 터널을 다시 실행하면 주소가 바뀌므로 Actions 주소와 OAuth URL도 갱신해야 합니다.</p></html>'''
+    page = f'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>University Agent 연결 설정</title><style>body{{font:18px system-ui;max-width:950px;margin:40px auto;padding:20px}}td,th{{text-align:left;padding:12px;overflow-wrap:anywhere}}code{{user-select:all}}a{{color:#174f3b}}</style><h1>이 컴퓨터를 ChatGPT에 연결</h1><p>Custom GPT 편집 화면의 Actions에 아래 스키마 주소를 가져오고, 인증을 OAuth로 설정하세요.</p><p><a href="{escape(app.base_url)}/openapi.json">{escape(app.base_url)}/openapi.json</a></p><table>{table}</table><p>Token 교환: POST, application/x-www-form-urlencoded.</p><p>Instructions: 저장소의 server/gpt-instructions.md 내용을 넣으세요.</p><p>이 페이지의 Client secret은 학교 비밀번호가 아닙니다. 채팅에 보내지 마세요. 이 설정 페이지는 기기 파일로만 저장되며 공개 API에서 제공하지 않습니다.</p><p>컴퓨터나 터널을 끄면 연결이 끊깁니다. 임시 터널을 다시 실행하면 주소가 바뀌므로 Actions 주소와 OAuth URL도 갱신해야 합니다.</p></html>'''
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, 'w') as target:
         target.write(page)
@@ -78,8 +79,17 @@ def write_settings(directory, app):
     return path
 
 
+def open_file(path):
+    if os.name == 'nt':
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == 'darwin':
+        subprocess.run(['open', str(path)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.run(['xdg-open', str(path)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def main():
-    parser = argparse.ArgumentParser(description='이 Mac에서 University Agent를 실행하고 ChatGPT HTTPS 연결을 준비합니다.')
+    parser = argparse.ArgumentParser(description='이 기기에서 터틀넥을 실행하고 ChatGPT HTTPS 연결을 준비합니다.')
     parser.add_argument('--gpt-id', help='저장한 Custom GPT의 g-... ID')
     parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--public-url', help='직접 준비한 HTTPS 터널 주소; 생략하면 Quick Tunnel 실행')
@@ -90,9 +100,12 @@ def main():
     gpt_id = args.gpt_id or saved.get('gpt_id') or input('저장한 Custom GPT ID (g-...): ').strip()
     if not re.fullmatch(r'g-[A-Za-z0-9_-]+', gpt_id):
         raise SystemExit('Custom GPT를 저장한 뒤 주소에 표시되는 g-... ID를 입력하세요.')
-    binary = shutil.which('cloudflared') or str(ROOT / '.university-agent/bin/cloudflared')
+    bundled = ROOT / '.university-agent/bin/cloudflared'
+    if os.name == 'nt':
+        bundled = bundled.with_suffix('.exe')
+    binary = shutil.which('cloudflared') or str(bundled)
     if not args.public_url and not Path(binary).is_file():
-        raise SystemExit('cloudflared가 없습니다. Mac에 cloudflared를 설치한 뒤 다시 실행하세요. 설치: brew install cloudflared')
+        raise SystemExit('cloudflared가 없습니다. 설치 안내를 확인한 뒤 다시 실행해 주세요.')
     config = local_config(directory, gpt_id)
     redirects = [f'https://{host}/aip/{gpt_id}/oauth/callback' for host in ('chatgpt.com', 'chat.openai.com')]
     app = Gateway(args.public_url or 'https://localhost.invalid', config['client_id'], config['client_secret'], redirects, directory / 'data')
@@ -108,9 +121,9 @@ def main():
         print(f'로컬 실행: http://127.0.0.1:{httpd.server_port}/health', flush=True)
         print(f'ChatGPT 스키마: {app.base_url}/openapi.json', flush=True)
         print(f'비공개 설정 페이지: {settings}', flush=True)
-        print('Mac을 켜 두세요. 종료: Ctrl+C', flush=True)
+        print('이 기기를 켜 두세요. 종료: Ctrl+C', flush=True)
         if not args.no_browser:
-            subprocess.run(['open', str(settings)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            open_file(settings)
         while thread.is_alive():
             thread.join(timeout=1)
             if tunnel and tunnel.poll() is not None:

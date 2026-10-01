@@ -69,6 +69,12 @@ class StudyFlowTests(ProjectTestBase):
         self.assertEqual(direct['status'], 'prepared')
         self.assertEqual(direct['hostOnly']['settings']['types'], ['mcq'] * 5)
         self.assertEqual(direct['hostOnly']['SOURCE'][0]['name'], '3주차 탐색')
+        unrelated = self.cli('ask', '--text', '과제 알려줘', '--conversation', 'unrelated-study')
+        self.assertNotEqual(unrelated['toolCalls'], ['study'])
+        old_offer = self.cli('ask', '--text', '자료구조 공부해야겠다', '--conversation', 'unrelated-study')
+        self.cli('ask', '--text', '과제 알려줘', '--conversation', 'unrelated-study')
+        with self.assertRaises(ValueError):
+            self.session('unrelated-study').call({'action': 'accept', 'replyTo': old_offer['offerId']})
 
     def test_grounded_question_flow_and_no_early_answer(self):
         s = self.session()

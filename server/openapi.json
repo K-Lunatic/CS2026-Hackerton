@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "University Agent",
-    "version": "0.2.0",
-    "description": "User-isolated KKU TLS snapshots. Never request TLS passwords in chat. Login is handled by OAuth in the browser."
+    "version": "0.3.0",
+    "description": "User-isolated KKU TLS snapshots and assignment checkpoints. Never request TLS passwords in chat. Login is handled by OAuth in the browser."
   },
   "servers": [
     {
@@ -34,6 +34,55 @@
     }
   },
   "paths": {
+    "/v1/checkpoints": {
+      "get": {
+        "operationId": "listUnfinishedCheckpoints",
+        "summary": "List all saved unfinished assignment checkpoints",
+        "description": "Pass the user's latest message verbatim as userMessage. Call only after the user sends exactly list. Similar wording must only receive guidance; do not call this Action. Show nextCommands after the result.",
+        "parameters": [{"name": "userMessage", "in": "query", "required": true, "schema": {"type": "string", "enum": ["list"]}}],
+        "responses": {"200": {"description": "All saved unfinished assignments and their latest progress", "content": {"application/json": {"schema": {"type": "object", "properties": {"data": {"type": "array", "items": {"type": "object", "additionalProperties": true}}, "total": {"type": "integer"}}}}}}, "400": {"description": "Exact command required"}}
+      }
+    },
+    "/v1/checkpoint": {
+      "get": {
+        "operationId": "loadAssignmentCheckpoint",
+        "summary": "Load a saved assignment checkpoint",
+        "description": "Call only after an exact user command load or load followed by a quoted assignment name. With no selector, returns the latest saved checkpoint. Show nextCommands after the result.",
+        "parameters": [{"name": "command", "in": "query", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Saved checkpoint or null", "content": {"application/json": {"schema": {"type": "object", "properties": {"data": {"type": "object", "nullable": true, "additionalProperties": true}}}}}}, "400": {"description": "Exact command required"}}
+      },
+      "post": {
+        "operationId": "saveAssignmentCheckpoint",
+        "summary": "Save the current conversation's assignment progress",
+        "description": "Call only after the user sends save followed by a quoted TLS assignment name, or save new followed by a quoted title for a task absent from TLS. Summarize only evidence from the current conversation. Show nextCommands after the result.",
+        "x-openai-isConsequential": false,
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "required": ["command", "progress", "blocker", "nextAction"],
+          "properties": {
+            "command": {"type": "string"},
+            "progress": {"type": "string"},
+            "blocker": {"type": "string"},
+            "nextAction": {"type": "string"},
+            "completedItems": {"type": "array", "items": {"type": "string"}}
+          }
+        }}}},
+        "responses": {"201": {"description": "Saved checkpoint", "content": {"application/json": {"schema": {"type": "object", "properties": {"data": {"type": "object", "additionalProperties": true}, "message": {"type": "string"}}}}}}, "400": {"description": "Invalid command or summary"}, "409": {"description": "Assignment selection needs clarification"}}
+      }
+    },
+    "/v1/assignments/complete": {
+      "post": {
+        "operationId": "completeManualAssignment",
+        "summary": "Complete a manual assignment after the user confirms submission",
+        "description": "When a manually registered assignment is finished, ask whether it was submitted. Call only after the user answers exactly 예 or 아니요. Only 예 removes saved checkpoints. The assignmentId is internal and must come from a previous assignment lookup.",
+        "x-openai-isConsequential": false,
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false, "required": ["assignmentId", "submissionAnswer"],
+          "properties": {"assignmentId": {"type": "string"}, "submissionAnswer": {"type": "string", "enum": ["예", "아니요"]}}
+        }}}},
+        "responses": {"200": {"description": "Confirmed submission removes checkpoints; 아니요 keeps them"}, "400": {"description": "An exact submission answer is required"}, "404": {"description": "Manual assignment not found"}}
+      }
+    },
     "/v1/courses": {
       "get": {
         "operationId": "getCourses",

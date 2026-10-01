@@ -197,7 +197,7 @@ class StudySession:
     def transition(self, state, event):
         action = event.get('action')
         if action in ('cancel', 'observe'):
-            if action == 'cancel' or state['phase'] == 'offered':
+            if action == 'cancel' or state['phase'] in ('offered', 'selecting'):
                 state.clear(); state.update(phase='idle', suppressed=True)
             return {'status': state['phase'], 'answer': '학습 제안을 종료했습니다.' if action == 'cancel' else ''}
         if action in ('offer', 'request'):

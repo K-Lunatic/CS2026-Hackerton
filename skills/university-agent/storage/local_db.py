@@ -12,6 +12,7 @@ SCHEMA = Path(__file__).resolve().parents[1] / "database" / "schema.sql"
 
 class LocalDatabase:
     def __init__(self, path: Path, *, read_only: bool = False):
+        self.read_only = read_only
         if not read_only:
             path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True) if read_only else sqlite3.connect(path)
@@ -81,6 +82,8 @@ class LocalDatabase:
         for item in assignments:
             db.execute("INSERT INTO assignments(id, external_id, course_id, title, description, due_at, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, title=excluded.title, description=excluded.description, due_at=excluded.due_at, updated_at=excluded.updated_at", (item["id"], item.get("externalId", item["id"]), item["courseId"], item["title"], item.get("description"), item["dueAt"], item.get("source", "tls"), now))
             db.execute("INSERT INTO assignment_submissions(assignment_id, user_id, submission_status, submitted_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(assignment_id, user_id) DO UPDATE SET submission_status=excluded.submission_status, submitted_at=excluded.submitted_at, updated_at=excluded.updated_at", (item["id"], user_id, item.get("submissionStatus", "UNKNOWN"), item.get("submittedAt"), now))
+            if item.get("source", "tls") == "tls" and item.get("submissionStatus") in {"SUBMITTED", "LATE"}:
+                db.execute("DELETE FROM context_bookmarks WHERE user_id=? AND assignment_id=?", (user_id, item["id"]))
         for item in lectures:
             db.execute("INSERT INTO lectures(id, external_id, course_id, title, duration_seconds, available_from, available_until, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, title=excluded.title, duration_seconds=excluded.duration_seconds, available_from=excluded.available_from, available_until=excluded.available_until, updated_at=excluded.updated_at", (item["id"], item.get("externalId", item["id"]), item["courseId"], item["title"], item["durationSeconds"], item.get("availableFrom"), item.get("availableUntil"), item.get("source", "tls"), now))
             db.execute("INSERT INTO lecture_progress(lecture_id, user_id, watched_seconds, watch_progress, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(lecture_id, user_id) DO UPDATE SET watched_seconds=excluded.watched_seconds, watch_progress=excluded.watch_progress, completed=excluded.completed, updated_at=excluded.updated_at", (item["id"], user_id, item["watchedSeconds"], item["watchProgress"], int(item["completed"]), now))
@@ -122,14 +125,21 @@ class LocalDatabase:
         self.connection.commit()
         return {"id": assignment_id, "courseId": course_id, "title": title, "description": description, "dueAt": due_at, "submissionStatus": "NOT_SUBMITTED", "submittedAt": None, "source": "manual"}
 
-    def complete_manual_assignment(self, user_id: str, assignment_id: str) -> bool:
+    def complete_manual_assignment(self, user_id: str, assignment_id: str, *, submission_answer: str) -> bool:
+        """Complete a manual assignment only after an exact submission confirmation."""
+        if submission_answer != "예":
+            return False
         now = datetime.now(timezone.utc).isoformat()
         cursor = self.connection.execute("UPDATE manual_assignments SET completed_at=?, updated_at=? WHERE id=? AND user_id=?", (now, now, assignment_id, user_id))
+        if cursor.rowcount:
+            self.connection.execute("DELETE FROM context_bookmarks WHERE user_id=? AND assignment_id=?", (user_id, assignment_id))
         self.connection.commit()
         return cursor.rowcount > 0
 
     def delete_manual_assignment(self, user_id: str, assignment_id: str) -> bool:
         cursor = self.connection.execute("DELETE FROM manual_assignments WHERE id=? AND user_id=?", (assignment_id, user_id))
+        if cursor.rowcount:
+            self.connection.execute("DELETE FROM context_bookmarks WHERE user_id=? AND assignment_id=?", (user_id, assignment_id))
         self.connection.commit()
         return cursor.rowcount > 0
 

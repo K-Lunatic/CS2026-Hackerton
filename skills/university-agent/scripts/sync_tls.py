@@ -49,7 +49,7 @@ def main() -> None:
         notices = provider.get_notices(user_id)
         print(f"완료: {len(notices)}개", flush=True)
         print("강의자료 다운로드 중…", flush=True)
-        resources = provider.get_resources(user_id)
+        resources = provider.get_resources(user_id, notices=notices)
         print(f"완료: {len(resources)}개", flush=True)
     except SocketTimeout as error:
         raise SystemExit("TLS 서버 응답이 30초 동안 없어 중단했습니다. 잠시 후 다시 실행해 주세요.") from error
@@ -58,17 +58,23 @@ def main() -> None:
     save(username, password)
     now = datetime.now(timezone.utc).isoformat()
     file_root = db_path.parent / "files"
+    prohibited = 0
+    course_names = {course["id"]: course["name"] for course in courses}
     for item in resources:
+        if item.get("downloadStatus") == "PROHIBITED":
+            prohibited += 1
+            print(f"다운로드 제한으로 제외: {course_names.get(item['courseId'], '과목')} / {item['title']}", flush=True)
+            continue
         content = item.pop("_content")
         safe_name = re.sub(r'[\\/:*?"<>|]+', "_", Path(item["fileName"]).name)
         target = file_root / item["courseId"] / safe_name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
-        item.update(localPath=str(target), downloadedAt=now)
+        item.update(localPath=str(target), downloadedAt=now, downloadStatus="DOWNLOADED")
     database = LocalDatabase(db_path)
     database.upsert_tls_snapshot(user_id, courses, assignments, lectures, username, None, now, notices, resources)
     database.close()
-    print(f"synced courses={len(courses)} assignments={len(assignments)} lectures={len(lectures)} notices={len(notices)} resources={len(resources)}")
+    print(f"synced courses={len(courses)} assignments={len(assignments)} lectures={len(lectures)} notices={len(notices)} resources={len(resources)} download_prohibited={prohibited}")
 
 
 if __name__ == "__main__":

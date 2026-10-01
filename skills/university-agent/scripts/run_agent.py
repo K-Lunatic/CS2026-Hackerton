@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from features.assignments import assignment_answer, get_assignments
 from features.assignment_selection import find_assignments, selection_guidance, public_checkpoint
+from features.study_materials import study_materials
 from features.bookmarks import add_bookmark, delete_bookmark, list_bookmarks, validate_bookmark_target
 from features.context import format_current_context, get_current_context
 from features.context_bookmarks import format_resume_card, get_context_bookmark, save_context_bookmark
@@ -267,7 +268,7 @@ def ask(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="University Agent local skill")
+    parser = argparse.ArgumentParser(description="터틀넥 local university skill")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("context")
     assignment_parser = sub.add_parser("assignments")
@@ -292,6 +293,10 @@ def main() -> None:
     sub.add_parser("notices")
     sub.add_parser("todos")
     sub.add_parser("resources")
+    study_parser = sub.add_parser("study-materials", help="다운로드한 과목 자료를 학습 자료 생성용으로 읽기")
+    study_parser.add_argument("--course", default="", help="과목명 또는 일부")
+    study_parser.add_argument("--resource", default="", help="자료 제목 또는 파일명 일부")
+    study_parser.add_argument("--max-chars", type=int, default=30000)
     sub.add_parser("bookmarks")
     add = sub.add_parser("bookmark-add")
     add.add_argument("--target-type", required=True)
@@ -351,6 +356,15 @@ def main() -> None:
         result = {"toolCalls": ["get_notices"], "data": database().get_notices(USER_ID)}
     elif args.command == "resources":
         result = {"toolCalls": ["get_resources"], "data": database().get_resources(USER_ID)}
+    elif args.command == "study-materials":
+        if not 1000 <= args.max_chars <= 80000:
+            parser.error("--max-chars는 1000~80000 사이여야 합니다.")
+        store = database()
+        result = study_materials(
+            store.get_courses(USER_ID), store.get_resources(USER_ID),
+            files_root=DB_PATH.parent / "files", course_query=args.course,
+            resource_query=args.resource, max_chars=args.max_chars,
+        )
     elif args.command == "bookmarks":
         result = {"toolCalls": ["get_bookmarks"], "data": list_bookmarks(database(), USER_ID)}
     elif args.command == "bookmark-add":

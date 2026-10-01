@@ -1,0 +1,163 @@
+"""Extract text from locally downloaded TLS course files for grounded study aids."""
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import unicodedata
+import xml.etree.ElementTree as ET
+import zipfile
+from pathlib import Path
+from typing import Any
+
+
+def _normalize(value: str) -> str:
+    return "".join(char for char in unicodedata.normalize("NFKC", value).casefold() if char.isalnum())
+
+
+def _pptx_sections(path: Path) -> list[dict[str, str]]:
+    with zipfile.ZipFile(path) as archive:
+        slides = sorted(
+            (name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)),
+            key=lambda name: int(re.search(r"slide(\d+)", name).group(1)),
+        )
+        sections = []
+        for number, name in enumerate(slides, 1):
+            root = ET.fromstring(archive.read(name))
+            paragraphs = []
+            for paragraph in root.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}p"):
+                text = "".join(node.text or "" for node in paragraph.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}t")).strip()
+                if text:
+                    paragraphs.append(text)
+            if paragraphs:
+                sections.append({"location": f"슬라이드 {number}", "text": "\n".join(paragraphs)})
+        return sections
+
+
+def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path) -> dict[str, list[dict[str, str]]]:
+    swift = shutil.which("swift")
+    if not swift:
+        raise RuntimeError("PDF 텍스트 추출에는 macOS Swift/PDFKit이 필요합니다.")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run([swift, "-module-cache-path", str(cache_dir), str(script), *(str(path) for path in paths)], capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        raise RuntimeError("PDF를 열지 못했습니다. 파일이 손상되었거나 암호화되어 있을 수 있습니다.")
+    decoded = json.loads(result.stdout)
+    return {str(Path(name).resolve()): pages for name, pages in decoded.items()}
+
+
+def _ppt_sections(path: Path) -> list[dict[str, str]]:
+    textutil = shutil.which("textutil")
+    if not textutil:
+        raise RuntimeError("구형 PPT 텍스트 추출에는 macOS textutil이 필요합니다. PPTX로 변환해 다시 동기화해 주세요.")
+    result = subprocess.run([textutil, "-convert", "txt", "-stdout", str(path)], capture_output=True, text=True, timeout=60)
+    if result.returncode or not result.stdout.strip():
+        raise RuntimeError("구형 PPT에서 텍스트를 추출하지 못했습니다. PPTX 또는 PDF로 변환해 다시 동기화해 주세요.")
+    return [{"location": "슬라이드 위치 미확인", "text": result.stdout.strip()}]
+
+
+def study_materials(
+    courses: list[dict[str, Any]], resources: list[dict[str, Any]], *,
+    files_root: Path, course_query: str = "", resource_query: str = "", max_chars: int = 30000,
+) -> dict[str, Any]:
+    """Return grounded, bounded source text without local paths or database IDs."""
+    if course_query:
+        needle = _normalize(course_query)
+        matching_courses = [course for course in courses if needle in _normalize(course["name"])]
+    else:
+        matching_courses = courses
+    if len(matching_courses) != 1:
+        names = [course["name"] for course in matching_courses]
+        message = "과목명을 더 구체적으로 지정해 주세요." if names else "일치하는 과목이 없습니다."
+        return {"needsInput": True, "answer": message, "data": {"courses": names}}
+
+    course = matching_courses[0]
+    needle = _normalize(resource_query)
+    selected = [item for item in resources if item.get("courseId") == course["id"]]
+    if needle:
+        selected = [item for item in selected if needle in _normalize(item.get("title", "") + item.get("fileName", ""))]
+    if not selected:
+        return {"needsInput": bool(not resource_query), "answer": "이 과목에서 조건에 맞는 다운로드 자료를 찾지 못했습니다.", "data": {"courseName": course["name"], "materials": []}}
+
+    root = files_root.resolve()
+    resolved: dict[str, Path] = {}
+    errors: dict[str, str] = {}
+    for item in selected:
+        if item.get("downloadStatus") == "PROHIBITED":
+            errors[item["id"]] = item.get("downloadReason") or "TLS에 다운로드 금지 표시가 있어 파일을 가져오지 않았고 분석에서 제외했습니다."
+            continue
+        try:
+            path = Path(item.get("localPath") or "").resolve(strict=True)
+            path.relative_to(root)
+            if not path.is_file():
+                raise ValueError
+            resolved[item["id"]] = path
+        except (OSError, ValueError):
+            errors[item["id"]] = "로컬 파일이 없습니다. TLS 동기화를 다시 실행해 주세요."
+
+    pdf_items = [item for item in selected if item.get("id") in resolved and item.get("extension", "").lower() == "pdf"]
+    pdf_text: dict[str, list[dict[str, str]]] = {}
+    if pdf_items:
+        script = Path(__file__).resolve().parents[1] / "scripts" / "extract_pdf.swift"
+        try:
+            pdf_text = _pdf_sections([resolved[item["id"]] for item in pdf_items], script, files_root.parent / "cache" / "swift-modules")
+        except (json.JSONDecodeError, OSError, subprocess.SubprocessError, RuntimeError):
+            for item in pdf_items:
+                errors[item["id"]] = "PDF 텍스트를 읽지 못했습니다. 스캔본이면 OCR이 필요합니다."
+
+    materials = []
+    remaining = max_chars
+    for item in selected:
+        material = {"title": item["title"], "fileName": item["fileName"], "extension": item["extension"], "downloadStatus": item.get("downloadStatus", "NOT_DOWNLOADED"), "sections": []}
+        if item["id"] in errors:
+            material["error"] = errors[item["id"]]
+            materials.append(material)
+            continue
+        path = resolved[item["id"]]
+        try:
+            extension = item["extension"].lower()
+            if extension == "pdf":
+                sections = pdf_text.get(str(path), [])
+            elif extension == "pptx":
+                sections = _pptx_sections(path)
+            elif extension == "ppt":
+                sections = _ppt_sections(path)
+            else:
+                material["error"] = "지원하는 파일 형식은 PDF, PPT, PPTX입니다."
+                materials.append(material)
+                continue
+        except (OSError, ValueError, zipfile.BadZipFile, ET.ParseError, subprocess.SubprocessError, RuntimeError):
+            material["error"] = "파일 텍스트를 읽지 못했습니다. 파일 형식을 확인하거나 PPTX/PDF로 변환해 주세요."
+            materials.append(material)
+            continue
+        text_found = False
+        for section in sections:
+            text = section["text"].strip()
+            if not text:
+                continue
+            text_found = True
+            if remaining <= 0:
+                material["truncated"] = True
+                break
+            excerpt = text[:remaining]
+            material["sections"].append({"location": section["location"], "text": excerpt})
+            remaining -= len(excerpt)
+            if len(excerpt) < len(text):
+                material["truncated"] = True
+                break
+        if not text_found:
+            material["error"] = "추출 가능한 텍스트가 없습니다. 이미지 스캔 자료는 OCR이 필요합니다."
+        materials.append(material)
+
+    blocked = [item["title"] for item in materials if item["downloadStatus"] == "PROHIBITED"]
+    loaded = any(item["sections"] for item in materials)
+    answer = "강의 자료 텍스트를 불러왔습니다. 출처 위치가 표시된 내용만 근거로 학습 자료를 만드세요." if loaded else "읽을 수 있는 강의 자료 텍스트가 없습니다."
+    if blocked:
+        answer += "\n다운로드 제한 또는 허용 미확인으로 가져오지 않은 자료: " + ", ".join(blocked)
+    return {
+        "needsInput": False,
+        "toolCalls": ["read_course_files"],
+        "data": {"courseName": course["name"], "materials": materials, "truncated": remaining <= 0},
+        "answer": answer,
+    }

@@ -1,4 +1,7 @@
 interface:
-  display_name: "University Agent"
-  short_description: "ChatGPT/Codex용 로컬 대학생활·TLS·과제 복귀 Skill"
-  default_prompt: "Use $university-agent to sync local TLS data, check assignments, lectures, notices and files, save or resume an assignment context bookmark, or manage bookmarks and project handovers."
+  display_name: "터틀넥"
+  short_description: "과목·과제 관리와 강의 자료 기반 학습을 돕는 로컬 Skill"
+  icon_small: "./assets/turtleneck.png"
+  icon_large: "./assets/turtleneck.png"
+  brand_color: "#B8E9C4"
+  default_prompt: "Use $turtleneck to review courses and assignments or create source-cited study materials from a local lecture file."

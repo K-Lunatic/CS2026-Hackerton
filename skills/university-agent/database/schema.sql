@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS resources (
   remote_path TEXT NOT NULL,
   local_path TEXT,
   downloaded_at TEXT,
+  download_status TEXT NOT NULL DEFAULT 'NOT_DOWNLOADED',
+  download_reason TEXT,
   source TEXT NOT NULL DEFAULT 'tls',
   updated_at TEXT NOT NULL,
   UNIQUE (source, external_id)

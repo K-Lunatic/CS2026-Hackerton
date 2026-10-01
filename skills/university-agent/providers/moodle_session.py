@@ -16,6 +16,31 @@ class LoginError(RuntimeError):
     pass
 
 
+class DownloadRestricted(RuntimeError):
+    pass
+
+
+def check_download_url(url: str) -> None:
+    query = {key.lower(): values for key, values in parse_qs(urlsplit(url).query).items()}
+    denied = any(value.lower() in {"1", "true", "yes"} for key in ("nodownload", "disable_download", "disabledownload") for value in query.get(key, []))
+    denied |= any(value.lower() in {"0", "false", "no"} for key in ("allowdownload", "allow_download") for value in query.get(key, []))
+    if denied:
+        raise DownloadRestricted("파일 주소에 다운로드 금지가 표시되어 파일을 가져오지 않았습니다.")
+    if urlsplit(url).path.endswith("/mod/ubfile/viewer.php"):
+        raise DownloadRestricted("뷰어 전용 자료로 원본 다운로드 허용을 확인할 수 없어 가져오지 않았습니다.")
+    # forcedownload=0 means inline display, not a download prohibition.
+
+
+class _DownloadRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            check_download_url(newurl)
+        except DownloadRestricted:
+            fp.close()
+            raise
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class _HiddenInputs(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -34,7 +59,7 @@ class MoodleSession:
     def __init__(self, base_url: str = "https://tls.kku.ac.kr"):
         self.base_url = base_url.rstrip("/")
         self.cookies = CookieJar()
-        self.opener = build_opener(HTTPCookieProcessor(self.cookies), HTTPRedirectHandler(), HTTPSHandler(context=ssl.create_default_context()))
+        self.opener = build_opener(HTTPCookieProcessor(self.cookies), _DownloadRedirectHandler(), HTTPSHandler(context=ssl.create_default_context()))
         self.logged_in = False
 
     @staticmethod
@@ -91,7 +116,12 @@ class MoodleSession:
         if not self.logged_in:
             raise LoginError("Call login() before get_bytes()")
         url = urljoin(f"{self.base_url}/", path.lstrip("/"))
+        check_download_url(url)
         response = self.opener.open(Request(url, headers={"User-Agent": "UniversityAgent/0.1", "Accept-Encoding": "gzip, deflate"}), timeout=30)
-        if "/login" in urlsplit(response.geturl()).path:
-            raise LoginError("TLS session expired; sign in again")
-        return self._decode_bytes(response.read(), response), response
+        try:
+            check_download_url(response.geturl())
+            if "/login" in urlsplit(response.geturl()).path:
+                raise LoginError("TLS session expired; sign in again")
+            return self._decode_bytes(response.read(), response), response
+        finally:
+            response.close()

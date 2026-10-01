@@ -48,8 +48,8 @@ def event_from_text(text, courses):
             configured['delivery'] = 'single'
         kinds = [('mcq', '객관식'), ('short', '단답형'), ('essay', '서술형')]
         mentioned = [kind for kind, word in kinds if word in text]
-        if len(mentioned) == 1 and 'count' in configured:
-            configured['types'] = [mentioned[0]] * configured['count']
+        if len(mentioned) == 1:
+            configured['types'] = [mentioned[0]] * configured.get('count', 10)
         choice = re.search(r'([2-6])\s*지선다|선택지\s*([2-6])\s*개', text)
         if choice:
             configured['choices'] = int(choice.group(1) or choice.group(2))
@@ -354,13 +354,14 @@ class StudySession:
                 raise ValueError('현재 일괄 평가가 아닙니다.')
             grades = event.get('grades')
             pending = state['pendingGrades']
-            if not isinstance(grades, list) or any(not isinstance(g, dict) for g in grades) or len(grades) != len(pending) or {g.get('questionId') for g in grades} != set(pending):
+            if not isinstance(grades, list) or any(not isinstance(g, dict) or not isinstance(g.get('questionId'), str) for g in grades) or len(grades) != len(pending) or {g.get('questionId') for g in grades} != set(pending):
                 raise ValueError('제출한 모든 주관식 문항의 평가가 필요합니다.')
             for grade in grades:
                 qid = grade['questionId']; item = pending[qid]
                 state.update(index=item['index'], phase='grading', gradeId=item['gradeId'], submitted=item['text'], hinted=qid in state['hintedIds'])
                 feedback = self.practice_one(state, {**grade, 'action': 'grade', 'gradeId': item['gradeId']})
                 feedback.pop('summary', None)
+                feedback['hasNext'] = False
                 state['batchFeedback'].append(feedback)
             state.pop('pendingGrades'); state['phase'] = 'finished'
             return {'status': 'finished', 'feedback': state.pop('batchFeedback'), 'summary': summary(state)}
@@ -370,7 +371,7 @@ class StudySession:
         remaining = {q['id']: i for i, q in enumerate(state['questions']) if q['id'] not in done}
         if action in ('hint', 'skip', 'reveal'):
             qid = event.get('questionId')
-            if qid not in remaining: raise ValueError('풀이 중인 문항 ID가 아닙니다.')
+            if not isinstance(qid, str) or qid not in remaining: raise ValueError('풀이 중인 문항 ID가 아닙니다.')
             state.update(index=remaining[qid], hinted=qid in state['hintedIds'])
             result = self.practice_one(state, event)
             if action == 'hint' and qid not in state['hintedIds']: state['hintedIds'].append(qid)
@@ -382,7 +383,7 @@ class StudySession:
         if action != 'submit':
             raise ValueError('기본 모드는 답을 한 번에 submit으로 제출합니다.')
         answers = event.get('answers')
-        if not isinstance(answers, list) or any(not isinstance(a, dict) for a in answers) or len(answers) != len(remaining) or {a.get('questionId') for a in answers} != set(remaining):
+        if not isinstance(answers, list) or any(not isinstance(a, dict) or not isinstance(a.get('questionId'), str) for a in answers) or len(answers) != len(remaining) or {a.get('questionId') for a in answers} != set(remaining):
             raise ValueError('미응답 문항마다 답을 한 번씩 제출하세요.')
         feedback, pending = [], {}
         for answer in answers:
@@ -390,9 +391,9 @@ class StudySession:
             state.update(index=remaining[qid], phase='question', hinted=qid in state['hintedIds'])
             result = self.practice_one(state, {**answer, 'action': 'answer'})
             if result['status'] == 'grading':
-                pending[qid] = {'index': state['index'], 'gradeId': result['gradeId'], 'text': answer['text'], **result['hostOnly']}
+                pending[qid] = {'index': state['index'], 'gradeId': result['gradeId'], 'text': answer['text'], 'question': result['hostOnly']['question']}
             else:
-                result.pop('summary', None); feedback.append(result)
+                result.pop('summary', None); result['hasNext'] = False; feedback.append(result)
         if pending:
             state.update(phase='grading', pendingGrades=pending, batchFeedback=feedback, batchGradeId=secrets.token_hex(12))
             return {'status': 'grading', 'gradeId': state['batchGradeId'], 'needsEvaluation': True,

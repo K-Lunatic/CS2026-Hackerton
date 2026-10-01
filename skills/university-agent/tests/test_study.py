@@ -42,6 +42,7 @@ class StudyFlowTests(ProjectTestBase):
     def test_intent_offer_direct_request_and_unrelated_short_reply(self):
         self.assertEqual(study_intent('운영체제 시험 준비해야 하는데'), 'request')
         self.assertEqual(event_from_text('운영체제 시험 준비해야 하는데', [])['settings']['mode'], 'concepts')
+        self.assertEqual(event_from_text('객관식 문제 만들어줘', [])['settings']['types'], ['mcq'] * 10)
         self.assertEqual(study_intent('자료구조 객관식 5문제 만들어줘'), 'request')
         self.assertIsNone(study_intent('수업자료 목록 보여줘'))
         s = self.session()
@@ -197,6 +198,7 @@ class StudyFlowTests(ProjectTestBase):
             with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': answers[:-1]})
             invalid = [*answers[:-1], answers[0]]
             with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': invalid})
+            with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': [{**a, 'questionId': []} for a in answers]})
             self.assertEqual(len(s.call({'action': 'status'})['questions']), count)
             grading = s.call({'action': 'submit', 'answers': answers})
             self.assertEqual(len(grading['hostOnly']['answers']), count * 2 // 5)

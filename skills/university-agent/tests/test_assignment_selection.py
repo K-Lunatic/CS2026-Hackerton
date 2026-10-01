@@ -138,3 +138,109 @@ class AssignmentSelectionTests(ProjectTestBase):
         for text in ('과제 저장 --과목', '과제 저장 --과제 ""', '과제 저장 자바 --과제 Ex05', '과제 저장 --과목 자바 --과목 C++', '과제 저장 --과제ID private-ex05 --과제 Ex05'):
             self.assertIn('error', parse_context_command(text))
         self.assertEqual(parse_context_command('과제 저장 자바 Ex05')['values'], {'query': '자바 Ex05'})
+
+    def test_screenshot_assignment_save_list_and_complete(self):
+        title = '캡처 문제 풀이'
+        command = '과제 저장 --새과제 "' + title + '"'
+        proposed = self.cli('ask', '--text', command)
+        self.assertTrue(proposed['needsSummary'])
+        self.assertEqual(self.cli('ask', '--text', '과제 목록 불러오기')['data'], [])
+        saved = self.cli('ask', '--text', command, '--checkpoint-json', self.payload)
+        self.assertEqual(saved['data']['assignmentTitle'], title)
+        listed = self.cli('ask', '--text', '과제 목록 불러오기')
+        self.assertEqual(len(listed['data']), 1)
+        self.assertEqual(listed['data'][0]['assignmentTitle'], title)
+        self.assertEqual(self.cli('ask', '--text', '과제 불러오기 캡처 문제')['data'], saved['data'])
+        manual = next(item for item in self.db.get_assignments('fixture-user') if item['title'] == title)
+        self.assertTrue(self.cli('assignment-complete', '--id', manual['id'], '--submission-answer', '예')['data']['completed'])
+        self.assertEqual(self.cli('ask', '--text', '과제 목록 불러오기')['data'], [])
+        self.assertEqual(self.cli('ask', '--text', '과제 불러오기 캡처 문제')['data'], None)
+        self.assertEqual(self.checkpoints(), [])
+
+    def test_list_paraphrases_never_read_records(self):
+        for phrase in ('과제 목록 불러와', '과제 목록 불러오기 ', '저장한 과제 목록 보여줘', '저장한 과제 전부 보여줘', '과제 불러오기 목록'):
+            with patch.object(run_agent, 'list_unfinished_context_bookmarks', side_effect=AssertionError('must not read')):
+                result = run_agent.ask(phrase)
+            self.assertFalse(result['data']['performed'])
+            self.assertIn('list', result['answer'])
+        self.assertEqual(parse_context_command('과제 목록 불러오기')['operation'], 'list')
+
+    def test_english_commands_distinguish_tls_and_manual_assignments(self):
+        self.db.add_manual_assignment('fixture-user', '(과제) Ex05-ClubMember.java')
+        saved_tls = self.cli('ask', '--text', 'save "Ex05"', '--checkpoint-json', self.payload)
+        self.assertEqual(saved_tls['data']['assignmentTitle'], '(과제) Ex05-ClubMember.java')
+        self.assertEqual(self.checkpoints()[0]['assignment_id'], 'private-ex05')
+        self.assertIn('list', saved_tls['nextCommands'])
+
+        no_tls_match = self.cli('ask', '--text', 'save "개인 실습"', '--checkpoint-json', self.payload)
+        self.assertFalse(no_tls_match['data']['performed'])
+        self.assertEqual(len(self.checkpoints()), 1)
+
+        saved_manual = self.cli('ask', '--text', 'save new "개인 실습"', '--checkpoint-json', self.payload)
+        self.assertEqual(saved_manual['data']['assignmentTitle'], '개인 실습')
+        manual_count = len([item for item in self.db.get_assignments('fixture-user') if item['source'] == 'manual'])
+        self.cli('ask', '--text', 'save new "개인 실습"', '--checkpoint-json', self.payload)
+        self.assertEqual(len([item for item in self.db.get_assignments('fixture-user') if item['source'] == 'manual']), manual_count)
+        self.assertEqual(self.cli('ask', '--text', 'load "개인 실습"')['data']['progress'], '자료 정리 완료')
+
+        listed = self.cli('ask', '--text', 'list')
+        self.assertEqual(len(listed['data']), 2)
+        self.assertIn('load "개인 실습"', listed['nextCommands'])
+        self.assertIn('다음 명령:', listed['answer'])
+
+    def test_new_commands_keep_paraphrases_read_only(self):
+        self.assertEqual(parse_context_command('save "new"')['values'], {'query': 'new', 'source': 'tls'})
+        for message in ('과제 진행 저장해줘', '저장한 과제 목록 보여줘', 'postfix 불러와줘', 'list '):
+            result = self.cli('ask', '--text', message)
+            self.assertFalse(result['data']['performed'])
+            self.assertIn('nextCommands', result)
+        self.assertEqual(self.checkpoints(), [])
+
+    def test_list_shows_every_unfinished_assignment_once(self):
+        self.cli('ask', '--text', '과제 저장 자바 Ex05', '--checkpoint-json', self.payload)
+        self.cli('ask', '--text', '과제 저장 자바 Ex05', '--checkpoint-json', json.dumps(dict(progress='수정 완료', blocker='없음', nextAction='AI 제안: 검토')))
+        self.cli('ask', '--text', '과제 저장 자바 Ex06', '--checkpoint-json', self.payload)
+        listed = self.cli('ask', '--text', '과제 목록 불러오기')['data']
+        self.assertEqual(len(listed), 2)
+        self.assertEqual(listed[0]['assignmentTitle'], '(과제) Ex06-Customer.java')
+        self.assertEqual(listed[1]['progress'], '수정 완료')
+
+    def test_tls_submission_removes_saved_checkpoint(self):
+        self.cli('ask', '--text', '과제 저장 자바 Ex05', '--checkpoint-json', self.payload)
+        self.assertEqual(len(self.checkpoints()), 1)
+        data = snapshot()
+        data['courses'] = [{'id': 'course-java', 'name': 'Java프로그래밍2 (8234)', 'source': 'tls'}]
+        data['assignments'] = [dict(data['assignments'][0], id='private-ex05', courseId='course-java', title='(과제) Ex05-ClubMember.java', submissionStatus='SUBMITTED')]
+        data['lectures'] = data['notices'] = data['resources'] = []
+        upsert(self.db, 'fixture-user', data)
+        self.assertEqual(self.checkpoints(), [])
+        self.assertEqual(self.cli('ask', '--text', '과제 목록 불러오기')['data'], [])
+
+    def test_manual_completion_requires_exact_submission_answer(self):
+        self.cli('ask', '--text', 'save new "캡처 과제"', '--checkpoint-json', self.payload)
+        manual = next(item for item in self.db.get_assignments('fixture-user') if item['title'] == '캡처 과제')
+        command = ('assignment-complete', '--id', manual['id'])
+
+        for answer in (None, '아니요', '응', '예 ', 'YES'):
+            result = self.cli(*command, *(() if answer is None else ('--submission-answer', answer)))
+            self.assertFalse(result['data']['completed'])
+            self.assertEqual(len(self.checkpoints()), 1)
+            self.assertEqual(len(self.cli('ask', '--text', 'list')['data']), 1)
+        self.assertFalse(self.db.complete_manual_assignment('fixture-user', manual['id'], submission_answer='응'))
+        self.assertEqual(len(self.checkpoints()), 1)
+
+        confirmed = self.cli(*command, '--submission-answer', '예')
+        self.assertTrue(confirmed['data']['completed'])
+        self.assertEqual(self.checkpoints(), [])
+        self.assertEqual(self.cli('ask', '--text', 'list')['data'], [])
+
+    def test_tls_checkpoint_is_kept_until_sync_confirms_submission(self):
+        self.cli('ask', '--text', 'save "Ex05"', '--checkpoint-json', self.payload)
+        data = snapshot()
+        data['courses'] = [{'id': 'course-java', 'name': 'Java프로그래밍2 (8234)', 'source': 'tls'}]
+        data['lectures'] = data['notices'] = data['resources'] = []
+        for status in ('NOT_SUBMITTED', 'UNKNOWN', 'LATE'):
+            data['assignments'] = [dict(data['assignments'][0], id='private-ex05', courseId='course-java',
+                                        title='(과제) Ex05-ClubMember.java', submissionStatus=status)]
+            upsert(self.db, 'fixture-user', data)
+            self.assertEqual(len(self.checkpoints()), 0 if status == 'LATE' else 1)

@@ -11,12 +11,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s skills/university-agen
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest server.test_app server.test_local
 ```
 
-- 로컬 Skill 테스트 **53개 통과**. 과목·과제·공지·강의·북마크·체크포인트·TLS
+- 로컬 Skill 테스트 **61개 통과**. 과목·과제·공지·강의·북마크·체크포인트·TLS
   모의 동기화에 더해 학습 제안, 직전 제안 동의, 명시적 요청, 대화별 상태, 자료 범위,
   첨부 TXT, PPTX 슬라이드, 실제 PDFKit 페이지 텍스트 추출, 출처 인용 검증,
   문제 하나씩 공개, 힌트·답변·건너뛰기·정답 보기·평가·결과 집계를 확인했다.
-- ChatGPT Actions 게이트웨이 기존 테스트 **8개 통과**. 인증·사용자 분리·동기화 등
-  기존 조회 기능에 대한 모의 환경 검사다.
+- ChatGPT Actions 게이트웨이 기존 테스트 **11개 통과**. 인증·사용자 분리·동기화,
+  과제 체크포인트 명령과 제출 확인 등 기존 기능에 대한 모의 환경 검사다.
 - 전용 화면과 해당 실행 명령·테스트는 제거했다. 구 프로젝트·인수인계 DB 테이블은
   데이터 보존을 위해 남겼으며 삭제 마이그레이션은 실행하지 않았다.
 - AI JSON fixture는 구조·원문 인용·상태 전환 검사용이다. 실제 생성 AI의 의미적

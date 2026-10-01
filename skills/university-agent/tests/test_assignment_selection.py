@@ -45,6 +45,48 @@ class AssignmentSelectionTests(ProjectTestBase):
         found = find_assignments(self.db, 'fixture-user', {'query': 'C++'})
         self.assertEqual([item['id'] for item in found], ['private-cpp'])
 
+    def test_short_save_request_searches_without_writing(self):
+        result = self.cli('ask', '--text', '과제 저장', '--assignment-query', 'Ex06')
+        self.assertEqual([item['title'] for item in result['data']['candidates']],
+                         ['(과제) Ex06-Customer.java'])
+        self.assertFalse(result['data']['performed'])
+        self.assertEqual(self.checkpoints(), [])
+        no_clue = self.cli('ask', '--text', '과제 저장')
+        self.assertTrue(no_clue['needsAssignmentQuery'])
+
+    def test_exercise_number_does_not_expand_to_other_exercises(self):
+        for query in ('Ex06', 'Ex06 Java 과제', 'Ex06 Unique.java 중복 제거', 'ex6'):
+            with self.subTest(query=query):
+                items = find_similar_tls_assignments(self.db, 'fixture-user', query)
+                self.assertEqual([item['id'] for item in items], ['private-ex06'])
+        self.assertEqual(find_similar_tls_assignments(self.db, 'fixture-user', 'Ex99 Java 과제'), [])
+
+    def test_filename_does_not_match_unrelated_generic_array_task(self):
+        self.db.connection.execute('UPDATE assignments SET title=? WHERE id=?',
+                                   ('연습과제 - 배열, 구조체, 포인터', 'private-cpp'))
+        self.db.connection.commit()
+        self.assertEqual(find_similar_tls_assignments(
+            self.db, 'fixture-user', 'Unique.java 중복 제거 HashSet 배열 List'), [])
+
+    def test_multiple_problem_summaries_remain_separate_after_selection(self):
+        # The host owns chat interpretation; exercise the summaries it supplies
+        # through search/refinement/final-command/save/load, never a real DB.
+        postfix = dict(progress='Postfix.java 입력 처리와 숫자 스택 저장 작성',
+                       blocker='대화에서 확인되지 않음', nextAction='AI 제안: 연산자 처리 구현')
+        unique = dict(progress='Unique.java 배열 선언과 HashSet 중복 제거까지 작성',
+                      completedItems=['배열 출력', 'HashSet 변환'],
+                      blocker='대화에서 확인되지 않음', nextAction='AI 제안: 배열 재변환과 결과 출력')
+        self.cli('ask', '--text', 'save "Ex05"', '--checkpoint-json', json.dumps(postfix))
+        self.cli('ask', '--text', '과제 저장', '--assignment-query', 'Unique.java')
+        selected = self.cli('assignment-find', '--query', 'Ex06', '--source', 'tls')
+        command = selected['data']['candidates'][0]['command']
+        saved = self.cli('ask', '--text', command, '--checkpoint-json', json.dumps(unique))
+        self.assertEqual(saved['data']['assignmentTitle'], '(과제) Ex06-Customer.java')
+        self.assertEqual(saved['data']['progress'], unique['progress'])
+        self.assertEqual(self.cli('ask', '--text', 'load "Ex05"')['data']['progress'], postfix['progress'])
+        self.assertEqual(self.cli('ask', '--text', 'load "Ex06"')['data']['progress'], unique['progress'])
+        self.assertEqual(len(self.checkpoints()), 2)
+
     def test_similar_tls_search_shows_all_title_and_description_matches(self):
         self.db.connection.execute("UPDATE assignments SET description=? WHERE id=?", ('ExceptionAssignment.java 예외 처리', 'private-ex05'))
         self.db.connection.execute("UPDATE assignments SET title=? WHERE id=?", ('(과제) Ex09-ExceptionAssignment.java', 'private-ex06'))

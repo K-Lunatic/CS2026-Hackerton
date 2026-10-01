@@ -50,10 +50,11 @@ def parse_context_command(text: str) -> dict[str, Any] | None:
             return {"operation": "save", "values": values}
         if len(tokens) == 1:
             return {"operation": operation, "values": {}} if operation == "load" else {"operation": operation, "error": 'TLS 과제 이름을 입력해 주세요.'}
-        if len(tokens) == 2 and not tokens[1].startswith("--"):
-            return {"operation": operation, "values": {"query": tokens[1], **({"source": "tls"} if operation == "save" else {})}}
         if not tokens[1].startswith("--"):
-            return {"operation": operation, "error": '이름에 공백이 있으면 큰따옴표로 묶어 주세요.'}
+            if any(token.startswith("--") for token in tokens[1:]):
+                return {"operation": operation, "error": "키워드와 선택 옵션을 섞지 말고 한 가지 형식으로 입력해 주세요."}
+            query = " ".join(tokens[1:]).strip()
+            return {"operation": operation, "values": {"query": query, **({"source": "tls"} if operation == "save" else {})}}
         index = 1
         values: dict[str, Any] = {"source": "tls"} if operation == "save" else {}
         allowed = {"--course": "course", "--title": "title", "--due": "dueAt"}
@@ -153,15 +154,13 @@ def detect_context_intent(text: str) -> str | None:
     if save:
         return "save"
     if load:
-        if re.search(r"팀플|인수인계", text) and not re.search(r"체크포인트|컨텍스트|불러|복귀|재개", text):
-            return None
         return "load"
     return None
 
 
 def command_template(operation: str) -> str:
     if operation == "save":
-        return 'TLS 과제: save "과제명" / TLS에 없는 과제: save new "새 과제명"'
+        return 'TLS 과제: save 과제명 (공백 가능) / TLS에 없는 과제: save new "새 과제명"'
     if operation == "list":
         return "list"
     return 'load "과제명" (가장 최근 기록: load)'
@@ -172,6 +171,8 @@ def next_commands(result: dict[str, Any] | None = None) -> list[str]:
     result = result or {}
     calls = result.get("toolCalls", [])
     data = result.get("data")
+    if "find_assignments" in calls and isinstance(data, dict) and "candidates" in data:
+        return ["list", "load", *(item["command"] for item in data["candidates"])]
     commands = ["list"]
     if "list_context_bookmarks" in calls and isinstance(data, list):
         titles = [item["assignmentTitle"] for item in data]

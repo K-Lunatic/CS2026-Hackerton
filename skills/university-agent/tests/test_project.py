@@ -44,11 +44,12 @@ class FakeTLSSession:
     def __init__(self):
         self.pages = {
             '/local/ubion/user/': '<a href="/course/view.php?id=1">테스트 과목</a>',
-            '/course/view.php?id=1': ''.join(f'<li class="activity"><a href="/mod/{kind}/view.php?id={id}">{title}</a></li>' for kind, id, title in [('assign', 2, '테스트 과제'), ('vod', 3, '테스트 강의'), ('ubboard', 10, '공지사항'), ('resource', 5, '테스트 자료')]) + '<li class="activity"><a href="/mod/resource/view.php?id=6">보충자료.pdf</a><span>다운로드 금지</span></li><li class="activity"><a href="/mod/resource/view.php?id=7">2주차 보충자료.pdf</a></li><li class="activity"><a href="/mod/resource/view.php?id=8">서버제한.pdf</a></li>',
+            '/course/view.php?id=1': ''.join(f'<li class="activity"><a href="/mod/{kind}/view.php?id={id}">{title}</a></li>' for kind, id, title in [('assign', 2, '테스트 과제'), ('vod', 3, '테스트 강의'), ('ubboard', 10, '공지사항'), ('resource', 5, '테스트 자료')]) + '<li class="activity"><a href="/mod/resource/view.php?id=6">보충자료.pdf</a><span>다운로드 금지</span></li><li class="activity"><a href="/mod/resource/view.php?id=7">2주차 보충자료.pdf</a></li><li class="activity"><a href="/mod/resource/view.php?id=8">서버제한.pdf</a></li><li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>',
             '/mod/assign/view.php?id=2': '<p>종료 일시: 2026-10-05 23:59</p><p>제출 완료</p>',
             '/mod/vod/viewer.php?id=3': '<span class="playtime">10:00</span><script>var is_progress = 50; var is_complete = 0;</script>',
             '/mod/ubboard/view.php?id=10': '<a href="/mod/ubboard/article.php?id=10&amp;bwid=11">공지</a>',
             '/mod/ubboard/article.php?id=10&bwid=11': '<div class="content">강의실 메뉴</div><div class="subject"><h3>테스트 공지</h3></div><div class="content"><div class="text_to_html"><p>실제 공지 내용</p></div></div><p>작성일: 2026-10-01 12:00</p>',
+            '/mod/ubfile/view.php?id=9': '<a href="/mod/ubfile/viewer.php?id=9">open</a>',
         }
         self.byte_requests = []
         self.requests = []
@@ -60,10 +61,10 @@ class FakeTLSSession:
         if path.endswith('id=8'):
             from urllib.error import HTTPError
             raise HTTPError(path, 403, 'Forbidden', None, BytesIO(b'blocked'))
-        headers = Message(); headers['Content-Type'] = 'application/pdf'
         if path.endswith('id=9'):
             headers = Message(); headers['Content-Type'] = 'text/html'
-            return '<html><body>뷰어 페이지</body></html>'.encode(), SimpleNamespace(headers=headers, geturl=lambda: 'https://fixture.invalid/mod/ubfile/viewer.php?id=9')
+            return b'<html><body><a href="/mod/ubfile/viewer.php?id=9">open</a></body></html>', SimpleNamespace(headers=headers, geturl=lambda: 'https://fixture.invalid/mod/ubfile/view.php?id=9')
+        headers = Message(); headers['Content-Type'] = 'application/pdf'
         return b'%PDF-test-fixture', SimpleNamespace(headers=headers, geturl=lambda: 'https://fixture.invalid/test.pdf')
 
 
@@ -72,7 +73,7 @@ class ProjectTestBase(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.db_path = Path(self.temp.name) / 'test.db'
-        self.env = dict(os.environ, UNIVERSITY_AGENT_DB=str(self.db_path), UNIVERSITY_AGENT_USER_ID='fixture-user', TEAM_HANDOVER_API_URL='', TEAM_HANDOVER_MODEL='')
+        self.env = dict(os.environ, UNIVERSITY_AGENT_DB=str(self.db_path), UNIVERSITY_AGENT_USER_ID='fixture-user')
 
     def seed(self):
         db = LocalDatabase(self.db_path)
@@ -266,7 +267,7 @@ class ProjectTests(ProjectTestBase):
         self.assertIn('다운로드 제한', prohibited[0]['downloadReason'])
         self.assertIn('과목 공지', prohibited[1]['downloadReason'])
         self.assertIn('서버가 파일 다운로드를 거부', prohibited[2]['downloadReason'])
-        self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8'])
+        self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8', '/mod/ubfile/view.php?id=9'])
 
     def test_moodle_provider_reuses_course_pages_during_one_sync(self):
         session = FakeTLSSession()
@@ -319,7 +320,7 @@ class ProjectTests(ProjectTestBase):
         session.pages['/mod/ubfile/view.php?id=9'] = '<a href="/mod/ubfile/viewer.php?id=9">열기</a>'
         item = MoodleTLSProvider(session).get_resources('u')[0]
         self.assertEqual(item['downloadStatus'], 'NOT_DOWNLOADED')
-        self.assertIn('HTML 문서 페이지', item['downloadReason'])
+        self.assertIn('뷰어 페이지', item['downloadReason'])
         self.assertEqual(session.byte_requests, ['/mod/ubfile/view.php?id=9'])
         session = FakeTLSSession()
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
@@ -332,6 +333,14 @@ class ProjectTests(ProjectTestBase):
     def test_visible_download_text_ignores_hidden_and_malformed_markup(self):
         html = '<span style="display:none">다운로드 금지</span><script>다운로드 금지</script><p>자료 설명</p><![if gte IE 9]><p>보이는 안내</p><![endif]>'
         self.assertEqual(_plain_text(html), '자료 설명 보이는 안내')
+
+    def test_malformed_viewer_markup_keeps_download_restriction(self):
+        session = FakeTLSSession()
+        session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
+        session.pages['/mod/ubfile/view.php?id=9'] = '<p>안내</p><![broken]><p>다운로드 금지</p>'
+        item = MoodleTLSProvider(session).get_resources('u')[0]
+        self.assertEqual(item['downloadStatus'], 'PROHIBITED')
+        self.assertEqual(session.byte_requests, [])
 
     def test_expired_session_does_not_return_login_page_as_empty_records(self):
         session = MoodleSession()
@@ -394,10 +403,6 @@ class ProjectTests(ProjectTestBase):
 
 class KnownIntegrationIssues(ProjectTestBase):
     """Regression checks for previously reproduced integration defects."""
-    def test_team_progress_intent_reaches_handover(self):
-        result = self.cli('ask', '--text', '팀플 진행 상황 알려줘', '--records', '민수는 테스트 완료.', '--prepare')
-        self.assertEqual(result['toolCalls'], ['prepare_handover'])
-
     def test_current_context_uses_real_user_identity(self):
         db = LocalDatabase(self.db_path); self.addCleanup(db.close)
         upsert(db, 'student-a', snapshot())

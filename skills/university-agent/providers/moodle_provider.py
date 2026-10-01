@@ -247,6 +247,13 @@ class MoodleTLSProvider:
                                    "mimeType": None, "remotePath": href, "source": "tls",
                                    "downloadStatus": "PROHIBITED", "downloadReason": str(error) if isinstance(error, DownloadRestricted) else "TLS 서버가 파일 다운로드를 거부했습니다. 파일 내용을 가져오지 않았습니다."})
                     continue
+                if _looks_like_viewer_page(content, response.headers.get("Content-Type", ""), response.geturl()):
+                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
+                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
+                                   "fileName": title or f"resource-{resource_id}", "extension": "unknown", "mimeType": response.headers.get("Content-Type"),
+                                   "remotePath": href, "source": "tls", "downloadStatus": "NOT_DOWNLOADED",
+                                   "downloadReason": "TLS가 다운로드 금지가 아닌 문서 뷰어 페이지를 반환해 원본 파일을 저장하지 못했습니다."})
+                    continue
                 final_path = unquote(urlsplit(response.geturl()).path)
                 mime_type = response.headers.get_content_type()
                 if mime_type in {"text/html", "application/xhtml+xml"}:
@@ -308,6 +315,14 @@ def _download_restriction(activity_text: str, title: str, notices: list[dict[str
         if (normalized_title and normalized_title in notice_compact) or broad_rule:
             return "과목 공지에 해당 자료의 다운로드 제한이 있어 파일을 가져오지 않았습니다."
     return None
+
+
+def _looks_like_viewer_page(content: bytes, mime_type: str, response_url: str) -> bool:
+    """Reject HTML viewer responses masquerading as downloadable text files."""
+    if "html" not in (mime_type or "").lower() and not urlsplit(response_url).path.lower().endswith(("/view.php", "/viewer.php")):
+        return False
+    sample = content[:4096].lstrip().lower()
+    return b"<html" in sample or b"<!doctype" in sample or b"<a " in sample or b"<script" in sample or b"<body" in sample
 
 
 def _plain_text(html: str) -> str:

@@ -18,7 +18,8 @@
 | --- | --- | --- |
 | TLS 동기화 | `users`, `courses`, `enrollments`, `assignments`, `lectures`, `notices`, `resources` | TLS 담당자 |
 | 사용자별 학업 상태 | `assignment_submissions`, `lecture_progress` | TLS 담당자 + 기능 담당자 소비 |
-| 서비스 기능 | `manual_assignments`, `bookmarks`, `context_bookmarks`, `projects`, `project_members`, `project_tasks`, `handovers`, `handover_items` | 기능 담당자 |
+| 서비스 기능 | `manual_assignments`, `bookmarks`, `context_bookmarks` | 기능 담당자 |
+| 레거시 미사용 테이블 | `projects`, `project_members`, `project_tasks`, `handovers`, `handover_items` | 기존 사용자 데이터를 보존하며 신규 기능에서 사용하지 않음 |
 | 조회 조합 | `StudentContext` | 저장하지 않고 조회 시 생성 |
 
 ## 핵심 결정
@@ -65,7 +66,7 @@ TLS 담당자는 DB를 직접 노출하지 않고 `TLSProvider`가 아래처럼 
 - 북마크: 사용자별 대상 북마크
 - 과제 컨텍스트 북마크: 사용자별 과제 진행 체크포인트와 복귀 카드
 - 프로젝트: 멤버, 업무, 상태
-- 인수인계: 완료·미완료·파일·환경·다음 액션 항목
+- 학습보조: 읽은 수업자료의 페이지·슬라이드·줄을 근거로 문제 생성과 풀이. 학습 세션은 별도 `study-sessions.db`에 사용자·대화별로 저장한다.
 
 성적, 알림 발송, 벡터 검색, 장기 메모리는 이 스키마에 넣지 않는다.
 

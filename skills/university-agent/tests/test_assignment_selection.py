@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from test_project import ProjectTestBase, snapshot, upsert
 from storage.local_db import LocalDatabase
-from features.assignment_selection import find_assignments, selection_guidance
+from features.assignment_selection import find_assignments, find_similar_tls_assignments, selection_guidance
 from features.context_commands import parse_context_command
 import run_agent
 
@@ -44,6 +44,25 @@ class AssignmentSelectionTests(ProjectTestBase):
                 self.assertEqual([item['id'] for item in found], ['private-ex05'])
         found = find_assignments(self.db, 'fixture-user', {'query': 'C++'})
         self.assertEqual([item['id'] for item in found], ['private-cpp'])
+
+    def test_similar_tls_search_shows_all_title_and_description_matches(self):
+        self.db.connection.execute("UPDATE assignments SET description=? WHERE id=?", ('ExceptionAssignment.java 예외 처리', 'private-ex05'))
+        self.db.connection.execute("UPDATE assignments SET title=? WHERE id=?", ('(과제) Ex09-ExceptionAssignment.java', 'private-ex06'))
+        self.db.connection.commit()
+        result = self.cli('assignment-find', '--query', 'ExceptionAssignment.java', '--source', 'tls')
+        self.assertEqual([item['title'] for item in result['data']['candidates']],
+                         ['(과제) Ex09-ExceptionAssignment.java', '(과제) Ex05-ClubMember.java'])
+        self.assertTrue(result['needsInput'])
+        self.assertEqual(result['nextCommands'][2:], [item['command'] for item in result['data']['candidates']])
+        self.assert_public(result)
+
+    def test_no_similar_tls_match_asks_which_route_applies(self):
+        result = self.cli('assignment-find', '--query', 'CompletelyUnrelated', '--source', 'tls')
+        self.assertEqual(result['data']['candidates'], [])
+        self.assertIn('TLS에 없는 과제인가요', result['answer'])
+        self.assertIn('TLS의 제목이 다른가요', result['answer'])
+        self.assertNotIn('save new', result['nextCommands'])
+        self.assertEqual(self.checkpoints(), [])
 
     def test_save_load_by_names_keep_identifiers_internal(self):
         saved = self.cli('ask', '--text', '과제 저장 자바 Ex05', '--checkpoint-json', self.payload)
@@ -195,6 +214,17 @@ class AssignmentSelectionTests(ProjectTestBase):
             self.assertFalse(result['data']['performed'])
             self.assertIn('nextCommands', result)
         self.assertEqual(self.checkpoints(), [])
+
+    def test_english_save_accepts_unquoted_multiword_tls_title(self):
+        command = 'save 연습과제 - 배열, 구조체, 포인터'
+        parsed = parse_context_command(command)
+        self.assertEqual(parsed['values'], {'query': '연습과제 - 배열, 구조체, 포인터', 'source': 'tls'})
+
+        self.db.connection.execute("UPDATE assignments SET title=? WHERE id=?", ('연습과제 - 배열, 구조체, 포인터', 'private-ex05'))
+        self.db.connection.commit()
+        saved = self.cli('ask', '--text', command, '--checkpoint-json', self.payload)
+        self.assertEqual(saved['data']['assignmentTitle'], '연습과제 - 배열, 구조체, 포인터')
+        self.assertEqual(self.checkpoints()[0]['assignment_id'], 'private-ex05')
 
     def test_list_shows_every_unfinished_assignment_once(self):
         self.cli('ask', '--text', '과제 저장 자바 Ex05', '--checkpoint-json', self.payload)

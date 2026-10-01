@@ -92,6 +92,20 @@ CREATE TABLE IF NOT EXISTS bookmarks (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS context_bookmarks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  assignment_id TEXT NOT NULL,
+  course_id TEXT,
+  course_name TEXT,
+  assignment_title TEXT NOT NULL,
+  progress TEXT NOT NULL,
+  completed_items_json TEXT NOT NULL,
+  blocker TEXT NOT NULL,
+  next_action TEXT NOT NULL,
+  saved_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -138,4 +152,5 @@ CREATE INDEX IF NOT EXISTS idx_assignments_course_due ON assignments(course_id, 
 CREATE INDEX IF NOT EXISTS idx_submissions_user_status ON assignment_submissions(user_id, submission_status);
 CREATE INDEX IF NOT EXISTS idx_progress_user_completed ON lecture_progress(user_id, completed);
 CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_context_bookmarks_user_assignment ON context_bookmarks(user_id, assignment_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON project_tasks(project_id, status);

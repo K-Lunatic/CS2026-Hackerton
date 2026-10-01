@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from features.assignments import assignment_answer, get_assignments
+from features.assignment_selection import find_assignments, selection_guidance, public_checkpoint
 from features.bookmarks import add_bookmark, delete_bookmark, list_bookmarks, validate_bookmark_target
 from features.context import format_current_context, get_current_context
 from features.context_bookmarks import format_resume_card, get_context_bookmark, save_context_bookmark
@@ -127,6 +128,12 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
         }
 
     values = command["values"]
+    assignment = None
+    if values:
+        matches = find_assignments(database(), USER_ID, values)
+        if len(matches) != 1:
+            return selection_guidance(matches, operation)
+        assignment = matches[0]
     if operation == "load":
         if checkpoint_json is not None:
             return {
@@ -136,13 +143,21 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
             }
         record = get_context_bookmark(
             user_id=USER_ID,
-            assignment_id=values.get("assignmentId"),
+            assignment_id=assignment["id"] if assignment else None,
             db_path=DB_PATH,
         )
         return {
             "toolCalls": ["get_context_bookmark"],
-            "data": record,
+            "data": public_checkpoint(record),
             "answer": format_resume_card(record) if record else "해당 과제에 저장된 진행 기록이 없습니다.",
+        }
+
+    if checkpoint_json is None:
+        return {
+            "toolCalls": ["find_assignments"],
+            "needsSummary": True,
+            "data": {"performed": False, "courseName": assignment.get("courseName"), "assignmentTitle": assignment["title"]},
+            "answer": f"{assignment['title']} 과제를 찾았습니다. 현재 대화의 진행 내용을 정리한 뒤 저장할 수 있습니다.",
         }
 
     try:
@@ -150,30 +165,13 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
     except ValueError as exc:
         return {
             "toolCalls": ["create_context_bookmark"],
-            "data": {"performed": False, "assignmentId": values["assignmentId"]},
+            "data": {"performed": False},
             "answer": (
                 f"체크포인트를 저장하지 않았습니다. {exc} "
                 "ChatGPT/Codex가 현재 대화에서 확인되는 내용을 한국어로 정리해 전달해야 합니다."
             ),
         }
 
-    provider = database(write=True)
-    assignment = next(
-        (item.copy() for item in provider.get_assignments(USER_ID) if item["id"] == values["assignmentId"]),
-        None,
-    )
-    if assignment is None:
-        return {
-            "toolCalls": ["create_context_bookmark"],
-            "data": {"performed": False, "assignmentId": values["assignmentId"]},
-            "answer": "provider에서 해당 과제를 찾지 못해 저장하지 않았습니다. 과제 ID를 확인한 뒤 표준 명령어로 다시 입력해 주세요.",
-        }
-    course = next(
-        (item for item in provider.get_courses(USER_ID) if item["id"] == assignment.get("courseId")),
-        None,
-    )
-    if course:
-        assignment["courseName"] = course["name"]
     record = save_context_bookmark(
         assignment,
         user_id=USER_ID,
@@ -185,8 +183,8 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
     )
     return {
         "toolCalls": ["create_context_bookmark"],
-        "data": record,
-        "answer": format_resume_card(record),
+        "data": public_checkpoint(record),
+        "answer": "진행 기록을 저장했습니다.\n" + format_resume_card(record),
     }
 
 
@@ -221,12 +219,12 @@ def ask(
             )
             if intent == "save":
                 answer += (
-                    "\n과제 ID는 `assignments` 명령으로 확인할 수 있습니다. "
+                    "\n예: 과제 저장 자바 Ex05. 과목명이나 제목의 일부만 입력해도 됩니다. "
                     "ChatGPT/Codex가 명령을 받은 뒤 현재 대화에서 확인되는 내용을 한국어로 정리합니다. "
                     "사용자가 진행·막힘·다음 행동을 직접 입력할 필요는 없습니다."
                 )
             else:
-                answer += "\n특정 과제는 `--과제ID <과제ID>`를 덧붙이고, 생략하면 가장 최근 기록을 불러옵니다."
+                answer += "\n예: 과제 불러오기 자바 Ex05. 키워드를 생략하면 가장 최근 기록을 불러옵니다."
         return {
             "toolCalls": ["prompt_context_command"],
             "data": {"operation": intent, "performed": False},
@@ -277,6 +275,9 @@ def main() -> None:
     assignment_parser.add_argument("--upcoming", action="store_true")
     assignment_parser.add_argument("--this-week", action="store_true")
     assignment_parser.add_argument("--overdue", action="store_true")
+    find_parser = sub.add_parser("assignment-find", help="과목명이나 과제 키워드로 저장 대상을 찾기")
+    find_parser.add_argument("--query", default="")
+    find_parser.add_argument("--operation", choices=("save", "load"), default="save")
     manual_add = sub.add_parser("assignment-add", help="TLS에 없는 과제를 로컬에 등록")
     manual_add.add_argument("--title", required=True)
     manual_add.add_argument("--course-id")
@@ -324,6 +325,9 @@ def main() -> None:
             "toolCalls": ["get_assignments"],
             "data": get_assignments(database(), USER_ID, unsubmitted=args.unsubmitted, upcoming=args.upcoming, this_week=args.this_week, overdue=args.overdue),
         }
+    elif args.command == "assignment-find":
+        selectors = {"query": args.query} if args.query.strip() else {}
+        result = selection_guidance(find_assignments(database(), USER_ID, selectors), args.operation)
     elif args.command == "assignment-add":
         try:
             item = database(write=True).add_manual_assignment(USER_ID, args.title, course_id=args.course_id, due_at=args.due_at, description=args.description)

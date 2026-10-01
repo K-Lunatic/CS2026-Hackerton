@@ -1,4 +1,6 @@
 """Shared deadline interpretation; date-only deadlines keep their precision."""
+from __future__ import annotations
+
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
@@ -9,7 +11,7 @@ def deadline(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        parsed = datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
     except ValueError:
         return None
     if len(value) == 10:

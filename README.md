@@ -64,15 +64,15 @@ python3 scripts/run_agent.py assignments --overdue
 python3 scripts/run_agent.py ask --text "나.. 지금은 어때?"
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
 python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘"
-python3 scripts/run_agent.py ask --text '과제 불러오기 --과제ID assignment-network-5'
+python3 scripts/run_agent.py ask --text '과제 불러오기 자바 Ex05'
 python3 scripts/sync_tls.py
 python3 scripts/run_agent.py todos
 python3 scripts/tls_fetch.py --path /my/ --output /tmp/tls-my.html
 ```
 
-자연어로 저장이나 복귀를 요청하면 명령 형식만 안내하며 체크포인트 DB를 읽거나 쓰지 않습니다. 이 규칙은 첫 사용부터 적용하며, `지금 이 대화를 북마크로 저장해줘`도 저장 명령 안내 대상입니다. 대화 내용을 일반 북마크나 파일로 대신 저장하지 않습니다. 실행기는 `CUSTOM` 북마크 생성을 거부하며, 기존 북마크 조회·삭제와 학업 대상 북마크 생성은 유지합니다. 저장할 때 사용자는 `과제 저장 --과제ID <id>`만 입력하면 됩니다. ChatGPT/Codex Skill이 현재 대화에서 한국어 진행·막힘·다음 행동을 정리해 내부 JSON으로 전달하며, 이 Skill은 외부 AI에 체크포인트 생성을 요청하지 않습니다. 과제 ID는 DB에 등록된 과제에서 확인합니다. 대화에서 확인할 수 없는 내용은 지어내지 않고, 필요한 경우 사용자에게 물어봅니다.
+자연어로 저장이나 복귀를 요청하면 명령 형식만 안내하며 체크포인트 DB를 읽거나 쓰지 않습니다. 이 규칙은 첫 사용부터 적용하며, `지금 이 대화를 북마크로 저장해줘`도 저장 명령 안내 대상입니다. 대화 내용을 일반 북마크나 파일로 대신 저장하지 않습니다. 실행기는 `CUSTOM` 북마크 생성을 거부하며, 기존 북마크 조회·삭제와 학업 대상 북마크 생성은 유지합니다. 저장할 때 사용자는 `과제 저장 자바 Ex05`처럼 과목명이나 과제 키워드를 입력하면 됩니다. 대화에 나온 이름으로 후보를 찾아 안내하고, 여러 개가 일치하면 과제명·마감일과 함께 선택할 명령을 보여줍니다. 실제 과제 ID는 사용자에게 표시하거나 입력하도록 요구하지 않습니다. ChatGPT/Codex Skill이 현재 대화에서 한국어 진행·막힘·다음 행동을 정리해 내부 JSON으로 전달하며, 이 Skill은 외부 AI에 체크포인트 생성을 요청하지 않습니다. 키워드는 현재 사용자의 등록된 과제에만 연결하며, 일치하는 과제가 없거나 여러 개이면 저장하지 않습니다. 대화에서 확인할 수 없는 내용은 지어내지 않고, 필요한 경우 사용자에게 물어봅니다.
 
-불러오기는 `과제 불러오기`이며, 특정 기록은 뒤에 `--과제ID <id>`를 추가합니다. 직접 CLI 실행은 대화 기록을 볼 수 없으므로 자동 요약하지 않습니다. 자동 저장 요약은 ChatGPT 또는 Codex에서 Skill을 통해 사용하세요.
+불러오기는 `과제 불러오기`이며, 특정 기록은 `과제 불러오기 자바 Ex05`처럼 키워드를 덧붙입니다. `과제 저장 --과목 "과목명" --과제 "과제명"`처럼 구체적으로 선택할 수도 있습니다. 제목까지 같으면 안내된 마감일을 함께 지정하세요. 직접 CLI 실행은 대화 기록을 볼 수 없으므로 자동 요약하지 않습니다. 자동 저장 요약은 ChatGPT 또는 Codex에서 Skill을 통해 사용하세요.
 
 DB 기본 경로는 `~/.university-agent/university.db`입니다. `UNIVERSITY_AGENT_DB` 환경 변수로 현재 기기의 다른 로컬 경로를 지정할 수 있습니다.
 

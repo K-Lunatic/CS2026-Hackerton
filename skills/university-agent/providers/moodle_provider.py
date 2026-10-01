@@ -5,7 +5,7 @@ import re
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import unquote, urlsplit
 from urllib.error import HTTPError
 
@@ -95,6 +95,8 @@ class _ActivityParser(HTMLParser):
 class MoodleTLSProvider:
     def __init__(self, session: MoodleSession):
         self.session = session
+        self._courses: list[dict[str, Any]] | None = None
+        self._course_pages: dict[str, str] = {}
 
     @staticmethod
     def _links(html: str, *, only_activities: bool = False) -> list[tuple[str, str]]:
@@ -103,6 +105,8 @@ class MoodleTLSProvider:
         return parser.links
 
     def get_courses(self, _user_id: str) -> list[dict[str, Any]]:
+        if self._courses is not None:
+            return [dict(course) for course in self._courses]
         links = self._links(self.session.get("/local/ubion/user/"))
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -112,14 +116,21 @@ class MoodleTLSProvider:
                 continue
             seen.add(match.group(1))
             result.append({"id": f"tls-course-{match.group(1)}", "externalId": match.group(1), "name": title or f"TLS course {match.group(1)}", "source": "tls"})
-        return result
+        self._courses = result
+        return [dict(course) for course in result]
+
+    def _course_page(self, course: dict[str, Any]) -> str:
+        external_id = str(course["externalId"])
+        if external_id not in self._course_pages:
+            self._course_pages[external_id] = self.session.get(f"/course/view.php?id={external_id}")
+        return self._course_pages[external_id]
 
     def get_assignments(self, user_id: str) -> list[dict[str, Any]]:
         courses = self.get_courses(user_id)
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         for course in courses:
-            html = self.session.get(f"/course/view.php?id={course['externalId']}")
+            html = self._course_page(course)
             for href, title in self._links(html, only_activities=True):
                 match = re.search(r"/mod/assign/view\.php\?id=(\d+)", href)
                 if not match or match.group(1) in seen:
@@ -139,7 +150,7 @@ class MoodleTLSProvider:
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         for course in courses:
-            html = self.session.get(f"/course/view.php?id={course['externalId']}")
+            html = self._course_page(course)
             durations = _vod_durations(html)
             availability = _vod_availability(html)
             for href, title in self._links(html, only_activities=True):
@@ -160,7 +171,7 @@ class MoodleTLSProvider:
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         for course in self.get_courses(user_id):
-            course_html = self.session.get(f"/course/view.php?id={course['externalId']}")
+            course_html = self._course_page(course)
             for href, title in self._links(course_html, only_activities=True):
                 match = re.search(r"/mod/ubboard/view\.php\?id=(\d+)", href)
                 if not match or "공지" not in title or match.group(1) in seen:
@@ -179,14 +190,15 @@ class MoodleTLSProvider:
                     result.append({"id": f"tls-notice-{article.group(2)}", "externalId": article.group(2), "courseId": course["id"], "title": article_title or f"TLS notice {article.group(2)}", "content": content, "publishedAt": _find_datetime(text, ("작성일", "게시일", "등록일")) or "1970-01-01T00:00:00+09:00", "source": "tls"})
         return result
 
-    def get_resources(self, user_id: str, notices: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    def get_resources(self, user_id: str, notices: list[dict[str, Any]] | None = None,
+                      existing_resources: Mapping[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         notices_by_course: dict[str, list[dict[str, Any]]] = {}
         for notice in notices or []:
             notices_by_course.setdefault(notice.get("courseId", ""), []).append(notice)
         for course in self.get_courses(user_id):
-            course_html = self.session.get(f"/course/view.php?id={course['externalId']}")
+            course_html = self._course_page(course)
             parser = _ActivityParser()
             parser.feed(course_html)
             for activity in parser.items:
@@ -201,13 +213,8 @@ class MoodleTLSProvider:
                     try:
                         check_download_url(href)
                         if "/mod/ubfile/view.php" in urlsplit(href).path:
-                            links = _LinkParser()
-                            links.feed(self.session.get(href))
-                            viewer = next((url for url, _ in links.links if urlsplit(url).path.endswith("/mod/ubfile/viewer.php")), None)
-                            if viewer:
-                                check_download_url(viewer)
-                            else:
-                                raise DownloadRestricted("문서 페이지에서 원본 다운로드 허용을 확인할 수 없어 가져오지 않았습니다.")
+                            page_text = _plain_text(self.session.get(href))
+                            restriction = _download_restriction(page_text, title, notices_by_course.get(course["id"], []))
                     except DownloadRestricted as error:
                         restriction = str(error)
                 if restriction:
@@ -216,6 +223,16 @@ class MoodleTLSProvider:
                                    "fileName": title or f"resource-{resource_id}", "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
                                    "mimeType": None, "remotePath": href, "source": "tls",
                                    "downloadStatus": "PROHIBITED", "downloadReason": restriction})
+                    continue
+                cached = (existing_resources or {}).get(resource_id)
+                if cached and cached.get("localPath") and Path(cached["localPath"]).is_file() and cached.get("remotePath") == href:
+                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
+                                   "courseId": course["id"], "title": title or cached.get("title", f"TLS resource {resource_id}"),
+                                   "fileName": cached.get("fileName") or title or f"resource-{resource_id}",
+                                   "extension": cached.get("extension", "unknown"), "mimeType": cached.get("mimeType"),
+                                   "remotePath": href, "localPath": cached["localPath"],
+                                   "downloadedAt": cached.get("downloadedAt"), "source": "tls",
+                                   "downloadStatus": "DOWNLOADED"})
                     continue
                 try:
                     content, response = self.session.get_bytes(href)
@@ -232,12 +249,30 @@ class MoodleTLSProvider:
                     continue
                 final_path = unquote(urlsplit(response.geturl()).path)
                 mime_type = response.headers.get_content_type()
-                extension = Path(final_path).suffix.lower().lstrip(".")
-                if extension not in {"pdf", "ppt", "pptx"}:
-                    extension = {"application/pdf": "pdf", "application/vnd.ms-powerpoint": "ppt", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx"}.get(mime_type, "")
-                if extension not in {"pdf", "ppt", "pptx"}:
+                file_name = response.headers.get_filename() or Path(final_path).name
+                extension = Path(file_name).suffix.lower().lstrip(".")
+                if extension in {"html", "htm", "php"}:
+                    extension = ""
+                    if Path(title).suffix:
+                        file_name = Path(title).name
+                extension = extension or Path(title).suffix.lower().lstrip(".")
+                extension = extension or {
+                    "application/pdf": "pdf",
+                    "application/msword": "doc",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+                    "application/vnd.hancom.hwp": "hwp",
+                    "application/haansofthwp": "hwp",
+                    "application/vnd.ms-powerpoint": "ppt",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+                    "text/plain": "txt",
+                }.get(mime_type, "")
+                if not extension and mime_type.startswith("text/"):
+                    extension = "txt"
+                if not extension or extension in {"html", "htm", "php"}:
                     continue
-                file_name = Path(final_path).name or f"resource-{match.group(1)}.{extension}"
+                file_name = file_name or f"resource-{match.group(1)}.{extension}"
+                if not Path(file_name).suffix:
+                    file_name = f"{file_name}.{extension}"
                 result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id, "courseId": course["id"], "title": title or file_name, "fileName": file_name, "extension": extension, "mimeType": mime_type, "remotePath": href, "source": "tls", "downloadStatus": "NOT_DOWNLOADED", "_content": content})
         return result
 

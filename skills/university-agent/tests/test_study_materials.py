@@ -4,13 +4,22 @@ import shutil
 import sys
 import unittest
 import zipfile
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from test_project import ProjectTestBase, snapshot, upsert
 from storage.local_db import LocalDatabase
-from features.study_materials import study_materials
+from features.study_materials import _docx_sections, _hwpx_sections, _pdf_sections, _text_sections, study_materials
 
 
 class StudyMaterialsTests(ProjectTestBase):
+    def test_windows_pdf_fallback_uses_pdftotext_pages(self):
+        path = Path(self.temp.name) / 'lecture.pdf'
+        path.write_bytes(b'%PDF-fixture')
+        with patch('features.study_materials.sys.platform', 'win32'), patch('features.study_materials.shutil.which', side_effect=lambda name: 'pdftotext.exe' if name == 'pdftotext' else None), patch('features.study_materials.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='첫 장\f둘째 장')):
+            pages = _pdf_sections([path], Path('unused.swift'), Path(self.temp.name) / 'cache')
+        self.assertEqual([page['location'] for page in pages[str(path.resolve())]], ['PDF p.1', 'PDF p.2'])
+
     @staticmethod
     def _pdf_with_text(text):
         stream = b"BT /F1 12 Tf 72 720 Td (" + text.encode("ascii") + b") Tj ET\n"
@@ -58,6 +67,23 @@ class StudyMaterialsTests(ProjectTestBase):
         self.assertIn("정렬된 배열", material["sections"][0]["text"])
         self.assertNotIn("resource-1", str(result))
         self.assertNotIn(str(self.pptx), str(result))
+
+    def test_text_docx_and_hwpx_sections(self):
+        root = self.files / "formats"
+        root.mkdir()
+        text_path = root / "Example.java"
+        text_path.write_text("class Example {}", encoding="utf-8")
+        self.assertEqual(_text_sections(text_path)[0]["text"], "class Example {}")
+
+        docx_path = root / "Example.docx"
+        with zipfile.ZipFile(docx_path, "w") as archive:
+            archive.writestr("word/document.xml", "<document><body><p><r><t>워드 본문</t></r></p></body></document>")
+        self.assertEqual(_docx_sections(docx_path)[0]["text"], "워드 본문")
+
+        hwpx_path = root / "Example.hwpx"
+        with zipfile.ZipFile(hwpx_path, "w") as archive:
+            archive.writestr("Contents/section0.xml", "<section><p><t>한글 본문</t></p></section>")
+        self.assertEqual(_hwpx_sections(hwpx_path)[0]["text"], "한글 본문")
 
     def test_ambiguous_course_requests_names_without_reading_files(self):
         db = LocalDatabase(self.db_path)

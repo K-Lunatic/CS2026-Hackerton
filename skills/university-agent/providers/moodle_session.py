@@ -26,9 +26,8 @@ def check_download_url(url: str) -> None:
     denied |= any(value.lower() in {"0", "false", "no"} for key in ("allowdownload", "allow_download") for value in query.get(key, []))
     if denied:
         raise DownloadRestricted("파일 주소에 다운로드 금지가 표시되어 파일을 가져오지 않았습니다.")
-    if urlsplit(url).path.endswith("/mod/ubfile/viewer.php"):
-        raise DownloadRestricted("뷰어 전용 자료로 원본 다운로드 허용을 확인할 수 없어 가져오지 않았습니다.")
-    # forcedownload=0 means inline display, not a download prohibition.
+    # A viewer URL alone is not a prohibition. The course page's visible text
+    # is checked by the Moodle adapter; forcedownload=0 also only means inline display.
 
 
 class _DownloadRedirectHandler(HTTPRedirectHandler):

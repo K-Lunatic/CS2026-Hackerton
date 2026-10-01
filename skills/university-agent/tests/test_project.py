@@ -51,7 +51,9 @@ class FakeTLSSession:
             '/mod/ubboard/article.php?id=10&bwid=11': '<div class="content">강의실 메뉴</div><div class="subject"><h3>테스트 공지</h3></div><div class="content"><div class="text_to_html"><p>실제 공지 내용</p></div></div><p>작성일: 2026-10-01 12:00</p>',
         }
         self.byte_requests = []
+        self.requests = []
     def get(self, path):
+        self.requests.append(path)
         return self.pages[path]
     def get_bytes(self, path):
         self.byte_requests.append(path)
@@ -263,6 +265,27 @@ class ProjectTests(ProjectTestBase):
         self.assertIn('서버가 파일 다운로드를 거부', prohibited[2]['downloadReason'])
         self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8'])
 
+    def test_moodle_provider_reuses_course_pages_during_one_sync(self):
+        session = FakeTLSSession()
+        provider = MoodleTLSProvider(session)
+        provider.get_assignments('u')
+        provider.get_assignments('u')
+        self.assertEqual(session.requests.count('/local/ubion/user/'), 1)
+        self.assertEqual(session.requests.count('/course/view.php?id=1'), 1)
+        self.assertEqual(session.requests.count('/mod/assign/view.php?id=2'), 2)
+
+    def test_moodle_provider_reuses_existing_local_file(self):
+        session = FakeTLSSession()
+        session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/resource/view.php?id=5">테스트 자료</a></li>'
+        cached_path = Path(self.temp.name) / 'files' / 'test.pdf'
+        cached_path.parent.mkdir()
+        cached_path.write_bytes(b'%PDF-cached')
+        resource = MoodleTLSProvider(session).get_resources('u', existing_resources={
+            '5': {'remotePath': '/mod/resource/view.php?id=5', 'localPath': str(cached_path), 'fileName': 'test.pdf', 'extension': 'pdf', 'downloadedAt': '2026-10-02T00:00:00+00:00'}
+        })[0]
+        self.assertEqual(resource['downloadStatus'], 'DOWNLOADED')
+        self.assertNotIn('/mod/resource/view.php?id=5', session.byte_requests)
+
     def test_moodle_requests_have_timeout(self):
         session = MoodleSession()
         session.logged_in = True
@@ -275,8 +298,7 @@ class ProjectTests(ProjectTestBase):
     def test_download_url_and_viewer_restrictions_before_file_read(self):
         check_download_url('https://fixture.invalid/test.pdf?forcedownload=0')
         for url in ('https://fixture.invalid/test.pdf?allowDownload=false',
-                    'https://fixture.invalid/test.pdf?disableDownload=1',
-                    'https://fixture.invalid/mod/ubfile/viewer.php?id=9'):
+                    'https://fixture.invalid/test.pdf?disableDownload=1'):
             with self.assertRaises(DownloadRestricted):
                 check_download_url(url)
             response = Mock(geturl=lambda: url)
@@ -293,8 +315,14 @@ class ProjectTests(ProjectTestBase):
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
         session.pages['/mod/ubfile/view.php?id=9'] = '<a href="/mod/ubfile/viewer.php?id=9">열기</a>'
         item = MoodleTLSProvider(session).get_resources('u')[0]
+        self.assertEqual(item['downloadStatus'], 'NOT_DOWNLOADED')
+        self.assertEqual(session.byte_requests, ['/mod/ubfile/view.php?id=9'])
+        session = FakeTLSSession()
+        session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
+        session.pages['/mod/ubfile/view.php?id=9'] = '<p>다운로드 금지</p>'
+        item = MoodleTLSProvider(session).get_resources('u')[0]
         self.assertEqual(item['downloadStatus'], 'PROHIBITED')
-        self.assertIn('허용을 확인할 수 없어', item['downloadReason'])
+        self.assertIn('강의실 자료 항목', item['downloadReason'])
         self.assertEqual(session.byte_requests, [])
 
     def test_expired_session_does_not_return_login_page_as_empty_records(self):
@@ -335,6 +363,16 @@ class ProjectTests(ProjectTestBase):
             self.assertEqual(credentials.load(), ('fixture-user', 'fixture-password'))
         with patch.object(credentials, 'CONFIG_PATH', Path(self.temp.name) / 'missing.json'), patch('sys.stdin.isatty', return_value=False):
             with self.assertRaises(FormUnavailable): credentials.resolve()
+
+    def test_windows_credentials_use_user_bound_protection(self):
+        config = Path(self.temp.name) / 'windows-account.json'
+        with patch.object(credentials, 'CONFIG_PATH', config), patch.object(credentials.os, 'name', 'nt'), patch.object(credentials, '_windows_protect', return_value=b'protected-password') as protect:
+            credentials.save('fixture-user', 'fixture-password')
+            self.assertNotIn('fixture-password', config.read_text())
+            protect.assert_called_once_with(b'fixture-password')
+            with patch.object(credentials, '_windows_unprotect', return_value=b'fixture-password') as unprotect:
+                self.assertEqual(credentials.load(), ('fixture-user', 'fixture-password'))
+                unprotect.assert_called_once()
 
     def test_tls_scripts_stop_when_local_form_is_unavailable(self):
         import sync_tls

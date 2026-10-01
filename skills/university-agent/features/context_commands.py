@@ -6,13 +6,7 @@ import shlex
 from typing import Any
 
 
-_SAVE_OPTIONS = {
-    "--과제ID": "assignmentId",
-    "--진행": "progress",
-    "--막힘": "blocker",
-    "--다음행동": "nextAction",
-    "--완료항목": "completedItems",
-}
+_SAVE_OPTIONS = {"--과제ID": "assignmentId"}
 _LOAD_OPTIONS = {"--과제ID": "assignmentId"}
 
 
@@ -32,7 +26,7 @@ def parse_context_command(text: str) -> dict[str, Any] | None:
 
     operation = "save" if tokens[1] == "저장" else "load"
     options = _SAVE_OPTIONS if operation == "save" else _LOAD_OPTIONS
-    values: dict[str, Any] = {"completedItems": []} if operation == "save" else {}
+    values: dict[str, Any] = {}
     index = 2
     while index < len(tokens):
         option = tokens[index]
@@ -51,15 +45,8 @@ def parse_context_command(text: str) -> dict[str, Any] | None:
         index += 2
 
     if operation == "save":
-        required = {
-            "assignmentId": "--과제ID",
-            "progress": "--진행",
-            "blocker": "--막힘",
-            "nextAction": "--다음행동",
-        }
-        missing = [option for key, option in required.items() if not values.get(key, "").strip()]
-        if missing:
-            return {"operation": operation, "error": f"필수 항목이 없습니다: {', '.join(missing)}"}
+        if not values.get("assignmentId", "").strip():
+            return {"operation": operation, "error": "과제 ID를 입력해 주세요."}
     elif "assignmentId" in values and not values["assignmentId"].strip():
         return {"operation": operation, "error": "--과제ID 값이 비어 있습니다."}
 
@@ -104,8 +91,5 @@ def detect_context_intent(text: str) -> str | None:
 
 def command_template(operation: str) -> str:
     if operation == "save":
-        return (
-            '과제 저장 --과제ID <과제ID> --진행 "<현재 진행 상황>" '
-            '--막힘 "<막힌 부분 또는 없음>" --다음행동 "<다음 행동>"'
-        )
+        return "과제 저장 --과제ID <과제ID>"
     return "과제 불러오기"

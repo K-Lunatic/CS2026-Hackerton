@@ -74,7 +74,7 @@ def save_context_bookmark(
     completed_items: list[str] | None = None,
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Append a checkpoint using only details supplied by the user/provider."""
+    """Append a checkpoint summary supplied by the host ChatGPT or Codex agent."""
     assignment_id = str(assignment.get("id", "")).strip()
     assignment_title = str(assignment.get("title", "")).strip()
     progress = progress.strip()

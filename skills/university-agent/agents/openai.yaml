@@ -1,4 +1,4 @@
 interface:
   display_name: "University Agent"
-  short_description: "ChatGPT/Codex용 로컬 대학생활·TLS Skill"
-  default_prompt: "Use $university-agent to sync local TLS data, check assignments, lectures, notices and files, or manage bookmarks and project handovers."
+  short_description: "ChatGPT/Codex용 로컬 대학생활·TLS·과제 복귀 Skill"
+  default_prompt: "Use $university-agent to sync local TLS data, check assignments, lectures, notices and files, save or resume an assignment context bookmark, or manage bookmarks and project handovers."

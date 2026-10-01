@@ -104,10 +104,7 @@ def search_save_targets(provider: TLSProvider, user_id: str, query: str) -> dict
 def selection_command(item: dict[str, Any], operation: str, *, simple: bool = True) -> str:
     command = "save new" if operation == "save" and item.get("source") == "manual" else operation
     if simple:
-        label = item["title"]
-        if command != "save new" and item.get("courseName"):
-            label = f'{item["courseName"]} {label}'
-        return f'{command} {_quoted(label)}'
+        return f'{command} {_quoted(item["title"])}'
     tokens = [command]
     tokens.extend(["--course", _quoted(item.get("courseName") or "기타 과제")])
     tokens.extend(["--title", _quoted(item["title"])])

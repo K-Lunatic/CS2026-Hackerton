@@ -123,13 +123,14 @@ class AssignmentSelectionTests(ProjectTestBase):
         self.assertEqual(saved['data']['assignmentTitle'], '복소수 복습')
         self.assertEqual(next(item for item in self.db.get_assignments('fixture-user') if item['id'] == 'private-ex05')['submissionStatus'], 'SUBMITTED')
 
-    def test_cpp_search_works_and_ambiguous_title_requires_selection(self):
+    def test_cpp_search_works_and_exact_title_command_selects_report(self):
         self.db.connection.execute('UPDATE assignments SET title=? WHERE id=?', ('보고서 초안', 'private-ex06'))
         self.db.connection.commit()
         found = self.cli('assignment-find', '--query', 'C++', '--source', 'tls')
         self.assertEqual([item['title'] for item in found['data']['candidates']], ['보고서'])
-        ambiguous = self.cli('ask', '--text', 'save "보고서"', '--checkpoint-json', self.payload)
-        self.assertFalse(ambiguous['data']['performed'])
+        self.assertEqual(found['data']['candidates'][0]['command'], 'save "보고서"')
+        exact = self.cli('ask', '--text', 'save "보고서"', '--checkpoint-json', self.payload)
+        self.assertEqual(exact['data']['assignmentTitle'], '보고서')
         saved = self.cli('ask', '--text', found['data']['candidates'][0]['command'], '--checkpoint-json', self.payload)
         self.assertEqual(saved['data']['assignmentTitle'], '보고서')
 
@@ -178,7 +179,7 @@ class AssignmentSelectionTests(ProjectTestBase):
         command = f'save "{title}"'
         self.assertEqual([item['command'] for item in result['data']['candidates']], [command])
         self.assertIn(command, result['answer'])
-        self.assertEqual(result['nextCommands'], ['list', 'load', command])
+        self.assertEqual(result['nextCommands'], [command])
         for option in ('--course', '--title', '--due'):
             self.assertNotIn(option, result['answer'])
         self.assertEqual(self.checkpoints(), [])

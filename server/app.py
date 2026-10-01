@@ -24,6 +24,9 @@ from providers.moodle_provider import MoodleTLSProvider
 from storage.local_db import LocalDatabase
 from features.assignments import get_assignments
 from features.lectures import get_lectures
+from features.assignment_selection import find_assignments, public_checkpoint, normalize, selection_command
+from features.context_bookmarks import get_context_bookmark, list_unfinished_context_bookmarks, save_context_bookmark
+from features.context_commands import parse_context_command, next_commands
 
 
 def digest(value):
@@ -125,6 +128,9 @@ class Gateway:
         method, path = env['REQUEST_METHOD'], env.get('PATH_INFO', '/')
         query = {key: values[-1] for key, values in parse_qs(env.get('QUERY_STRING', ''), keep_blank_values=True).items()}
         def reply(data, status=200, extra=None):
+            if path.startswith('/v1/') and path != '/v1/disconnect' and 200 <= status < 300 and isinstance(data, dict):
+                calls = ['list_context_bookmarks'] if path == '/v1/checkpoints' else []
+                data = {**data, 'nextCommands': next_commands({'toolCalls': calls, 'data': data.get('data')})}
             return status, data, 'application/json', extra or []
         body = {}
         if method == 'POST':
@@ -134,14 +140,14 @@ class Gateway:
             raw = env['wsgi.input'].read(length).decode()
             if env.get('CONTENT_TYPE', '').split(';')[0] == 'application/json':
                 body = json.loads(raw)
-                if not isinstance(body, dict) or any(not isinstance(v, str) for v in body.values()):
-                    raise ValueError('Expected string fields')
+                if not isinstance(body, dict) or (path != '/v1/checkpoint' and any(not isinstance(value, str) for value in body.values())):
+                    raise ValueError('Expected object')
             else:
                 body = {key: values[-1] for key, values in parse_qs(raw, keep_blank_values=True).items()}
         if path == '/health' and method == 'GET':
             return reply({'status': 'ok'})
         if path == '/privacy' and method == 'GET':
-            return 200, '<h1>University Agent 개인정보 안내</h1><p>TLS 아이디·비밀번호는 로그인 확인을 위해 학교 TLS로 전송됩니다. 비밀번호는 저장하지 않습니다. 로그인 쿠키는 서버 메모리에만 보관합니다. 과목·과제·강의 진도·공지는 사용자별 서버 DB에 저장되며, 요청한 데이터가 ChatGPT로 전달됩니다. 연결 해제는 토큰을 폐기합니다. 저장 데이터 삭제는 서비스 운영자에게 요청하세요.</p>', 'text/html', []
+            return 200, '<h1>University Agent 개인정보 안내</h1><p>TLS 아이디·비밀번호는 로그인 확인을 위해 학교 TLS로 전송됩니다. 비밀번호는 저장하지 않습니다. 로그인 쿠키는 서버 메모리에만 보관합니다. 과목·과제·강의 진도·공지와 사용자가 저장한 과제 진행 기록은 사용자별 서버 DB에 저장되며, 요청한 데이터가 ChatGPT로 전달됩니다. 과제 완료 시 해당 진행 기록은 삭제됩니다. 연결 해제는 토큰을 폐기합니다. 다른 저장 데이터 삭제는 서비스 운영자에게 요청하세요.</p>', 'text/html', []
         if path == '/openapi.json' and method == 'GET':
             schema = json.loads((ROOT / 'server/openapi.json').read_text())
             schema['servers'] = [{'url': self.base_url}]
@@ -243,6 +249,10 @@ class Gateway:
                 self.codes = {key: item for key, item in self.codes.items() if item['user'] != user}
                 self.accounts.pop(user, None)
             return reply({'status': 'disconnected'})
+        if path in {'/v1/checkpoints', '/v1/checkpoint', '/v1/assignments/complete'}:
+            if 'assignments' not in status['availableSections']:
+                return reply({'error': 'sync_pending' if status['running'] else 'sync_failed', 'sync': status}, 503, [('Retry-After', '5')])
+            return self.checkpoint_route(path, method, query, body, user, reply)
         readers = {'/v1/courses': 'get_courses', '/v1/assignments': 'get_assignments', '/v1/lectures': 'get_lectures', '/v1/notices': 'get_notices', '/v1/todos': 'get_todos'}
         if path not in readers or method != 'GET':
             return reply({'error': 'not_found'}, 404)
@@ -284,9 +294,95 @@ class Gateway:
         finally:
             db.close()
 
+    def checkpoint_route(self, path, method, query, body, user, reply):
+        if path == '/v1/checkpoints' and method == 'GET':
+            if query not in ({'userMessage': 'list'}, {'userMessage': '과제 목록 불러오기'}):
+                return reply({'error': 'exact_command_required', 'requiredMessage': 'list'}, 400)
+            db = LocalDatabase(self.db_path(user), read_only=True)
+            try:
+                records = list_unfinished_context_bookmarks(db, user_id=user, db_path=self.db_path(user))
+                return reply({'data': [public_checkpoint(record) for record in records], 'total': len(records)})
+            finally:
+                db.close()
+        if path == '/v1/assignments/complete' and method == 'POST':
+            if set(body) - {'assignmentId', 'submissionAnswer'} or not isinstance(body.get('assignmentId'), str):
+                return reply({'error': 'invalid_request'}, 400)
+            if body.get('submissionAnswer') not in ('예', '아니요'):
+                return reply({'error': 'exact_submission_answer_required', 'message': '예 또는 아니요로만 답해 주세요.'}, 400)
+            if body['submissionAnswer'] == '아니요':
+                return reply({'completed': False, 'message': '아직 제출하지 않은 과제로 기록을 유지했습니다.'})
+            db = LocalDatabase(self.db_path(user))
+            try:
+                done = db.complete_manual_assignment(user, body['assignmentId'], submission_answer='예')
+                return reply({'completed': done, 'message': '완료 처리했고 저장 목록에서 제거했습니다.' if done else '직접 등록한 과제를 찾지 못했습니다.'}, 200 if done else 404)
+            finally:
+                db.close()
+        if path != '/v1/checkpoint' or method not in {'GET', 'POST'}:
+            return reply({'error': 'not_found'}, 404)
+        command_text = query.get('command') if method == 'GET' else body.get('command')
+        if not isinstance(command_text, str):
+            return reply({'error': 'exact_command_required'}, 400)
+        command = parse_context_command(command_text)
+        expected = 'load' if method == 'GET' else 'save'
+        if not command or command.get('operation') != expected or 'error' in command:
+            return reply({'error': 'exact_command_required'}, 400)
+        db = LocalDatabase(self.db_path(user), read_only=method == 'GET')
+        try:
+            values = command['values']
+            assignment = None
+            if 'newTitle' in values:
+                title = values['newTitle'].strip()
+                if not title or len(title) > 200:
+                    return reply({'error': 'invalid_title'}, 400)
+                manual = [item for item in find_assignments(db, user, {'title': title, 'source': 'manual'})
+                          if normalize(item['title']) == normalize(title)]
+                if len(manual) > 1:
+                    return reply({'error': 'ambiguous_assignment',
+                                  'candidates': [{'courseName': item['courseName'], 'title': item['title'], 'dueAt': item.get('dueAt'),
+                                                  'command': selection_command(item, 'save')} for item in manual]}, 409)
+                if manual:
+                    assignment = manual[0]
+                elif find_assignments(db, user, {'title': title, 'source': 'tls'}):
+                    return reply({'error': 'assignment_exists', 'message': 'TLS 과제는 save "과제명"으로 선택해 주세요.'}, 409)
+            elif values:
+                matches = find_assignments(db, user, values)
+                if len(matches) != 1:
+                    return reply({'error': 'ambiguous_assignment' if matches else 'assignment_not_found',
+                                  'candidates': [{'courseName': item['courseName'], 'title': item['title'], 'dueAt': item.get('dueAt'),
+                                                  'command': selection_command(item, expected)}
+                                                 for item in matches]}, 409)
+                assignment = matches[0]
+                if assignment['submissionStatus'] in {'SUBMITTED', 'LATE'}:
+                    return reply({'data': None}) if method == 'GET' else reply({'error': 'assignment_completed'}, 409)
+            if method == 'GET':
+                if set(query) != {'command'}:
+                    return reply({'error': 'invalid_request'}, 400)
+                record = (get_context_bookmark(user_id=user, assignment_id=assignment['id'], db_path=self.db_path(user))
+                          if assignment else next(iter(list_unfinished_context_bookmarks(db, user_id=user, db_path=self.db_path(user))), None))
+                return reply({'data': public_checkpoint(record)})
+            if set(body) - {'command', 'progress', 'blocker', 'nextAction', 'completedItems'}:
+                return reply({'error': 'invalid_request'}, 400)
+            for field in ('progress', 'blocker', 'nextAction'):
+                if not isinstance(body.get(field), str) or not body[field].strip() or len(body[field]) > 4000:
+                    return reply({'error': 'invalid_summary'}, 400)
+            items = body.get('completedItems', [])
+            if not isinstance(items, list) or len(items) > 50 or any(not isinstance(item, str) or not item.strip() or len(item) > 500 for item in items):
+                return reply({'error': 'invalid_summary'}, 400)
+            if assignment is None:
+                if 'newTitle' not in values:
+                    return reply({'error': 'assignment_required'}, 400)
+                assignment = db.add_manual_assignment(user, values['newTitle'])
+                assignment['courseName'] = '기타 과제'
+            record = save_context_bookmark(assignment, user_id=user, progress=body['progress'],
+                blocker=body['blocker'], next_action=body['nextAction'], completed_items=items,
+                db_path=self.db_path(user))
+            return reply({'data': public_checkpoint(record), 'message': '진행 기록을 저장했습니다.'}, 201)
+        finally:
+            db.close()
+
     @staticmethod
     def login_form(ticket, error=''):
-        return f'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>University Agent 로그인</title><style>body{{font:18px system-ui;max-width:420px;margin:40px auto;padding:20px}}input,button{{box-sizing:border-box;width:100%;padding:14px;margin:8px 0 20px;font:inherit}}button{{background:#173f35;color:white;border:0;border-radius:8px}}</style><h1>University Agent</h1><p>학교 TLS에 로그인하고, 과목·과제·강의 진도·공지를 ChatGPT에서 조회하도록 허용합니다. 비밀번호는 저장하지 않습니다.</p><p role="alert">{escape(error)}</p><form method="post" action="/oauth/login"><input type="hidden" name="ticket" value="{escape(ticket)}"><label for="username">TLS 아이디</label><input id="username" name="username" autocomplete="username" maxlength="128" required><label for="password">비밀번호</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required><button type="submit">로그인하고 ChatGPT 연결</button></form><p>연결 후 첫 조회까지 동기화 시간이 필요할 수 있습니다.</p><a href="/privacy">개인정보 안내</a></html>'''
+        return f'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>University Agent 로그인</title><style>body{{font:18px system-ui;max-width:420px;margin:40px auto;padding:20px}}input,button{{box-sizing:border-box;width:100%;padding:14px;margin:8px 0 20px;font:inherit}}button{{background:#173f35;color:white;border:0;border-radius:8px}}</style><h1>University Agent</h1><p>학교 TLS에 로그인하고, 과목·과제·강의 진도·공지를 ChatGPT에서 조회하며 과제 진행 기록을 저장하도록 허용합니다. 비밀번호는 저장하지 않습니다.</p><p role="alert">{escape(error)}</p><form method="post" action="/oauth/login"><input type="hidden" name="ticket" value="{escape(ticket)}"><label for="username">TLS 아이디</label><input id="username" name="username" autocomplete="username" maxlength="128" required><label for="password">비밀번호</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required><button type="submit">로그인하고 ChatGPT 연결</button></form><p>연결 후 첫 조회까지 동기화 시간이 필요할 수 있습니다.</p><a href="/privacy">개인정보 안내</a></html>'''
 
 
 def create_app():

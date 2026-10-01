@@ -191,7 +191,6 @@ class KnownIntegrationIssues(ProjectTestBase):
         context = get_current_context(db, 'student-a', lambda: [])
         self.assertEqual(context['user']['name'], 'student-a')
 
-    @unittest.expectedFailure
     def test_other_users_notices_survive_sync(self):
         db = LocalDatabase(self.db_path, seed_mock=False); self.addCleanup(db.close)
         upsert(db, 'student-a', snapshot('1'))

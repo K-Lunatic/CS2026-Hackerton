@@ -17,8 +17,8 @@ PLAYWRIGHT_MODULE=/tmp/handover-browser/node_modules/playwright \
 
 ## 결과
 
-- Python 테스트 총 37개: 통과 31개, 실제 AI 설정이 필요한 테스트 3개 건너뜀,
-  재현한 통합 오류 3개 `expected failure`.
+- Python 테스트 총 38개(학사 DB 영상 기간 테스트 추가): 실제 AI 설정이 필요한 테스트 3개 건너뜀,
+  미해결 통합 오류 2개 `expected failure`. 공지·자료의 다른 사용자 데이터 삭제 문제는 수정했다.
 - `expected failure`는 알려진 실패를 추적하는 표시다. 기능 통과나 수정 완료가 아니다.
   문제가 수정되어 해당 테스트가 성공하면 `unexpected success`로 전체 테스트가 실패하므로
   수정 담당자는 기대 실패 표시를 제거하고 정상 회귀 테스트로 전환해야 한다.
@@ -36,17 +36,7 @@ PLAYWRIGHT_MODULE=/tmp/handover-browser/node_modules/playwright \
 
 ## 미해결 문제
 
-### 1. 다른 사용자 동기화로 기존 공지·자료 삭제 (우선 수정)
-
-임시 DB에 student-a의 과목/공지/자료를 넣은 뒤 student-b의 다른 과목을 동기화하면
-student-a의 공지와 자료가 삭제된다. `upsert_tls_snapshot`의 정리 SQL이 해당 사용자/과목
-범위 없이 모든 `source='tls'` 레코드를 삭제하기 때문이다.
-
-위치: `storage/local_db.py`의 notices/resources DELETE.
-재현 테스트: `test_other_users_notices_survive_sync`.
-단일 계정 시나리오는 통과했지만 계정 전환/복수 사용자 데이터 공존은 보호되지 않는다.
-
-### 2. 팀플 요청을 체크포인트 불러오기 안내로 잘못 연결
+### 1. 팀플 요청을 체크포인트 불러오기 안내로 잘못 연결
 
 `팀플 진행 상황 알려줘`에 `--records`와 `--prepare`를 제공해도
 `prepare_handover` 대신 `prompt_context_command`가 반환된다.
@@ -56,7 +46,7 @@ student-a의 공지와 자료가 삭제된다. `upsert_tls_snapshot`의 정리 S
 재현 테스트: `test_team_progress_intent_reaches_handover`.
 명시적인 과제 저장/불러오기 계약을 유지하면서 팀플 요청을 구별해야 한다.
 
-### 3. 실제 사용자 이름·학과 대신 기본 정보 표시
+### 2. 실제 사용자 이름·학과 대신 기본 정보 표시
 
 student-a를 이름으로 등록하고 해당 사용자 컨텍스트를 조회해도
 사용자 이름은 홍길동, 학과는 컴퓨터공학과로 반환된다.

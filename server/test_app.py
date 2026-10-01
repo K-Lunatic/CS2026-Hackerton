@@ -204,6 +204,7 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(self.request('/v1/checkpoints', bearer=token, query=exact)['body']['total'], 1)
         completed = self.request('/v1/assignments/complete', 'POST', bearer=token,
                                  json_body={'assignmentId': assignment['id'], 'submissionAnswer': '예'})
+        completed = self.request('/v1/assignments/complete', 'POST', bearer=token, json_body={'assignmentId': assignment['id']})
         self.assertTrue(completed['body']['completed'])
         self.assertEqual(self.request('/v1/checkpoints', bearer=token, query=exact)['body']['data'], [])
         self.assertIsNone(self.request('/v1/checkpoint', bearer=token, query={'command': '과제 불러오기 캡처 문제'})['body']['data'])

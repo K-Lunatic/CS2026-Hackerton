@@ -16,7 +16,7 @@
 
 | 영역 | 데이터 | 담당 |
 | --- | --- | --- |
-| TLS 동기화 | `users`, `courses`, `enrollments`, `assignments`, `lectures`, `notices` | TLS 담당자 |
+| TLS 동기화 | `users`, `courses`, `enrollments`, `assignments`, `lectures`, `notices`, `resources` | TLS 담당자 |
 | 사용자별 학업 상태 | `assignment_submissions`, `lecture_progress` | TLS 담당자 + 기능 담당자 소비 |
 | 서비스 기능 | `bookmarks`, `context_bookmarks`, `projects`, `project_members`, `project_tasks`, `handovers`, `handover_items` | 기능 담당자 |
 | 조회 조합 | `StudentContext` | 저장하지 않고 조회 시 생성 |
@@ -54,6 +54,7 @@ TLS 담당자는 DB를 직접 노출하지 않고 `TLSProvider`가 아래처럼 
 - 과제: 전체, 미제출, 임박한 과제
 - 강의: 전체, 미시청, 진행률
 - 공지: 과목별 최신 공지
+- 자료: 과목 PPT/PDF 메타데이터와 기기 로컬 다운로드 경로
 - 북마크: 사용자별 대상 북마크
 - 과제 컨텍스트 북마크: 사용자별 과제 진행 체크포인트와 복귀 카드
 - 프로젝트: 멤버, 업무, 상태

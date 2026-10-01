@@ -32,7 +32,7 @@ class LocalDatabase:
         now = datetime.now(timezone.utc).isoformat()
         self.upsert_tls_snapshot("user-hong", provider.get_courses("user-hong"), provider.get_assignments("user-hong"), provider.get_lectures("user-hong"), "홍길동", "컴퓨터공학과", now)
 
-    def upsert_tls_snapshot(self, user_id: str, courses: list[dict[str, Any]], assignments: list[dict[str, Any]], lectures: list[dict[str, Any]], user_name: str, department: str, now: str | None = None) -> None:
+    def upsert_tls_snapshot(self, user_id: str, courses: list[dict[str, Any]], assignments: list[dict[str, Any]], lectures: list[dict[str, Any]], user_name: str, department: str, now: str | None = None, notices: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None) -> None:
         now = now or datetime.now(timezone.utc).isoformat()
         db = self.connection
         db.execute("INSERT INTO users(id, external_id, name, department, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, department=excluded.department, updated_at=excluded.updated_at", (user_id, user_id, user_name, department, now, now))
@@ -54,6 +54,20 @@ class LocalDatabase:
             db.execute(f"DELETE FROM lecture_progress WHERE user_id=? AND lecture_id NOT IN ({marks})", [user_id, *lecture_ids])
         else:
             db.execute("DELETE FROM lecture_progress WHERE user_id=?", (user_id,))
+        if notices is not None:
+            notice_ids = [item["id"] for item in notices]
+            if notice_ids:
+                marks = ",".join("?" for _ in notice_ids)
+                db.execute(f"DELETE FROM notices WHERE source='tls' AND id NOT IN ({marks})", notice_ids)
+            else:
+                db.execute("DELETE FROM notices WHERE source='tls'")
+        if resources is not None:
+            resource_ids = [item["id"] for item in resources]
+            if resource_ids:
+                marks = ",".join("?" for _ in resource_ids)
+                db.execute(f"DELETE FROM resources WHERE source='tls' AND id NOT IN ({marks})", resource_ids)
+            else:
+                db.execute("DELETE FROM resources WHERE source='tls'")
         for course in courses:
             db.execute("INSERT INTO courses(id, external_id, name, professor, semester, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, professor=excluded.professor, semester=excluded.semester, updated_at=excluded.updated_at", (course["id"], course.get("externalId", course["id"]), course["name"], course.get("professor"), course.get("semester"), course.get("source", "tls"), now))
             db.execute("INSERT OR IGNORE INTO enrollments(user_id, course_id) VALUES (?, ?)", (user_id, course["id"]))
@@ -63,6 +77,10 @@ class LocalDatabase:
         for item in lectures:
             db.execute("INSERT INTO lectures(id, external_id, course_id, title, duration_seconds, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, title=excluded.title, duration_seconds=excluded.duration_seconds, updated_at=excluded.updated_at", (item["id"], item.get("externalId", item["id"]), item["courseId"], item["title"], item["durationSeconds"], item.get("source", "tls"), now))
             db.execute("INSERT INTO lecture_progress(lecture_id, user_id, watched_seconds, watch_progress, completed, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(lecture_id, user_id) DO UPDATE SET watched_seconds=excluded.watched_seconds, watch_progress=excluded.watch_progress, completed=excluded.completed, updated_at=excluded.updated_at", (item["id"], user_id, item["watchedSeconds"], item["watchProgress"], int(item["completed"]), now))
+        for item in notices or []:
+            db.execute("INSERT INTO notices(id, external_id, course_id, title, content, published_at, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, title=excluded.title, content=excluded.content, published_at=excluded.published_at, updated_at=excluded.updated_at", (item["id"], item.get("externalId", item["id"]), item.get("courseId"), item["title"], item.get("content", ""), item["publishedAt"], item.get("source", "tls"), now))
+        for item in resources or []:
+            db.execute("INSERT INTO resources(id, external_id, course_id, title, file_name, extension, mime_type, remote_path, local_path, downloaded_at, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, title=excluded.title, file_name=excluded.file_name, extension=excluded.extension, mime_type=excluded.mime_type, remote_path=excluded.remote_path, local_path=excluded.local_path, downloaded_at=excluded.downloaded_at, updated_at=excluded.updated_at", (item["id"], item.get("externalId", item["id"]), item["courseId"], item["title"], item["fileName"], item["extension"], item.get("mimeType"), item["remotePath"], item.get("localPath"), item.get("downloadedAt"), item.get("source", "tls"), now))
         db.commit()
 
     def get_courses(self, user_id: str) -> list[dict[str, Any]]:
@@ -76,6 +94,14 @@ class LocalDatabase:
     def get_lectures(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute("SELECT l.id, l.course_id AS courseId, l.title, l.duration_seconds AS durationSeconds, p.watched_seconds AS watchedSeconds, p.watch_progress AS watchProgress, p.completed, l.source FROM lectures l JOIN lecture_progress p ON p.lecture_id=l.id AND p.user_id=? JOIN enrollments e ON e.course_id=l.course_id AND e.user_id=? ORDER BY l.title", (user_id, user_id))
         return [dict(row, completed=bool(row["completed"])) for row in rows]
+
+    def get_notices(self, user_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute("SELECT n.id, n.course_id AS courseId, n.title, n.content, n.published_at AS publishedAt, n.source FROM notices n JOIN enrollments e ON e.course_id=n.course_id AND e.user_id=? ORDER BY n.published_at DESC", (user_id,))
+        return [dict(row) for row in rows]
+
+    def get_resources(self, user_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute("SELECT r.id, r.course_id AS courseId, r.title, r.file_name AS fileName, r.extension, r.mime_type AS mimeType, r.remote_path AS remotePath, r.local_path AS localPath, r.downloaded_at AS downloadedAt, r.source FROM resources r JOIN enrollments e ON e.course_id=r.course_id AND e.user_id=? ORDER BY r.title", (user_id,))
+        return [dict(row) for row in rows]
 
     def list_bookmarks(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute("SELECT id, user_id AS userId, target_type AS targetType, target_id AS targetId, note, created_at AS createdAt FROM bookmarks WHERE user_id=? ORDER BY created_at", (user_id,))

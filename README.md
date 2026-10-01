@@ -21,7 +21,9 @@ python3 scripts/run_agent.py context
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
 python3 scripts/run_agent.py ask --text '과제 저장 --과제ID assignment-network-5 --진행 "자료 3개 수집 완료" --완료항목 "자료 3개 수집" --막힘 "없음" --다음행동 "두 번째 자료의 통계를 본문에 넣기"'
 python3 scripts/run_agent.py ask --text '과제 불러오기 --과제ID assignment-network-5'
-python3 scripts/ingest_tls.py --input tls_snapshot.json
+python3 scripts/sync_tls.py --remember
+python3 scripts/sync_tls.py
+python3 scripts/tls_fetch.py --path /my/ --output /tmp/tls-my.html
 ```
 
 자연어로 진행 상황 저장이나 복귀를 요청하면 명령 형식만 안내하며 DB를 읽거나 쓰지 않습니다. 저장 형식은 `과제 저장 --과제ID <id> --진행 "..." --막힘 "..." --다음행동 "..."`이고, 불러오기는 `과제 불러오기`입니다. 특정 기록은 불러오기 명령 뒤에 `--과제ID <id>`를 추가합니다.
@@ -52,3 +54,6 @@ python3 skills/university-agent/scripts/handover_web.py
 `python3 skills/university-agent/scripts/run_agent.py ask --text "팀플 정리해줘" --ui`를 실행합니다.
 화면은 별도 설치 없이 Python으로 실행되며, 저장소의 DB/TLS 코드와 분리되어 있습니다.
 실행·프론트엔드 API·검증·제한 사항은 [handover.md](skills/university-agent/references/handover.md)에 있습니다.
+`sync_tls.py --remember`를 처음 한 번 실행하면 아이디는 `~/.university-agent/tls-account.json`에 권한 600으로 저장하고, 비밀번호는 macOS Keychain에 저장합니다. 비밀번호와 MoodleSession 쿠키는 코드·SQLite·로그에 저장하지 않습니다. 동기화된 공지·과제·강의와 PPT/PDF 파일은 기기 로컬에만 저장됩니다.
+
+상세 동작은 [skills/university-agent/SKILL.md](skills/university-agent/SKILL.md)에 있습니다. TLS 담당자는 [provider-contract.md](skills/university-agent/references/provider-contract.md)와 `providers/moodle_provider.py`를 기준으로 연동하고, 나머지 팀원은 `features/` 아래에서 기능을 추가합니다. 로컬 DB는 [data-model.md](skills/university-agent/references/data-model.md)와 `database/schema.sql`에 있습니다.

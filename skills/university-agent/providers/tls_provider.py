@@ -8,6 +8,8 @@ class TLSProvider(Protocol):
     def get_courses(self, user_id: str) -> list[dict[str, Any]]: ...
     def get_assignments(self, user_id: str) -> list[dict[str, Any]]: ...
     def get_lectures(self, user_id: str) -> list[dict[str, Any]]: ...
+    def get_notices(self, user_id: str) -> list[dict[str, Any]]: ...
+    def get_resources(self, user_id: str) -> list[dict[str, Any]]: ...
 
 
 class MockTLSProvider:
@@ -32,3 +34,9 @@ class MockTLSProvider:
             {"id": "lecture-java2-6", "courseId": "course-java2", "title": "Java2 6주차 강의", "durationSeconds": 3120, "watchedSeconds": 1859, "watchProgress": 59.6, "completed": False, "source": "mock-tls"},
             {"id": "lecture-network-6", "courseId": "course-network", "title": "컴퓨터네트워크 6주차 강의", "durationSeconds": 2700, "watchedSeconds": 2700, "watchProgress": 100, "completed": True, "source": "mock-tls"},
         ]
+
+    def get_notices(self, _user_id: str) -> list[dict[str, Any]]:
+        return []
+
+    def get_resources(self, _user_id: str) -> list[dict[str, Any]]:
+        return []

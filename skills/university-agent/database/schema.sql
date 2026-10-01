@@ -83,6 +83,22 @@ CREATE TABLE IF NOT EXISTS notices (
   UNIQUE (source, external_id)
 );
 
+CREATE TABLE IF NOT EXISTS resources (
+  id TEXT PRIMARY KEY,
+  external_id TEXT NOT NULL,
+  course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  extension TEXT NOT NULL,
+  mime_type TEXT,
+  remote_path TEXT NOT NULL,
+  local_path TEXT,
+  downloaded_at TEXT,
+  source TEXT NOT NULL DEFAULT 'tls',
+  updated_at TEXT NOT NULL,
+  UNIQUE (source, external_id)
+);
+
 CREATE TABLE IF NOT EXISTS bookmarks (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -153,4 +169,6 @@ CREATE INDEX IF NOT EXISTS idx_submissions_user_status ON assignment_submissions
 CREATE INDEX IF NOT EXISTS idx_progress_user_completed ON lecture_progress(user_id, completed);
 CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_context_bookmarks_user_assignment ON context_bookmarks(user_id, assignment_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_notices_course_published ON notices(course_id, published_at);
+CREATE INDEX IF NOT EXISTS idx_resources_course ON resources(course_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON project_tasks(project_id, status);

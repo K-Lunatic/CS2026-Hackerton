@@ -9,6 +9,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -19,7 +20,7 @@ from features.bookmarks import add_bookmark, delete_bookmark, list_bookmarks
 from features.context import get_current_context
 from features.context_bookmarks import format_resume_card, get_context_bookmark, save_context_bookmark
 from features.context_commands import command_template, detect_context_intent, parse_context_command
-from features.handover import HandoverError, create_handover, format_handover, prepare_handover
+from features.handover import HandoverError, create_handover, format_handover, prepare_handover, is_handover_request
 from features.lectures import get_lectures
 from storage.local_db import LocalDatabase
 
@@ -120,7 +121,7 @@ def _checkpoint_command(text: str) -> dict[str, Any] | None:
     }
 
 
-def ask(text: str, *, records: str = "", **options) -> dict[str, Any]:
+def ask(text: str, *, records: str = "", ui: bool = False, **options) -> dict[str, Any]:
     checkpoint = _checkpoint_command(text)
     if checkpoint:
         return checkpoint
@@ -152,7 +153,11 @@ def ask(text: str, *, records: str = "", **options) -> dict[str, Any]:
             "answer": answer,
         }
 
-    if re.search(r"팀플|인수인계|진행 상황|안 끝난 작업|역할.*넘|작업.*담당자", text):
+    if is_handover_request(text):
+        if ui:
+            url = "http://127.0.0.1:8765/?" + urlencode({"request": text})
+            return {"toolCalls": ["open_handover"], "data": {"url": url},
+                    "answer": "팀플 화면에서 자료를 입력하고 결과를 수정하세요: " + url}
         if not records.strip():
             return {
                 "toolCalls": [],
@@ -201,6 +206,7 @@ def main() -> None:
     remove.add_argument("--target-id", required=True)
     ask_parser = sub.add_parser("ask")
     ask_parser.add_argument("--text", required=True)
+    ask_parser.add_argument("--ui", action="store_true", help="실행 중인 로컬 팀플 화면 링크 반환")
     ask_parser.add_argument("--records", default="", help="팀플 분석 대상 기록 (요청과 분리)")
     handover_parser = sub.add_parser("handover")
     handover_parser.add_argument("--text", required=True)
@@ -241,6 +247,7 @@ def main() -> None:
         result = ask(
             args.text,
             records=args.records,
+            ui=args.ui,
             project_name=args.project_name,
             team=args.team,
             assignee=args.assignee,

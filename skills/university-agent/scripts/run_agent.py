@@ -15,15 +15,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from features.assignments import assignment_answer, get_assignments
-from features.assignment_selection import find_assignments, find_similar_tls_assignments, selection_guidance, public_checkpoint, normalize
+from features.assignment_selection import find_assignments, search_save_targets, selection_guidance, public_checkpoint, normalize
 from features.study_materials import study_materials
-from features.bookmarks import add_bookmark, delete_bookmark, list_bookmarks, validate_bookmark_target
+from features.bookmarks import add_bookmark, bookmark_answer, delete_bookmark, list_bookmarks, validate_bookmark_target
 from features.context import format_current_context, get_current_context
 from features.context_bookmarks import format_resume_card, get_context_bookmark, list_unfinished_context_bookmarks, save_context_bookmark
 from features.context_commands import command_template, detect_context_intent, parse_context_command, with_next_commands
 from features.study import StudySession, study_intent, event_from_text
 from features.lectures import get_lectures
-from features.guidance import guidance_request, is_status_request, usage_guide
+from features.guidance import academic_list_answer, guidance_request, is_status_request, usage_guide
 from features.deadlines import format_deadline
 from providers.credentials import CONFIG_PATH
 from storage.local_db import LocalDatabase
@@ -41,18 +41,18 @@ def database(*, write: bool = False) -> LocalDatabase:
     """Open the device database only when a command actually needs it."""
     global DB
     if not USER_ID:
-        raise SystemExit("TLS 계정이 없습니다. python3 scripts/sync_tls.py를 먼저 실행하거나 UNIVERSITY_AGENT_USER_ID를 지정하세요.")
+        raise SystemExit("아직 학교 계정이 연결되지 않았어요. ‘TLS 연결해줘’라고 요청하면 최초 동기화를 진행합니다. 비밀번호는 채팅이 아닌 이 컴퓨터의 보안 입력창에 입력해 주세요.")
     if DB is not None and write and DB.read_only:
         DB.close()
         DB = None
     if DB is None:
         if not write and not DB_PATH.exists():
-            raise SystemExit("학사 데이터가 없습니다. python3 scripts/sync_tls.py로 먼저 동기화하세요.")
+            raise SystemExit("아직 이 컴퓨터에 학사 정보가 없어요. ‘TLS 새로고침해줘’라고 요청하면 동기화 후 다시 조회할 수 있어요.")
         DB = LocalDatabase(DB_PATH, read_only=not write)
         if DB.get_user(USER_ID) is None:
             DB.close()
             DB = None
-            raise SystemExit("이 사용자의 학사 데이터가 없습니다. python3 scripts/sync_tls.py로 먼저 동기화하세요.")
+            raise SystemExit("이 계정의 학사 정보가 아직 없어요. ‘TLS 새로고침해줘’라고 요청해 동기화한 뒤 다시 확인해 주세요.")
     return DB
 
 
@@ -94,9 +94,6 @@ def _checkpoint_data(raw: str | None) -> dict[str, Any]:
 
 
 def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dict[str, Any] | None:
-    # Natural-language conversation requests must reach the guidance path without opening SQLite.
-    if re.search(r"\b(?:save|bookmark)\s+(?:this|my)\s+(?:chat|conversation)\b", text, re.I):
-        return None
     command = parse_context_command(text)
     if command is None:
         return None
@@ -109,6 +106,8 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
         public = [public_checkpoint(item) for item in records]
         lines = [f"저장된 미완성 과제: {len(public)}개"]
         lines.extend(f"• {item['courseName'] or '기타 과제'} / {item['assignmentTitle']} — {format_deadline(item['savedAt'])}" for item in public)
+        if not public:
+            lines.append("아직 저장된 진행 기록이 없어요. 과제를 진행하다 ‘과제 진행 상황 저장해줘’라고 말해 주세요.")
         return {"toolCalls": ["list_context_bookmarks"], "data": public, "answer": "\n".join(lines)}
     if "error" in command:
         return {
@@ -136,7 +135,7 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
             existing_tls = find_assignments(database(), USER_ID, {"title": title, "source": "tls"})
             if existing_tls:
                 return selection_guidance(existing_tls, "save")
-        if checkpoint_json is None:
+        if checkpoint_json is None and assignment is None:
             return {"toolCalls": [], "needsSummary": True,
                     "data": {"performed": False, "assignmentTitle": title},
                     "answer": f"새 과제 ‘{title}’의 현재 대화 내용을 정리한 뒤 저장할 수 있습니다."}
@@ -145,9 +144,9 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
         if len(matches) != 1:
             return selection_guidance(matches, operation)
         assignment = matches[0]
-        if assignment["submissionStatus"] in {"SUBMITTED", "LATE"}:
-            return {"toolCalls": [], "data": None if operation == "load" else {"performed": False},
-                    "answer": "완료된 과제에는 저장된 진행 기록이 없습니다." if operation == "load" else "완료된 과제에는 진행 기록을 저장할 수 없습니다."}
+    if assignment and assignment["submissionStatus"] in {"SUBMITTED", "LATE"}:
+        return ({"toolCalls": [], "data": None, "answer": "완료된 과제에는 저장된 진행 기록이 없습니다."}
+                if operation == "load" else selection_guidance([assignment], operation))
     if operation == "load":
         if checkpoint_json is not None:
             return {
@@ -161,7 +160,7 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
         return {
             "toolCalls": ["get_context_bookmark"],
             "data": public_checkpoint(record),
-            "answer": format_resume_card(record) if record else "해당 과제에 저장된 진행 기록이 없습니다.",
+            "answer": format_resume_card(record) if record else "해당 과제에 저장된 진행 기록이 없어요. `list`로 다른 기록을 확인하거나, 현재 대화에서 진행한 내용을 새로 저장할 수 있어요.",
         }
 
     if checkpoint_json is None:
@@ -208,6 +207,7 @@ def _ask(
     *,
     conversation: str = "",
     checkpoint_json: str | None = None,
+    assignment_query: str | None = None,
 ) -> dict[str, Any]:
     checkpoint = _checkpoint_command(text, checkpoint_json=checkpoint_json)
     if checkpoint:
@@ -219,27 +219,27 @@ def _ask(
 
     intent = detect_context_intent(text)
     if intent:
+        if intent == "save":
+            if assignment_query and assignment_query.strip():
+                return search_save_targets(database(), USER_ID, assignment_query)
+            return {
+                "toolCalls": ["prompt_context_command"], "needsInput": True, "needsAssignmentQuery": True,
+                "data": {"operation": "save", "performed": False, "stage": "need_clue"},
+                "nextCommands": [],
+                "answer": "저장할 과제를 먼저 찾아볼게요. 과목명이나 문제에 나온 단어를 알려주세요. "
+                          "직접 정한 이름으로 남기려면 ‘새 이름: 내 과제’처럼 말해 주세요.",
+            }
         if intent == "ambiguous":
             answer = (
                 "저장과 불러오기는 실행하지 않았습니다. 원하는 작업의 표준 명령어 하나를 입력해 주세요.\n"
                 f"저장: {command_template('save')}\n불러오기: {command_template('load')}"
             )
         elif intent == "list":
-            answer = "목록을 아직 조회하지 않았습니다. 정확히 `list`를 입력해 주세요."
+            answer = "저장해 둔 과제의 진행 기록 목록은 `list`를 보내면 불러올 수 있어요."
         else:
-            action = "저장" if intent == "save" else "불러오기"
             answer = (
-                f"요청하신 {action}은 아직 실행하지 않았습니다. 아래 표준 명령어를 채워서 다시 입력해 주세요.\n"
-                f"{command_template(intent)}"
+                '최근 저장 기록부터 이어가려면 `load`를 보내 주세요. 특정 과제는 `load "과제명"`으로 고를 수 있어요.'
             )
-            if intent == "save":
-                answer += (
-                    '\n예: save 자바 Ex05 또는 save new "캡처 문제". '
-                    "ChatGPT/Codex가 명령을 받은 뒤 현재 대화에서 확인되는 내용을 한국어로 정리합니다. "
-                    "사용자가 진행·막힘·다음 행동을 직접 입력할 필요는 없습니다."
-                )
-            else:
-                answer += '\n예: load "자바 Ex05". 키워드를 생략하면 가장 최근 기록을 불러옵니다.'
         return {
             "toolCalls": ["prompt_context_command"],
             "data": {"operation": intent, "performed": False},
@@ -258,21 +258,29 @@ def _ask(
         except ValueError as exc:
             response = {"status": "error", "answer": str(exc)}
         return {"toolCalls": ["study"], **response}
+    if is_status_request(text) and re.search(r"뭐|무엇|뭘|할\s*일|어때", text):
+        store = database()
+        data = get_current_context(store, USER_ID, lambda: list_bookmarks(store, USER_ID))
+        return {"toolCalls": ["get_current_context"], "data": data, "answer": format_current_context(data)}
+    if re.search(r"공지", text):
+        store = database()
+        data = store.get_notices(USER_ID)
+        return {"toolCalls": ["get_notices"], "data": data, "answer": academic_list_answer(store, USER_ID, "notices", data)}
+    if re.search(r"자료(?:\s|$|를|로|목록)|수업자료|강의자료|파일|PDF|PPT", text, re.I):
+        store = database()
+        data = store.get_resources(USER_ID)
+        return {"toolCalls": ["get_resources"], "data": data, "answer": academic_list_answer(store, USER_ID, "resources", data)}
+    if re.search(r"북마크|즐겨찾기", text):
+        store = database()
+        data = list_bookmarks(store, USER_ID)
+        return {"toolCalls": ["get_bookmarks"], "data": data, "answer": bookmark_answer(store, USER_ID, data)}
     if re.search(r"과제|안 낸|미제출|밀린", text):
         return assignment_answer(database(), USER_ID, text)
     if re.search(r"강의|시청|안 본", text):
-        data = get_lectures(database(), USER_ID, unfinished=True)
-        answer = "\n".join(f"{x['title']} — {x['watchProgress']}%" for x in data) or "미시청 강의가 없습니다."
+        store = database()
+        data = get_lectures(store, USER_ID, unfinished=True)
+        answer = academic_list_answer(store, USER_ID, "lectures", data)
         return {"toolCalls": ["get_unwatched_lectures"], "data": data, "answer": answer}
-    if re.search(r"공지", text):
-        data = database().get_notices(USER_ID)
-        return {"toolCalls": ["get_notices"], "data": data, "answer": json.dumps(data, ensure_ascii=False)}
-    if re.search(r"자료|파일|PDF|PPT", text, re.I):
-        data = database().get_resources(USER_ID)
-        return {"toolCalls": ["get_resources"], "data": data, "answer": json.dumps(data, ensure_ascii=False)}
-    if re.search(r"북마크|즐겨찾기", text):
-        data = list_bookmarks(database(), USER_ID)
-        return {"toolCalls": ["get_bookmarks"], "data": data, "answer": json.dumps(data, ensure_ascii=False)}
     if is_status_request(text):
         store = database()
         data = get_current_context(store, USER_ID, lambda: list_bookmarks(store, USER_ID))
@@ -333,6 +341,7 @@ def main() -> None:
     ask_parser.add_argument("--text", required=True)
     ask_parser.add_argument("--conversation", default="", help="호스트 대화별 고유 ID")
     ask_parser.add_argument("--checkpoint-json", default=None, help=argparse.SUPPRESS)
+    ask_parser.add_argument("--assignment-query", default=None, help="저장 요청의 대화 문맥에서 찾은 검색어 (조회만 수행)")
     study_parser = sub.add_parser("study", help="학습 세션 이벤트 처리")
     study_parser.add_argument("--conversation", required=True, help="호스트 대화별 고유 ID")
     study_parser.add_argument("--event-json", required=True, help="학습 이벤트 JSON")
@@ -353,13 +362,14 @@ def main() -> None:
         selectors = {"query": args.query} if args.query.strip() else {}
         if args.source:
             selectors["source"] = args.source
-        matches = (find_similar_tls_assignments(database(), USER_ID, args.query)
-                   if args.source == "tls" else find_assignments(database(), USER_ID, selectors))
-        result = selection_guidance(matches, args.operation)
+        result = (search_save_targets(database(), USER_ID, args.query)
+                  if args.source == "tls" and args.operation == "save"
+                  else selection_guidance(find_assignments(database(), USER_ID, selectors), args.operation))
     elif args.command == "assignment-add":
         try:
             item = database(write=True).add_manual_assignment(USER_ID, args.title, course_id=args.course_id, due_at=args.due_at, description=args.description)
-            result = {"toolCalls": ["add_manual_assignment"], "data": item, "answer": "과제를 등록했습니다."}
+            result = {"toolCalls": ["add_manual_assignment"], "data": item,
+                      "answer": f"‘{item['title']}’ 과제를 등록했어요. 마감: {format_deadline(item.get('dueAt'))}. 진행 기록도 남기려면 ‘과제 진행 상황 저장해줘’라고 말해 주세요."}
         except ValueError as error:
             result = {"toolCalls": ["add_manual_assignment"], "data": None, "error": {"code": "INVALID_ASSIGNMENT", "message": str(error)}, "answer": str(error)}
     elif args.command == "assignment-complete":
@@ -408,7 +418,8 @@ def main() -> None:
     elif args.command == "bookmark-delete":
         result = {"toolCalls": ["delete_bookmark"], "data": delete_bookmark(database(write=True), USER_ID, args.target_id)}
     elif args.command == "ask":
-        result = ask(args.text, conversation=args.conversation, checkpoint_json=args.checkpoint_json)
+        result = ask(args.text, conversation=args.conversation, checkpoint_json=args.checkpoint_json,
+                     assignment_query=args.assignment_query)
     elif args.command == "study":
         try:
             event = json.loads(args.event_json)

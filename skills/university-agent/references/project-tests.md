@@ -6,6 +6,14 @@
 
 ## 자동 검사
 
+저장 대화 흐름 수정 후 로컬 **78개**, 게이트웨이 **11개** 테스트가 통과했다.
+임시 DB에서 검색 실패 → 검색어 보완 → 후보 선택 → 코드 블록 명령 저장 → 불러오기,
+커스텀 제목 저장·재사용, 제출 완료 후보의 사전 안내와 별도 복습 기록을 확인했다.
+자연어 검색에 요약이 전달돼도 저장되지 않으며, 여러 명령·추가 문구·빈 제목은 저장되지 않는다.
+하이픈이 있는 전체 과제명과 따옴표·코드 블록 형식도 검증했다.
+호스트 AI가 대화에서 후속 답변을 해석하는 부분은 Skill 지침이며, CLI 단독의 대화 기억으로
+검증한 것은 아니다. 형식 검사 도구는 PyYAML 미설치로 실행되지 않아 frontmatter를 직접 확인했다.
+
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s skills/university-agent/tests -v
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest server.test_app server.test_local

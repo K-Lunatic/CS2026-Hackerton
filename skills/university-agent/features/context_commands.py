@@ -13,10 +13,17 @@ _SELECTOR_OPTIONS = {"--과목": "course", "--과제": "title", "--마감": "due
 
 def parse_context_command(text: str) -> dict[str, Any] | None:
     """Parse only the exact, user-facing checkpoint command forms."""
+    # A copied command may be wrapped in one Markdown code block, but not prose.
+    fenced = re.fullmatch(r"```(?:text|txt)?[ \t]*\r?\n((?:save|load)(?:[ \t]+[^\r\n]*)?)\r?\n```", text.strip())
+    if fenced:
+        text = fenced.group(1)
     if text in {"list", "과제 목록 불러오기"}:
         return {"operation": "list", "values": {}}
     if detect_context_intent(text) == "list":
         return None
+    if re.search(r"\b(?:save|bookmark)\s+(?:this|my)\s+(?:chat|conversation)\b", text, re.I):
+        return None
+    text = text.strip()
     try:
         tokens = shlex.split(text.strip())
     except ValueError as error:
@@ -54,6 +61,8 @@ def parse_context_command(text: str) -> dict[str, Any] | None:
             if any(token.startswith("--") for token in tokens[1:]):
                 return {"operation": operation, "error": "키워드와 선택 옵션을 섞지 말고 한 가지 형식으로 입력해 주세요."}
             query = " ".join(tokens[1:]).strip()
+            if not query:
+                return {"operation": operation, "error": "과목명이나 과제 키워드를 입력해 주세요."}
             return {"operation": operation, "values": {"query": query, **({"source": "tls"} if operation == "save" else {})}}
         index = 1
         values: dict[str, Any] = {"source": "tls"} if operation == "save" else {}
@@ -117,7 +126,7 @@ def detect_context_intent(text: str) -> str | None:
     """Recognize paraphrased save/load requests without performing them."""
     if text.strip().lower() in {"list", "list saved", "list assignments"}:
         return "list"
-    if (re.search(r"과제.{0,12}목록|목록.{0,12}과제", text) and re.search(r"불러|보여|조회|확인|알려|뭐|어떤", text)) or (
+    if (re.search(r"과제.{0,12}목록|목록.{0,12}과제", text) and re.search(r"저장|기록|하던|미완성|불러", text)) or (
         "과제" in text and re.search(r"저장|미완성|하던", text) and re.search(r"전부|모두|전체", text)
         and re.search(r"불러|보여|조회|확인|알려", text)
     ):
@@ -135,9 +144,9 @@ def detect_context_intent(text: str) -> str | None:
     if re.search(r"(?:저장|기록|기억)(?:된|한|했던|해\s*둔|해둔)", text):
         save = None
     load = re.search(
-        r"어디까지|어디서.{0,8}(?:했|멈)|무엇부터|뭐부터|불러|복귀|재개|"
+        r"어디까지|어디서.{0,8}(?:했|멈)|불러|복귀|재개|"
         r"다시.{0,8}시작|이어\s?(?:서|갈|가려|하)|계속.{0,8}과제|"
-        r"다음.{0,8}(?:뭐|뭘|무엇|행동|할)|진행.{0,16}(?:보여|알려|확인)|"
+        r"진행.{0,16}(?:보여|알려|확인)|"
         r"(?:저장|기록).{0,12}(?:불러|보여|알려|조회)|저장한.{0,12}(?:진행|과제|작업)|"
         r"(?:어제|지난번|전에).{0,12}(?:한|했던|하던|진행|과제|작업|어디|뭐|기억)|"
         r"복기|뭐였(?:지|더라)|뭐\s*했(?:지|더라)|기억나|"
@@ -167,13 +176,17 @@ def command_template(operation: str) -> str:
 
 
 def next_commands(result: dict[str, Any] | None = None) -> list[str]:
-    """Offer the same follow-up vocabulary after every user-facing operation."""
+    """Offer actions relevant to the current step, without restarting selection."""
     result = result or {}
+    if "nextCommands" in result:
+        return result["nextCommands"]
     calls = result.get("toolCalls", [])
     data = result.get("data")
     if "find_assignments" in calls and isinstance(data, dict) and "candidates" in data:
-        return ["list", "load", *(item["command"] for item in data["candidates"])]
-    commands = ["list"]
+        return list(dict.fromkeys(item["command"] for item in data["candidates"] if item.get("command")))
+    if result.get("needsSummary") or result.get("error"):
+        return []
+    commands = []
     if "list_context_bookmarks" in calls and isinstance(data, list):
         titles = [item["assignmentTitle"] for item in data]
         for item in data:
@@ -183,19 +196,21 @@ def next_commands(result: dict[str, Any] | None = None) -> list[str]:
             else:
                 commands.append("load --course " + json.dumps(item.get("courseName") or "기타 과제", ensure_ascii=False)
                                 + " --title " + json.dumps(title, ensure_ascii=False))
-    elif "list_context_bookmarks" in calls:
-        pass
+        return list(dict.fromkeys(commands)) or ["과제 진행 상황 저장해줘"]
     elif isinstance(data, dict) and data.get("assignmentTitle"):
-        commands.append("load " + json.dumps(data["assignmentTitle"], ensure_ascii=False))
-    else:
-        commands.append("load")
-    commands.extend(['save "TLS 과제명"', 'save new "새 과제명"'])
-    return list(dict.fromkeys(commands))
+        return (["list"] if "get_context_bookmark" in calls else
+                ["load " + json.dumps(data["assignmentTitle"], ensure_ascii=False), "list"])
+    if "get_context_bookmark" in calls:
+        return ["list"]
+    if "prompt_context_command" in calls and isinstance(data, dict):
+        return {"list": ["list"], "load": ["load"]}.get(data.get("operation"), [])
+    return []
 
 
 def with_next_commands(result: dict[str, Any]) -> dict[str, Any]:
     commands = next_commands(result)
     result["nextCommands"] = commands
-    if result.get("answer"):
-        result["answer"] += "\n다음 명령:\n" + "\n".join("• " + command for command in commands)
+    remaining = [command for command in commands if command not in result.get("answer", "")]
+    if result.get("answer") and remaining:
+        result["answer"] += "\n다음 명령:\n" + "\n".join("• " + command for command in remaining)
     return result

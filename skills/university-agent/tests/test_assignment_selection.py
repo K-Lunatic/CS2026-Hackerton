@@ -53,15 +53,88 @@ class AssignmentSelectionTests(ProjectTestBase):
         self.assertEqual([item['title'] for item in result['data']['candidates']],
                          ['(과제) Ex09-ExceptionAssignment.java', '(과제) Ex05-ClubMember.java'])
         self.assertTrue(result['needsInput'])
-        self.assertEqual(result['nextCommands'][2:], [item['command'] for item in result['data']['candidates']])
+        self.assertEqual(result['nextCommands'], [item['command'] for item in result['data']['candidates']])
         self.assert_public(result)
 
     def test_no_similar_tls_match_asks_which_route_applies(self):
         result = self.cli('assignment-find', '--query', 'CompletelyUnrelated', '--source', 'tls')
         self.assertEqual(result['data']['candidates'], [])
-        self.assertIn('TLS에 없는 과제인가요', result['answer'])
-        self.assertIn('TLS의 제목이 다른가요', result['answer'])
-        self.assertNotIn('save new', result['nextCommands'])
+        self.assertEqual(result['data']['stage'], 'not_found')
+        self.assertIn('단어를 하나 더', result['answer'])
+        self.assertIn('새 이름:', result['answer'])
+        self.assertEqual(result['nextCommands'], [])
+        self.assertEqual(self.checkpoints(), [])
+
+    def test_save_search_refinement_and_fenced_command_round_trip(self):
+        title = '연습과제 - 배열, 구조체, 포인터'
+        self.db.connection.execute('UPDATE assignments SET title=? WHERE id=?', (title, 'private-ex05'))
+        self.db.connection.commit()
+        missing = self.cli('ask', '--text', '과제 저장해줘', '--assignment-query', '복소수')
+        self.assertEqual(missing['data']['stage'], 'not_found')
+        found = self.cli('assignment-find', '--query', '구조체 배열', '--source', 'tls')
+        self.assertEqual([item['title'] for item in found['data']['candidates']], [title])
+        self.assertEqual(found['data']['dataSource'], 'local')
+        self.assertTrue(found['data']['lastSyncedAt'])
+        self.assertEqual(self.checkpoints(), [])
+        command = found['data']['candidates'][0]['command']
+        saved = self.cli('ask', '--text', '```text\n' + command + '\n```', '--checkpoint-json', self.payload)
+        self.assertEqual(saved['data']['assignmentTitle'], title)
+        loaded = self.cli('ask', '--text', '```\nload "' + title + '"\n```')
+        self.assertEqual(loaded['data'], saved['data'])
+        self.assert_public(found)
+
+    def test_natural_search_never_saves_even_with_summary(self):
+        result = self.cli('ask', '--text', '과제 저장해줘', '--assignment-query', '자바', '--checkpoint-json', self.payload)
+        self.assertEqual(len(result['data']['candidates']), 2)
+        self.assertFalse(result['data']['performed'])
+        self.assertEqual(self.checkpoints(), [])
+        refined = self.cli('assignment-find', '--query', '자바 Ex06', '--source', 'tls')
+        self.assertEqual(refined['data']['candidates'][0]['title'], '(과제) Ex06-Customer.java')
+        # Ranking is only a suggestion; even a high-ranked match needs selection.
+        self.assertEqual(self.checkpoints(), [])
+
+    def test_custom_title_path_after_empty_search_reuses_task(self):
+        missing = self.cli('ask', '--text', '과제 저장해줘', '--assignment-query', '복소수')
+        self.assertEqual(missing['data']['stage'], 'not_found')
+        command = 'save new "복소수 구조체 과제"'
+        preview = self.cli('ask', '--text', command)
+        self.assertTrue(preview['needsSummary'])
+        self.assertFalse(any(item['source'] == 'manual' for item in self.db.get_assignments('fixture-user')))
+        saved = self.cli('ask', '--text', command, '--checkpoint-json', self.payload)
+        self.cli('ask', '--text', command, '--checkpoint-json', self.payload)
+        self.assertEqual(len([item for item in self.db.get_assignments('fixture-user') if item['source'] == 'manual']), 1)
+        self.assertEqual(self.cli('ask', '--text', 'load "복소수 구조체 과제"')['data']['progress'], saved['data']['progress'])
+
+    def test_completed_candidate_explains_recovery_before_save(self):
+        self.db.connection.execute("UPDATE assignment_submissions SET submission_status='SUBMITTED' WHERE assignment_id='private-ex05'")
+        self.db.connection.commit()
+        found = self.cli('assignment-find', '--query', 'ClubMember', '--source', 'tls')
+        self.assertEqual(found['data']['stage'], 'completed')
+        self.assertIsNone(found['data']['candidates'][0]['command'])
+        self.assertEqual(found['nextCommands'], [])
+        self.assertIn('새로고침', found['answer'])
+        blocked = self.cli('ask', '--text', 'save "Ex05"', '--checkpoint-json', self.payload)
+        self.assertEqual(blocked['data']['stage'], 'completed')
+        self.assertEqual(self.checkpoints(), [])
+        saved = self.cli('ask', '--text', 'save new "복소수 복습"', '--checkpoint-json', self.payload)
+        self.assertEqual(saved['data']['assignmentTitle'], '복소수 복습')
+        self.assertEqual(next(item for item in self.db.get_assignments('fixture-user') if item['id'] == 'private-ex05')['submissionStatus'], 'SUBMITTED')
+
+    def test_cpp_search_works_and_ambiguous_title_requires_selection(self):
+        self.db.connection.execute('UPDATE assignments SET title=? WHERE id=?', ('보고서 초안', 'private-ex06'))
+        self.db.connection.commit()
+        found = self.cli('assignment-find', '--query', 'C++', '--source', 'tls')
+        self.assertEqual([item['title'] for item in found['data']['candidates']], ['보고서'])
+        ambiguous = self.cli('ask', '--text', 'save "보고서"', '--checkpoint-json', self.payload)
+        self.assertFalse(ambiguous['data']['performed'])
+        saved = self.cli('ask', '--text', found['data']['candidates'][0]['command'], '--checkpoint-json', self.payload)
+        self.assertEqual(saved['data']['assignmentTitle'], '보고서')
+
+    def test_wrapped_prose_multiple_commands_and_empty_titles_never_save(self):
+        for text in ('save ""', '```\nsave "Ex05"\nload\n```', '참고\n```\nsave "Ex05"\n```',
+                     '```\nsave "Ex05"\n```\n추가 설명', 'save this chat'):
+            with self.subTest(text=text):
+                self.cli('ask', '--text', text, '--checkpoint-json', self.payload)
         self.assertEqual(self.checkpoints(), [])
 
     def test_save_load_by_names_keep_identifiers_internal(self):
@@ -222,8 +295,9 @@ class AssignmentSelectionTests(ProjectTestBase):
 
         self.db.connection.execute("UPDATE assignments SET title=? WHERE id=?", ('연습과제 - 배열, 구조체, 포인터', 'private-ex05'))
         self.db.connection.commit()
-        saved = self.cli('ask', '--text', command, '--checkpoint-json', self.payload)
-        self.assertEqual(saved['data']['assignmentTitle'], '연습과제 - 배열, 구조체, 포인터')
+        for text in (command, 'save "연습과제 - 배열, 구조체, 포인터"', '```\nsave "연습과제 - 배열, 구조체, 포인터"\n```'):
+            saved = self.cli('ask', '--text', text, '--checkpoint-json', self.payload)
+            self.assertEqual(saved['data']['assignmentTitle'], '연습과제 - 배열, 구조체, 포인터')
         self.assertEqual(self.checkpoints()[0]['assignment_id'], 'private-ex05')
 
     def test_list_shows_every_unfinished_assignment_once(self):

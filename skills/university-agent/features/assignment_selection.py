@@ -61,8 +61,9 @@ def find_similar_tls_assignments(provider: TLSProvider, user_id: str, query: str
     query = re.sub(r"\.(?:java|pdf|pptx?|docx?)\b", " ", query, flags=re.I).strip()
     if not query:
         return items
+    exact_ids = {item["id"] for item in find_assignments(provider, user_id, {"source": "tls", "query": query})}
     expanded = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", query)
-    terms = [normalize(term) for term in re.findall(r"[A-Za-z]+|[가-힣]+|\d+", expanded)]
+    terms = [normalize(term) for term in re.findall(r"[A-Za-z]+(?:[+#]+)?|[가-힣]+|\d+", expanded)]
     terms = [term for term in terms if len(term) >= 2]
     whole = normalize(query)
     ranked = []
@@ -70,7 +71,7 @@ def find_similar_tls_assignments(provider: TLSProvider, user_id: str, query: str
         title = normalize(item["title"])
         course = normalize(item["courseName"])
         description = normalize(item.get("description") or "")
-        score = 0
+        score = 20 if item["id"] in exact_ids else 0
         if whole and whole in title:
             score += 12
         elif whole and whole in description:
@@ -83,6 +84,14 @@ def find_similar_tls_assignments(provider: TLSProvider, user_id: str, query: str
         if score:
             ranked.append((score, item))
     return [item for _, item in sorted(ranked, key=lambda row: (-row[0], deadline_key(row[1]), row[1]["courseName"], row[1]["title"]))]
+
+
+def search_save_targets(provider: TLSProvider, user_id: str, query: str) -> dict[str, Any]:
+    """Search academic metadata only; summaries and checkpoints are untouched."""
+    result = selection_guidance(find_similar_tls_assignments(provider, user_id, query))
+    result["data"].update(query=query, dataSource="local",
+                          lastSyncedAt=(provider.get_user(user_id) or {}).get("lastSyncedAt"))
+    return result
 
 
 def selection_command(item: dict[str, Any], operation: str) -> str:
@@ -100,23 +109,42 @@ def _quoted(value: str) -> str:
 
 def selection_guidance(items: list[dict[str, Any]], operation: str = "save") -> dict[str, Any]:
     """Return only names/deadlines and copyable commands, never database IDs."""
-    candidates = [dict(courseName=item["courseName"] or "기타 과제", title=item["title"],
-                       dueAt=item.get("dueAt"), command=selection_command(item, operation)) for item in items]
+    candidates = []
+    for item in items:
+        status = item.get("submissionStatus", "UNKNOWN")
+        available = status not in {"SUBMITTED", "LATE"}
+        command = selection_command(item, operation) if available else None
+        candidates.append(dict(courseName=item["courseName"] or "기타 과제", title=item["title"],
+                               dueAt=item.get("dueAt"), submissionStatus=status, command=command))
     if not items:
-        intro = ('비슷한 과제를 찾지 못했습니다. TLS에 없는 과제인가요, 아니면 TLS의 제목이 다른가요? '
-                 '제목이 다르면 TLS에 표시된 과제명을 알려주세요. TLS에 없다면 새 과제 제목을 알려주세요.')
+        intro = ("저장된 TLS 과제에서 후보를 찾지 못했어요. 과목명이나 기억나는 단어를 하나 더 알려주세요. "
+                 "직접 정한 이름으로 저장하려면 ‘새 이름: 내 과제’처럼 말해 주세요. 아직 저장하지 않았어요."
+                 if operation == "save" else
+                 "해당 이름의 과제를 찾지 못했어요. 다른 과목명·키워드를 알려주시거나 `list`로 저장 목록을 확인해 주세요.")
     elif len(items) == 1:
         action = "저장" if operation == "save" else "불러오기"
-        intro = f"해당 과제를 찾았습니다. 진행 기록의 {action}을 요청하려면 아래 명령을 보내 주세요."
+        intro = "저장된 과제 정보에서 후보를 찾았어요."
+        if candidates[0]["command"]:
+            intro += f" 찾던 과제가 맞으면 아래 명령으로 {action}할 수 있어요."
     else:
-        intro = f"해당하는 과제가 {len(items)}개입니다. 과제명과 마감일을 보고 원하는 명령을 보내 주세요."
+        intro = f"저장된 과제 정보에서 후보 {len(items)}개를 찾았어요. 번호나 과제명으로 골라 주세요."
     lines = [intro]
-    for item in candidates:
-        lines.extend([f"• {item['courseName']} / {item['title']} — {format_deadline(item['dueAt'])}", item["command"]])
-    if len({item["command"] for item in candidates}) < len(candidates):
+    labels = {"NOT_SUBMITTED": "미제출", "SUBMITTED": "제출 완료", "LATE": "지각 제출 완료", "UNKNOWN": "제출 상태 미상"}
+    for index, item in enumerate(candidates, 1):
+        lines.append(f"{index}. {item['courseName']} / {item['title']} — {format_deadline(item['dueAt'])} · {labels.get(item['submissionStatus'], '제출 상태 미상')}")
+        if item["command"]:
+            lines.append(item["command"])
+    commands = [item["command"] for item in candidates if item["command"]]
+    if any(item["command"] is None for item in candidates):
+        lines.append("제출 완료로 기록된 과제에는 진행 기록을 저장할 수 없어요. 실제 상태가 다르면 TLS 새로고침을 요청해 주세요. "
+                     "복습 기록을 따로 남기려면 ‘새 이름: 복습 기록’처럼 새 과제 이름을 알려주세요."
+                     if operation == "save" else "제출 완료로 기록된 과제에는 남아 있는 진행 기록이 없어요.")
+    if len(set(commands)) < len(commands):
         lines.append("과목·제목·마감까지 같은 항목이 있어 아직 구분할 수 없습니다. 학교에서 과제 정보를 확인해 주세요.")
     return {"toolCalls": ["find_assignments"], "needsInput": True,
-            "data": {"performed": False, "operation": operation, "candidates": candidates},
+            "data": {"performed": False, "operation": operation, "candidates": candidates,
+                     "stage": "not_found" if not items else "choose_assignment" if commands else "completed"},
+            "nextCommands": list(dict.fromkeys(commands)) if items or operation == "save" else ["list"],
             "answer": "\n".join(lines)}
 
 

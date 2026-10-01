@@ -24,6 +24,25 @@ PLAYWRIGHT_MODULE=/private/tmp/handover-browser/node_modules/playwright \
 이 화면은 localhost 서버이므로 다른 휴대폰에서 데스크톱의 127.0.0.1 주소로 접근할 수 없다.
 Codex 플러그인의 TLS·로컬 DB 기능도 웹·모바일 앱 지원을 의미하지 않는다.
 
+## 학업 조회·초보자 안내 개선 검증
+
+실행: `python3 -m unittest discover -s skills/university-agent/tests`.
+47개 중 44개 통과, 실제 외부 AI 연결 테스트 3개 건너뜀. 실패 및 기대 실패 없음.
+로컬 HTTP 모의 서버 테스트는 포트 바인딩이 가능한 실행 환경에서 검증했다.
+
+- 한국 시간 월요일·일요일 경계, UTC 마감의 한국 시간 변환, 마감 순간, 날짜만 있는 마감 보존.
+- 예정·기한 경과·마감 미상·제출 상태 미상 분리, 늦게 제출한 과제의 할 일 제외.
+- “나.. 지금은 어때?”, “오늘 뭐 해야 해?” 조회와 1% 시청률 표기, 로컬 데이터 및 동기화 시각 안내.
+- 로그인이나 DB 접근 없는 도움말·기능 추천·등록 안내, 안내 과정에서 학사 데이터 무변경.
+- 팀플 조회와 과제 기록 저장/불러오기 분리, 기존 명시적 저장 계약 보존.
+
+이번 검증은 임시 DB와 모의 HTTP 서버를 사용했다. 실제 TLS 재동기화, 외부 AI 호출,
+설치된 플러그인 캐시 업데이트는 수행하지 않았다. 화면 코드는 바꾸지 않았고 브라우저
+테스트는 이번에 재실행하지 않았다. 스킬 검증 스크립트는 실행 환경에 PyYAML이 없어
+실행하지 못했으며, 변경된 지침과 참조 경로는 직접 확인했다.
+
+아래는 이전 검증 당시의 기록이다.
+
 검증일: 2026-10-01 (Asia/Seoul). 기능 코드 기준 커밋: `ba48c3a`.
 이번 작업은 테스트 추가 및 결과 기록이며, 발견한 다른 기능의 로직은 변경하지 않았다.
 
@@ -58,7 +77,7 @@ PLAYWRIGHT_MODULE=/tmp/handover-browser/node_modules/playwright \
 비밀 입력 폼의 비터미널 거부·출력 마스킹, 모의 Keychain 저장 계약,
 폼을 열 수 없을 때 TLS CLI가 네트워크 호출 전에 중단되는지 확인.
 
-## 미해결 문제
+## 이전 검증의 미해결 문제 (현재 수정됨)
 
 ### 1. 팀플 요청을 체크포인트 불러오기 안내로 잘못 연결
 
@@ -69,6 +88,8 @@ PLAYWRIGHT_MODULE=/tmp/handover-browser/node_modules/playwright \
 위치: `scripts/run_agent.py`의 ask 및 `features/context_commands.py`의 detect_context_intent.
 재현 테스트: `test_team_progress_intent_reaches_handover`.
 명시적인 과제 저장/불러오기 계약을 유지하면서 팀플 요청을 구별해야 한다.
+
+현재는 팀플 진행 조회가 분석 기능으로 연결되며 위 테스트의 기대 실패 표시를 제거했다.
 
 ## 검증하지 못한 항목
 

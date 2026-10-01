@@ -22,6 +22,9 @@ Minimum record fields:
 
 Use ISO-8601 timestamps with timezone offsets and the statuses `NOT_SUBMITTED`, `SUBMITTED`, `LATE`, or `UNKNOWN`.
 
+`LATE` means submitted late, not an overdue unsubmitted assignment. `UNKNOWN` requires checking and must not be counted as confirmed unsubmitted. `watchProgress` uses percentage points (0–100), so 1.0 is 1%; `completed` is independent.
+The local user record also returns `lastSyncedAt`, sourced from that user's snapshot import timestamp, not a shared course timestamp.
+
 AI integrations should call the Skill commands or consume their JSON; they should not move TLS logic into a vendor-specific prompt or SDK. Add authentication and secret handling only when a real TLS API is available.
 
 ## Parallel work

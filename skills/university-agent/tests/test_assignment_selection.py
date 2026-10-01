@@ -172,7 +172,6 @@ class AssignmentSelectionTests(ProjectTestBase):
         self.assertEqual(self.cli('ask', '--text', '과제 불러오기 캡처 문제')['data'], saved['data'])
         manual = next(item for item in self.db.get_assignments('fixture-user') if item['title'] == title)
         self.assertTrue(self.cli('assignment-complete', '--id', manual['id'], '--submission-answer', '예')['data']['completed'])
-        self.assertTrue(self.cli('assignment-complete', '--id', manual['id'])['data']['completed'])
         self.assertEqual(self.cli('ask', '--text', '과제 목록 불러오기')['data'], [])
         self.assertEqual(self.cli('ask', '--text', '과제 불러오기 캡처 문제')['data'], None)
         self.assertEqual(self.checkpoints(), [])

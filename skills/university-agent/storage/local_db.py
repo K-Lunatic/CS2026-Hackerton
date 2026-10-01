@@ -30,6 +30,7 @@ class LocalDatabase:
                 self.connection.execute("UPDATE resources SET download_status='DOWNLOADED' WHERE local_path IS NOT NULL")
             if "download_reason" not in resource_columns:
                 self.connection.execute("ALTER TABLE resources ADD COLUMN download_reason TEXT")
+            self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()

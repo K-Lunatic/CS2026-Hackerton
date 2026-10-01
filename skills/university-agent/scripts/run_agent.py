@@ -344,7 +344,9 @@ def main() -> None:
     ask_parser.add_argument("--assignment-query", default=None, help="저장 요청의 대화 문맥에서 찾은 검색어 (조회만 수행)")
     study_parser = sub.add_parser("study", help="학습 세션 이벤트 처리")
     study_parser.add_argument("--conversation", required=True, help="호스트 대화별 고유 ID")
-    study_parser.add_argument("--event-json", required=True, help="학습 이벤트 JSON")
+    study_input = study_parser.add_mutually_exclusive_group(required=True)
+    study_input.add_argument("--event-json", help="학습 이벤트 JSON")
+    study_input.add_argument("--event-file", type=Path, help="문제 생성·채점 이벤트 JSON 파일")
     args = parser.parse_args()
 
     if args.command == "context":
@@ -422,11 +424,11 @@ def main() -> None:
                      assignment_query=args.assignment_query)
     elif args.command == "study":
         try:
-            event = json.loads(args.event_json)
+            event = json.loads(args.event_file.read_text(encoding='utf-8') if args.event_file else args.event_json)
             store = database()
             result = {"toolCalls": ["study"], **StudySession(DB_PATH.parent / "study-sessions.db", USER_ID,
                 args.conversation, store, DB_PATH.parent / "files").call(event)}
-        except (ValueError, json.JSONDecodeError) as exc:
+        except (ValueError, OSError) as exc:
             result = {"toolCalls": ["study"], "status": "error", "error": {"code": "STUDY_INVALID", "message": str(exc)}, "answer": str(exc)}
     if args.command not in ("ask", "study"):
         result = with_next_commands(result)

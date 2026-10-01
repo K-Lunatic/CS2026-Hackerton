@@ -46,7 +46,10 @@ codex plugin add university-agent@kku-university-agent-local
 위처럼 로컬 저장소를 마켓플레이스로 등록했다면 변경 후
 `codex plugin add university-agent@kku-university-agent-local`을 다시 실행해 최신 버전을 설치합니다.
 TLS 계정, 실제 DB, API 키는 플러그인에 포함되지 않습니다.
-학습보조는 대화에서 개념을 정리하고 문제를 한 번에 풀며 별도 화면이 필요하지 않습니다.
+학습보조는 대화에서 개념을 정리하고, 연습 시험은 로컬 브라우저 시험지에서 풉니다.
+문제와 답안은 로컬 SQLite에 저장되며 Codex가 채점한 결과를 시험 화면에서 확인합니다.
+객관식(n지선다), 용어·서술형, 예제 코드 오류 수정·출력 예측과 과목별 신규 유형을 지원합니다.
+Codex가 풀이 중 대기하지 않는 경우 제출 후 대화에서 “시험 채점해줘”라고 요청합니다.
 
 ## 스킬만 설치
 

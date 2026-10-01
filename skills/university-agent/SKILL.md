@@ -7,6 +7,16 @@ description: ChatGPT/Codex용 로컬 대학생활 Skill. 과목, 공지, 과제,
 
 For local Codex, use the bundled standard-library runner for every data lookup or mutation. For ChatGPT web/mobile, use the Mac-hosted OAuth Actions gateway through an HTTPS tunnel described in [server/README.md](../../server/README.md); never ask a mobile user to run Python. Do not invent a response from local data when the runner can return the result.
 
+## Conversation save/load gate
+
+Apply this workflow from the first use in every new ChatGPT/Codex conversation; it does not depend on a previous user reminder.
+
+- Treat requests to save/bookmark the current conversation, chat, summary, or progress as checkpoint requests. For example, `지금 이 대화를 북마크로 저장해줘` requires the user to send `과제 저장 --과제ID <과제ID>`; it is not permission to create a regular bookmark.
+- Pass the exact request to `ask`, show its command guidance, and wait for the user to send the canonical command. If the runner misses the intent, show the template yourself and stop without another data command.
+- Never substitute `bookmark-add`, `CUSTOM`, an invented conversation ID, a transcript file, or direct SQLite writes for this workflow. Do not generate `--checkpoint-json` until the user sends the canonical save command.
+- For requests to restore a saved conversation/checkpoint, guide the user to `과제 불러오기` (optionally `--과제ID <과제ID>`) and wait. Regular academic bookmark listing remains separate.
+- Regular `bookmark-add` is only for an explicitly requested academic entity bookmark. `CUSTOM` creation is disabled; existing bookmarks remain readable and deletable.
+
 ## Team boundary
 
 - TLS integration owner: maintain the `TLSProvider` contract and `MoodleTLSProvider`. The runner reads only the device-local `LocalDatabase` populated by TLS sync.

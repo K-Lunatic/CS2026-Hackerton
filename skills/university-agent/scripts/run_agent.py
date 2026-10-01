@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from features.assignments import get_assignments
-from features.bookmarks import add_bookmark, delete_bookmark, list_bookmarks
+from features.bookmarks import add_bookmark, delete_bookmark, list_bookmarks, validate_bookmark_target
 from features.context import get_current_context
 from features.context_bookmarks import format_resume_card, get_context_bookmark, save_context_bookmark
 from features.context_commands import command_template, detect_context_intent, parse_context_command
@@ -355,10 +355,14 @@ def main() -> None:
     elif args.command == "bookmarks":
         result = {"toolCalls": ["get_bookmarks"], "data": list_bookmarks(database(), USER_ID)}
     elif args.command == "bookmark-add":
-        result = {
-            "toolCalls": ["create_bookmark"],
-            "data": add_bookmark(database(write=True), USER_ID, args.target_type, args.target_id, args.note),
-        }
+        try:
+            validate_bookmark_target(args.target_type)
+            result = {
+                "toolCalls": ["create_bookmark"],
+                "data": add_bookmark(database(write=True), USER_ID, args.target_type, args.target_id, args.note),
+            }
+        except ValueError as error:
+            result = {"toolCalls": [], "data": {"performed": False}, "error": {"code": "INVALID_BOOKMARK", "message": str(error)}, "answer": str(error)}
     elif args.command == "bookmark-delete":
         result = {"toolCalls": ["delete_bookmark"], "data": delete_bookmark(database(write=True), USER_ID, args.target_id)}
     elif args.command == "ask":

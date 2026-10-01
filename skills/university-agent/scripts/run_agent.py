@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency-free runner: provider -> feature -> Skill response."""
+"""Dependency-free runner: shared provider -> feature -> Skill response."""
 from __future__ import annotations
 
 import argparse
@@ -19,14 +19,16 @@ from features.bookmarks import add_bookmark, delete_bookmark, list_bookmarks
 from features.context import get_current_context
 from features.handover import create_handover
 from features.lectures import get_lectures
-from providers.tls_provider import MockTLSProvider
+from providers.tls_provider import create_provider
 
-USER_ID = "user-hong"
-PROVIDER = MockTLSProvider()
+USER_ID = os.environ.get("UNIVERSITY_AGENT_USER_ID", "user-hong")
+DATA_ROOT = Path(os.environ.get("UNIVERSITY_AGENT_DATA_DIR", Path.home() / ".university-agent" / "data"))
+PROVIDER = create_provider(DATA_ROOT, USER_ID)
 
 
 def state_path() -> Path:
-    return Path(os.environ.get("UNIVERSITY_AGENT_STATE", Path.home() / ".university-agent" / "state.json"))
+    legacy_override = os.environ.get("UNIVERSITY_AGENT_STATE")
+    return Path(legacy_override) if legacy_override else DATA_ROOT / "users" / USER_ID / "app_state.json"
 
 
 def read_state() -> dict[str, Any]:

@@ -1,6 +1,12 @@
 """Saved exam -> HTTP answers -> host-AI rubric -> HTTP results, no live account."""
 import json
 import threading
+import socket
+import queue
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import patch
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import test_study
@@ -135,6 +141,65 @@ class ExamWebTests(ProjectTestBase):
         data.update(revision=1, answers={q['id']: '' for q in public['questions']})
         self.assertEqual(json.loads(request('/api/submit', data))['status'], 'grading')
         self.assertNotIn('hostOnly', json.loads(request('/api/exam')))
+
+    def test_idle_browser_preconnection_does_not_block_styles_or_questions(self):
+        server, url = create_exam_server(self.make_exam())
+        worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        base, token = url.split('#')
+        with socket.create_connection(server.server_address, timeout=3):
+            # Leave a browser-like connection idle while other requests load the exam.
+            with urlopen(base + 'exam.css', timeout=3) as response:
+                self.assertIn(b'grid-template-columns', response.read())
+            with urlopen(Request(base + 'api/exam', headers={'X-Exam-Token': token}), timeout=3) as response:
+                self.assertEqual(len(json.loads(response.read())['questions']), 6)
+
+    def test_launcher_serves_styled_exam_under_windows_pipe_encoding(self):
+        self.make_exam()
+        script = Path(__file__).resolve().parents[1] / 'scripts' / 'exam_web.py'
+        process = subprocess.Popen([sys.executable, str(script), '--conversation', 'exam', '--no-open'],
+            env={**self.env, 'PYTHONIOENCODING': 'cp1252'}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            lines = queue.Queue()
+            threading.Thread(target=lambda: lines.put(process.stdout.readline()), daemon=True).start()
+            first = lines.get(timeout=10)
+            self.assertTrue(first, process.stderr.read().decode('utf-8', errors='replace') if process.poll() is not None else 'No URL returned')
+            result = json.loads(first.decode('utf-8'))
+            self.assertIn('시험지', result['answer'])
+            base, token = result['url'].split('#')
+            with urlopen(base, timeout=3) as response:
+                html = response.read().decode('utf-8')
+            self.assertIn('class="paper"', html)
+            self.assertIn('/exam.css', html)
+            for asset, content_type in [('exam.css', 'text/css'), ('exam.js', 'text/javascript')]:
+                with urlopen(base + asset, timeout=3) as response:
+                    self.assertTrue(response.headers['Content-Type'].startswith(content_type))
+                    self.assertTrue(response.read())
+            with urlopen(Request(base + 'api/exam', headers={'X-Exam-Token': token}), timeout=3) as response:
+                data = json.loads(response.read())
+            self.assertEqual(len(data['questions']), 6)
+        finally:
+            process.terminate()
+            process.communicate(timeout=5)
+
+    def test_browser_launch_failure_keeps_live_exam_server(self):
+        import exam_web as launcher
+        self.make_exam()
+        live = []
+        def launch(url):
+            with urlopen(url.split('#')[0], timeout=3) as response:
+                live.append(response.status)
+            raise OSError('browser unavailable')
+        # main() owns this server, and must close it after the simulated stop.
+        from contextlib import redirect_stdout, redirect_stderr
+        from io import StringIO
+        def join(worker):
+            if worker.is_alive():
+                raise KeyboardInterrupt
+        with patch.object(launcher, 'DB_PATH', self.db_path), patch.object(launcher, 'USER_ID', 'fixture-user'), patch.object(launcher, 'database', return_value=self.session('exam').provider), patch.object(sys, 'argv', ['exam_web', '--conversation', 'exam']), patch.object(launcher.webbrowser, 'open', side_effect=launch), patch.object(threading.Thread, 'join', join), redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                launcher.main()
+        self.assertEqual(live, [200])
 
     def test_custom_type_contract_and_choices(self):
         self.assertEqual(settings({'delivery': 'web', 'count': 4})['types'], ['auto'] * 4)

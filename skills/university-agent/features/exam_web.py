@@ -1,5 +1,5 @@
 """Loopback-only exam UI over the existing StudySession. AI work stays in Codex."""
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import secrets
@@ -71,6 +71,7 @@ def create_exam_server(session, port=0):
             except (ValueError, UnicodeError) as exc:
                 self.send(409, {'error': str(exc)})
 
-    server = HTTPServer(('127.0.0.1', port), Handler)
+    # Browsers preconnect: an idle socket must not block CSS/JS/API requests.
+    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     server.timeout = 1
     return server, f'http://127.0.0.1:{server.server_port}/#{token}'

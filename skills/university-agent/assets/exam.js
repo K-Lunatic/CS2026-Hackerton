@@ -1,10 +1,14 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const fragment = location.hash.slice(1);
-const token = /^[A-Za-z0-9_-]{43}$/.test(fragment) ? fragment : sessionStorage.getItem('exam-token') || '';
+let savedToken = '';
+try { savedToken = sessionStorage.getItem('exam-token') || ''; } catch (_) { /* Browser privacy settings can disable storage. */ }
+const token = /^[A-Za-z0-9_-]{43}$/.test(fragment) ? fragment : savedToken;
 // Tab-scoped token survives refresh, but never enters a request URL or localStorage.
-sessionStorage.setItem('exam-token', token);
-history.replaceState(null, '', '/');
+try {
+  sessionStorage.setItem('exam-token', token);
+  history.replaceState(null, '', '/');
+} catch (_) { /* Keep the fragment for refresh when tab storage is unavailable. */ }
 const SVG = 'http://www.w3.org/2000/svg';
 const OUTCOME = {correct: '맞았어요', partial: '일부만 맞았어요', incorrect: '틀렸어요'};
 // Red-pencil marks drawn over the question number: circle, triangle, slash.

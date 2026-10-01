@@ -10,6 +10,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Host pipes on Windows may use cp1252/cp949; all runner JSON is UTF-8.
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, 'reconfigure'):
+        stream.reconfigure(encoding='utf-8', errors='backslashreplace')
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))

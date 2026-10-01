@@ -265,7 +265,7 @@ python3 -m unittest discover -s skills/university-agent/tests -v
 python3 -m unittest server.test_app server.test_local
 ```
 
-2026-10-02 기준 로컬 테스트 **106개 통과**. 임시 DB에서 단계별 파일 분석·재개·인용 검사·
+2026-10-02 기준 로컬 테스트 **109개**, 게이트웨이 **11개 통과**. 임시 DB에서 단계별 파일 분석·재개·인용 검사·
 시험지 API·답안 저장·채점 상태를 검증했습니다. Safari에서는 테스트용 문항의 제출·채점 결과 표시도 확인했습니다.
 Windows 분기는 모의 테스트이며 실제 Windows 브라우저와 실제 학교 자료의 AI 출제 품질은
 아직 검증하지 않았습니다. 과거 검증 이력과 제한은 [검증 기록](skills/university-agent/references/project-tests.md)에 있습니다.

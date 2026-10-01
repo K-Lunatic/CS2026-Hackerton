@@ -3,6 +3,8 @@
 import argparse
 import json
 import time
+import threading
+import sys
 import webbrowser
 from run_agent import DB_PATH, USER_ID, database
 from features.study import StudySession
@@ -29,12 +31,20 @@ def main():
                     return
                 time.sleep(1)
         server, url = create_exam_server(session, args.port)
-        print(json.dumps({'url': url, 'answer': '터틀넥 시험지가 열렸어요. 답안을 제출하면 채점할 수 있어요.'}, ensure_ascii=False), flush=True)
-        if not args.no_open:
-            webbrowser.open(url)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()  # Serve assets before invoking a potentially blocking browser launcher.
         try:
-            server.serve_forever()
+            print(json.dumps({'url': url, 'answer': '터틀넥 시험지가 준비됐어요. 링크에서 답안을 제출해 주세요.'}, ensure_ascii=False), flush=True)
+            if not args.no_open:
+                try:
+                    if not webbrowser.open(url):
+                        print('브라우저를 자동으로 열지 못했어요. 위 시험 링크를 열어 주세요.', file=sys.stderr, flush=True)
+                except (webbrowser.Error, OSError):
+                    print('브라우저를 자동으로 열지 못했어요. 위 시험 링크를 열어 주세요.', file=sys.stderr, flush=True)
+            worker.join()
         finally:
+            server.shutdown()
+            worker.join()
             server.server_close()
     except (ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')

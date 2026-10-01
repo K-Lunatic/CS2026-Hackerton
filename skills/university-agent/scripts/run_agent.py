@@ -174,6 +174,12 @@ def ask(text: str, *, records: str = "", ui: bool = False, **options) -> dict[st
         data = get_lectures(database(), USER_ID, unfinished=True)
         answer = "\n".join(f"{x['title']} — {x['watchProgress']}%" for x in data) or "미시청 강의가 없습니다."
         return {"toolCalls": ["get_unwatched_lectures"], "data": data, "answer": answer}
+    if re.search(r"공지", text):
+        data = database().get_notices(USER_ID)
+        return {"toolCalls": ["get_notices"], "data": data, "answer": json.dumps(data, ensure_ascii=False)}
+    if re.search(r"자료|파일|PDF|PPT", text, re.I):
+        data = database().get_resources(USER_ID)
+        return {"toolCalls": ["get_resources"], "data": data, "answer": json.dumps(data, ensure_ascii=False)}
     if re.search(r"북마크|즐겨찾기", text):
         data = list_bookmarks(database(), USER_ID)
         return {"toolCalls": ["get_bookmarks"], "data": data, "answer": json.dumps(data, ensure_ascii=False)}
@@ -197,6 +203,8 @@ def main() -> None:
     assignment_parser.add_argument("--upcoming", action="store_true")
     lecture_parser = sub.add_parser("lectures")
     lecture_parser.add_argument("--unfinished", action="store_true")
+    sub.add_parser("notices")
+    sub.add_parser("resources")
     sub.add_parser("bookmarks")
     add = sub.add_parser("bookmark-add")
     add.add_argument("--target-type", required=True)
@@ -234,6 +242,10 @@ def main() -> None:
             "toolCalls": ["get_lectures"],
             "data": get_lectures(database(), USER_ID, unfinished=args.unfinished),
         }
+    elif args.command == "notices":
+        result = {"toolCalls": ["get_notices"], "data": database().get_notices(USER_ID)}
+    elif args.command == "resources":
+        result = {"toolCalls": ["get_resources"], "data": database().get_resources(USER_ID)}
     elif args.command == "bookmarks":
         result = {"toolCalls": ["get_bookmarks"], "data": list_bookmarks(database(), USER_ID)}
     elif args.command == "bookmark-add":

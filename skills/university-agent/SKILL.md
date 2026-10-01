@@ -1,6 +1,6 @@
 ---
 name: university-agent
-description: Query university assignments, lectures, bookmarks, assignment context checkpoints, team project progress, and handovers through a provider-neutral local skill. Use for Korean student-workload questions; default data is Mock TLS and needs no API key.
+description: Query and manage university courses, notices, assignments, lectures, local PPT/PDF files, bookmarks, assignment context checkpoints, team project progress, and handovers through a provider-neutral local skill. Use for Korean student-workload questions; default data is Mock TLS and needs no API key.
 ---
 
 # University Agent
@@ -25,6 +25,8 @@ python3 scripts/run_agent.py ask --text "아직 안 낸 과제 있어?"
 python3 scripts/run_agent.py context
 python3 scripts/run_agent.py assignments --unsubmitted
 python3 scripts/run_agent.py lectures --unfinished
+python3 scripts/run_agent.py notices
+python3 scripts/run_agent.py resources
 python3 scripts/run_agent.py bookmarks
 python3 scripts/run_agent.py bookmark-add --target-type ASSIGNMENT --target-id assignment-network-5 --note "이번 주 우선"
 python3 scripts/run_agent.py ask --text '과제 저장 --과제ID assignment-network-5 --진행 "자료 3개 수집 완료" --완료항목 "자료 3개 수집" --막힘 "없음" --다음행동 "두 번째 자료의 통계를 본문에 넣기"'
@@ -33,6 +35,12 @@ python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘
 python3 scripts/run_agent.py ask --text "과제 어디까지 했지?"
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
 python3 scripts/ingest_tls.py --input tls_snapshot.json
+# TLS owner: first sync logs in, then stores data and PPT/PDF files locally
+python3 scripts/sync_tls.py --remember
+# Later syncs reuse the username config and macOS Keychain password
+python3 scripts/sync_tls.py
+# Inspect one authenticated page if needed
+python3 scripts/tls_fetch.py --path /my/ --output /tmp/tls-my.html
 ```
 
 The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answer`. Use the answer directly when it is sufficient; otherwise summarize the returned data without changing dates or status.
@@ -56,6 +64,8 @@ The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answ
 - Analyze the returned `data.messages` as the calling AI, then run the same command with the same records/options, replacing `--prepare` with `--analysis-json '<generated JSON>'`. Use a safely quoted argument or call the Python functions to avoid shell interpolation. Only present the validated final `answer`.
 - With a configured API, omit `--prepare` and `--analysis-json` to perform a real remote call.
 - Preserve exact evidence and unknowns (`미정`, `확인 필요`), separate AI suggestions from recorded facts, and leave ambiguous/conflicting records as checks. Never claim a sample response or prepared prompt is a real API result.
+- `sync_tls.py --remember` stores only the username in `~/.university-agent/tls-account.json` (mode 600) and the password in macOS Keychain. The SQLite DB and logs never contain the password; cookies remain in memory.
+- TLS sync imports courses, notices, assignments, lectures, and PDF/PPT/PPTX resources. Downloaded files are stored below `~/.university-agent/files/`.
 - Never expose provider secrets in output. If a real TLS adapter is added, keep it behind the contract in [references/provider-contract.md](references/provider-contract.md).
 
 This skill is deliberately local and dependency-free. Do not add a web app, API server, database server, MCP server, or AI SDK unless the user explicitly asks to expand beyond an installable Skill.

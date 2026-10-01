@@ -1,0 +1,195 @@
+"""Moodle HTML adapter for the KKU TLS pages observed by MoodleSession."""
+from __future__ import annotations
+
+import re
+from html import unescape
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlsplit
+
+from providers.moodle_session import MoodleSession
+
+
+class _LinkParser(HTMLParser):
+    def __init__(self, *, only_activities: bool = False) -> None:
+        super().__init__(convert_charrefs=True)
+        self.only_activities = only_activities
+        self.links: list[tuple[str, str]] = []
+        self.href: str | None = None
+        self.text: list[str] = []
+        self.hidden = 0
+        self.activity_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "li" and "activity" in (values.get("class") or "").split():
+            self.activity_depth += 1
+        if tag == "a" and self.href is None:
+            if self.only_activities and self.activity_depth == 0:
+                return
+            self.href = values.get("href")
+            self.text = []
+        if self.href is not None and "accesshide" in (values.get("class") or "").split():
+            self.hidden += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.href is not None and tag == "span" and self.hidden:
+            self.hidden -= 1
+        if tag == "a" and self.href is not None:
+            self.links.append((self.href, " ".join("".join(self.text).split())))
+            self.href = None
+            self.text = []
+        if tag == "li" and self.activity_depth:
+            self.activity_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self.href is not None and not self.hidden:
+            self.text.append(data)
+
+
+class MoodleTLSProvider:
+    def __init__(self, session: MoodleSession):
+        self.session = session
+
+    @staticmethod
+    def _links(html: str, *, only_activities: bool = False) -> list[tuple[str, str]]:
+        parser = _LinkParser(only_activities=only_activities)
+        parser.feed(html)
+        return parser.links
+
+    def get_courses(self, _user_id: str) -> list[dict[str, Any]]:
+        links = self._links(self.session.get("/local/ubion/user/"))
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for href, title in links:
+            match = re.search(r"/course/view\.php\?id=(\d+)", href)
+            if not match or match.group(1) in seen:
+                continue
+            seen.add(match.group(1))
+            result.append({"id": f"tls-course-{match.group(1)}", "externalId": match.group(1), "name": title or f"TLS course {match.group(1)}", "source": "tls"})
+        return result
+
+    def get_assignments(self, user_id: str) -> list[dict[str, Any]]:
+        courses = self.get_courses(user_id)
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for course in courses:
+            html = self.session.get(f"/course/view.php?id={course['externalId']}")
+            for href, title in self._links(html, only_activities=True):
+                match = re.search(r"/mod/assign/view\.php\?id=(\d+)", href)
+                if not match or match.group(1) in seen:
+                    continue
+                seen.add(match.group(1))
+                detail = self.session.get(f"/mod/assign/view.php?id={match.group(1)}")
+                text = _plain_text(detail)
+                due = _find_datetime(text, ("종료 일시", "마감일", "Due date"))
+                if not due:
+                    continue
+                status = "SUBMITTED" if "제출 완료" in text else "NOT_SUBMITTED" if re.search(r"제출 (?:안 함|하지 않음|되지 않음)", text) else "UNKNOWN"
+                result.append({"id": f"tls-assignment-{match.group(1)}", "externalId": match.group(1), "courseId": course["id"], "title": title or f"TLS assignment {match.group(1)}", "dueAt": due, "submissionStatus": status, "source": "tls"})
+        return result
+
+    def get_lectures(self, user_id: str) -> list[dict[str, Any]]:
+        courses = self.get_courses(user_id)
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for course in courses:
+            html = self.session.get(f"/course/view.php?id={course['externalId']}")
+            durations = _vod_durations(html)
+            for href, title in self._links(html, only_activities=True):
+                match = re.search(r"/mod/vod/view\.php\?id=(\d+)", href)
+                if not match or match.group(1) in seen:
+                    continue
+                seen.add(match.group(1))
+                vod_id = match.group(1)
+                viewer = self.session.get(f"/mod/vod/viewer.php?id={vod_id}")
+                playtime = _find_playtime(viewer) or durations.get(vod_id, 0)
+                progress = _find_number(viewer, "is_progress")
+                complete = _find_number(viewer, "is_complete") == 1
+                result.append({"id": f"tls-lecture-{vod_id}", "externalId": vod_id, "courseId": course["id"], "title": title or f"TLS lecture {vod_id}", "durationSeconds": playtime, "watchedSeconds": round(playtime * progress / 100), "watchProgress": progress, "completed": complete, "source": "tls"})
+        return result
+
+    def get_notices(self, user_id: str) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for course in self.get_courses(user_id):
+            course_html = self.session.get(f"/course/view.php?id={course['externalId']}")
+            for href, title in self._links(course_html, only_activities=True):
+                match = re.search(r"/mod/ubboard/view\.php\?id=(\d+)", href)
+                if not match or "공지" not in title or match.group(1) in seen:
+                    continue
+                seen.add(match.group(1))
+                board_html = self.session.get(f"/mod/ubboard/view.php?id={match.group(1)}")
+                for article_href, _ in self._links(board_html):
+                    article = re.search(r"/mod/ubboard/article\.php\?id=(\d+)(?:&amp;|&)bwid=(\d+)", article_href)
+                    if not article or article.group(2) in seen:
+                        continue
+                    seen.add(article.group(2))
+                    detail = self.session.get(article_href)
+                    article_title = _match_text(detail, r'<div[^>]+class=["\'][^"\']*subject[^"\']*["\'][^>]*>.*?<h3[^>]*>(.*?)</h3>')
+                    content = _match_text(detail, r'<div[^>]+class=["\'][^"\']*content[^"\']*["\'][^>]*>(.*?)</div>\s*</div>')
+                    text = _plain_text(detail)
+                    result.append({"id": f"tls-notice-{article.group(2)}", "externalId": article.group(2), "courseId": course["id"], "title": article_title or f"TLS notice {article.group(2)}", "content": content or text, "publishedAt": _find_datetime(text, ("작성일", "게시일", "등록일")) or "1970-01-01T00:00:00+09:00", "source": "tls"})
+        return result
+
+    def get_resources(self, user_id: str) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for course in self.get_courses(user_id):
+            course_html = self.session.get(f"/course/view.php?id={course['externalId']}")
+            for href, title in self._links(course_html, only_activities=True):
+                match = re.search(r"/mod/resource/view\.php\?id=(\d+)", href)
+                if not match or match.group(1) in seen:
+                    continue
+                seen.add(match.group(1))
+                content, response = self.session.get_bytes(href)
+                final_path = unquote(urlsplit(response.geturl()).path)
+                mime_type = response.headers.get_content_type()
+                extension = Path(final_path).suffix.lower().lstrip(".")
+                if extension not in {"pdf", "ppt", "pptx"}:
+                    extension = {"application/pdf": "pdf", "application/vnd.ms-powerpoint": "ppt", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx"}.get(mime_type, "")
+                if extension not in {"pdf", "ppt", "pptx"}:
+                    continue
+                file_name = Path(final_path).name or f"resource-{match.group(1)}.{extension}"
+                result.append({"id": f"tls-resource-{match.group(1)}", "externalId": match.group(1), "courseId": course["id"], "title": title or file_name, "fileName": file_name, "extension": extension, "mimeType": mime_type, "remotePath": href, "source": "tls", "_content": content})
+        return result
+
+
+def _plain_text(html: str) -> str:
+    parser = HTMLParser(convert_charrefs=True)
+    parts: list[str] = []
+    parser.handle_data = parts.append  # type: ignore[method-assign]
+    parser.feed(html)
+    return " ".join("".join(parts).split())
+
+
+def _match_text(html: str, pattern: str) -> str:
+    match = re.search(pattern, html, re.I | re.S)
+    return _plain_text(unescape(match.group(1))) if match else ""
+
+
+def _find_datetime(text: str, labels: tuple[str, ...]) -> str | None:
+    label = "|".join(re.escape(item) for item in labels)
+    match = re.search(rf"(?:{label})\s*:?\s*(\d{{4}}[-/.]\d{{1,2}}[-/.]\d{{1,2}}\s+\d{{1,2}}:\d{{2}})", text, re.I)
+    if not match:
+        return None
+    value = re.sub(r"[/.]", "-", match.group(1))
+    return f"{value}:00+09:00"
+
+
+def _find_number(html: str, variable: str) -> float:
+    match = re.search(rf"var\s+{re.escape(variable)}\s*=\s*([0-9.]+)", html)
+    return float(match.group(1)) if match else 0.0
+
+
+def _find_playtime(html: str) -> int:
+    match = re.search(r'class=["\']playtime["\'][^>]*>\s*(\d{1,3}):(\d{2})', html, re.I)
+    return int(match.group(1)) * 60 + int(match.group(2)) if match else 0
+
+
+def _vod_durations(html: str) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for match in re.finditer(r"/mod/vod/view\.php\?id=(\d+).*?text-info[^>]*>\s*,?\s*(\d{1,3}):(\d{2})", html, re.I | re.S):
+        result[match.group(1)] = int(match.group(2)) * 60 + int(match.group(3))
+    return result

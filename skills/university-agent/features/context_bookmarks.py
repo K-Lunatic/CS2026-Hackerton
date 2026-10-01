@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from features.deadlines import format_deadline
+
 
 def _database_path(db_path: str | Path | None = None) -> Path:
     if db_path is not None:
@@ -186,8 +188,8 @@ def format_resume_card(record: dict[str, Any]) -> str:
     blocker = record.get("blocker") or "기록 없음"
     return "\n".join(
         [
-            f"복귀 카드 — {course} / {record['assignmentTitle']}",
-            f"저장 시각: {record['savedAt']}",
+            f"과제 진행 기록 — {course} / {record['assignmentTitle']}",
+            f"저장 시각: {format_deadline(record['savedAt'])} (한국 시간)",
             f"현재 상태: {record['progress']}",
             f"완료한 항목: {completed_text}",
             f"막힌 부분: {blocker}",

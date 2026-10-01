@@ -88,6 +88,8 @@ class AssignmentSelectionTests(ProjectTestBase):
         result = self.cli('assignment-find', '--query', '자바')
         self.assert_public(result)
         for candidate in result['data']['candidates']:
+            self.assertTrue(candidate['command'].startswith('save "'))
+            self.assertNotIn('--course', candidate['command'])
             saved = self.cli('ask', '--text', candidate['command'], '--checkpoint-json', self.payload)
             self.assertEqual(saved['data']['assignmentTitle'], candidate['title'])
         self.assertEqual(len(self.checkpoints()), 2)

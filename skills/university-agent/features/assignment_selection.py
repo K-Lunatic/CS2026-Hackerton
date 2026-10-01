@@ -85,8 +85,11 @@ def find_similar_tls_assignments(provider: TLSProvider, user_id: str, query: str
     return [item for _, item in sorted(ranked, key=lambda row: (-row[0], deadline_key(row[1]), row[1]["courseName"], row[1]["title"]))]
 
 
-def selection_command(item: dict[str, Any], operation: str) -> str:
-    tokens = ["save new" if operation == "save" and item.get("source") == "manual" else operation]
+def selection_command(item: dict[str, Any], operation: str, *, simple: bool = True) -> str:
+    command = "save new" if operation == "save" and item.get("source") == "manual" else operation
+    if simple:
+        return f'{command} {_quoted(item["title"])}'
+    tokens = [command]
     tokens.extend(["--course", _quoted(item.get("courseName") or "기타 과제")])
     tokens.extend(["--title", _quoted(item["title"])])
     tokens.extend(["--due", _quoted(item.get("dueAt") or "미정")])
@@ -100,8 +103,14 @@ def _quoted(value: str) -> str:
 
 def selection_guidance(items: list[dict[str, Any]], operation: str = "save") -> dict[str, Any]:
     """Return only names/deadlines and copyable commands, never database IDs."""
+    title_counts = {}
+    for item in items:
+        key = normalize(item["title"])
+        title_counts[key] = title_counts.get(key, 0) + 1
     candidates = [dict(courseName=item["courseName"] or "기타 과제", title=item["title"],
-                       dueAt=item.get("dueAt"), command=selection_command(item, operation)) for item in items]
+                       dueAt=item.get("dueAt"),
+                       command=selection_command(item, operation, simple=title_counts[normalize(item["title"])] == 1))
+                 for item in items]
     if not items:
         intro = ('관련 과제를 TLS에서 찾지 못했습니다. TLS에 표시된 제목이 다른가요, '
                  '아니면 학교 과제 목록에 없는 과제인가요?\n\n'

@@ -41,7 +41,7 @@ def database(*, write: bool = False) -> LocalDatabase:
     """Open the device database only when a command actually needs it."""
     global DB
     if not USER_ID:
-        raise SystemExit("아직 학교 계정이 연결되지 않았어요. ‘TLS 연결해줘’라고 요청하면 최초 동기화를 진행합니다. 비밀번호는 채팅이 아닌 이 컴퓨터의 보안 입력창에 입력해 주세요.")
+        raise SystemExit("아직 학교 계정이 연결되지 않았어요. 연결창 열기: python3 scripts/sync_tls.py --connect\n비밀번호는 채팅이 아닌 열린 터미널에 입력해 주세요.")
     if DB is not None and write and DB.read_only:
         DB.close()
         DB = None

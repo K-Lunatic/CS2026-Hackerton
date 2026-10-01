@@ -75,49 +75,19 @@ class StudyFlowTests(ProjectTestBase):
         with self.assertRaises(ValueError):
             self.session('unrelated-study').call({'action': 'accept', 'replyTo': old_offer['offerId']})
 
-    def test_grounded_question_flow_and_no_early_answer(self):
-        s = self.session()
-        offer = s.call({'action': 'offer', 'selection': {'courseId': 'course-1'}, 'settings': {'count': 5, 'delivery': 'single'}})
-        prepared = s.call({'action': 'accept', 'replyTo': offer['offerId']})
-        self.assertEqual(prepared['status'], 'prepared')
-        self.assertEqual(prepared['hostOnly']['settings']['types'], ['mcq', 'mcq', 'mcq', 'short', 'essay'])
-        self.assertEqual(prepared['hostOnly']['SOURCE'][0]['location'], '줄 1')
-        mocked = {'questions': [self.question(t, i) for i, t in enumerate(['mcq', 'mcq', 'mcq', 'short', 'essay'], 1)]}
-        leaking = {'questions': [dict(q) for q in mocked['questions']]}
-        leaking['questions'][0]['hint'] = '정답은 정렬된 배열에서 탐색입니다.'
-        with self.assertRaisesRegex(ValueError, '힌트'):
-            s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': leaking})
-        result = s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': mocked})
-        self.assertEqual(result['status'], 'question')
-        for secret in ('자료에 명시되어 있습니다.', '정렬된 배열에서 탐색한다.'):
-            self.assertNotIn(secret, json.dumps(result, ensure_ascii=False))
-        self.assertNotIn('evidence', result['question'])
-        self.assertNotIn('answer', result['question'])
-        self.assertEqual(s.call({'action': 'hint', 'questionId': 'q1'})['hintUsed'], True)
-        feedback = s.call({'action': 'answer', 'questionId': 'q1', 'text': '1'})
-        self.assertEqual(feedback['outcome'], 'correct')
-        self.assertEqual(feedback['evidence'][0]['name'], '3주차 탐색')
-        self.assertEqual(s.call({'action': 'next'})['question']['id'], 'q2')
-        self.assertEqual(s.call({'action': 'skip', 'questionId': 'q2'})['outcome'], 'skipped')
-        s.call({'action': 'next'})
-        self.assertEqual(s.call({'action': 'reveal', 'questionId': 'q3'})['outcome'], 'revealed')
-        s.call({'action': 'next'})
-        grade = s.call({'action': 'answer', 'questionId': 'q4', 'text': '정렬된 리스트를 탐색'})
-        self.assertEqual(grade['status'], 'grading')
-        with self.assertRaises(ValueError):
-            s.call({'action': 'hint', 'questionId': 'q4'})
-        short = s.call({'action': 'grade', 'questionId': 'q4', 'gradeId': grade['gradeId'],
-                        'criteria': [{'criterion': '정렬 조건', 'met': True, 'feedback': '정렬 조건을 충족했습니다.'}]})
-        self.assertEqual(short['outcome'], 'correct')
-        s.call({'action': 'next'})
-        essay = s.call({'action': 'answer', 'questionId': 'q5', 'text': '분할하여 탐색합니다'})
-        final_feedback = s.call({'action': 'grade', 'questionId': 'q5', 'gradeId': essay['gradeId'],
-                'criteria': [{'criterion': '정렬 조건', 'met': False, 'feedback': '정렬 조건을 빠뜨렸습니다.'}]})
-        finished = final_feedback['summary']
-        self.assertEqual(finished['counts']['correct'], 2)
-        self.assertEqual(finished['selfCorrect'], 1)
-        self.assertEqual(finished['counts']['skipped'], 1)
-        self.assertEqual(finished['counts']['revealed'], 1)
+    def test_new_exams_force_web_even_if_chat_requested(self):
+        from features.study import settings
+        for delivery in ('batch', 'single', 'web'):
+            self.assertEqual(settings({'delivery': delivery})['delivery'], 'web')
+            s = self.session(delivery)
+            prepared = s.call({'action': 'request', 'selection': {'courseId': 'course-1'},
+                              'settings': {'count': 1, 'delivery': delivery}})
+            self.assertTrue(prepared['needsExtraction'])
+            with self.assertRaises(ValueError):
+                s.call({'action': 'generate', 'requestId': prepared['requestId'],
+                        'data': {'questions': [self.question()]}})
+        parsed = event_from_text('자료구조 한 문제씩 내줘', [])
+        self.assertEqual(parsed['settings']['delivery'], 'web')
 
     def test_wrong_course_scope_missing_source_and_invalid_generation(self):
         s = self.session()
@@ -128,7 +98,7 @@ class StudyFlowTests(ProjectTestBase):
         with self.assertRaises(ValueError):
             s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': [self.question()], 'shortageReason': '부족'}})
         s.call({'action': 'request', 'selection': {'courseId': 'course-1', 'resourceIds': ['resource-1'], 'locations': {'resource-1': ['줄 9']}}})
-        self.assertEqual(s.call({'action': 'status'})['status'], 'selecting')
+        self.assertEqual(s.call({'action': 'status'})['status'], 'assembling')
         with self.assertRaises(ValueError):
             s.call({'action': 'select', 'selection': {'courseId': 'course-1', 'resourceIds': ['foreign-id']}})
 
@@ -136,9 +106,9 @@ class StudyFlowTests(ProjectTestBase):
         self.file.unlink()
         s = self.session()
         result = s.call({'action': 'request', 'selection': {'courseId': 'course-1'}})
-        self.assertEqual(result['status'], 'selecting')
-        self.assertIn('읽은 본문이 없어', result['answer'])
-        self.assertNotIn('hostOnly', result)
+        self.assertEqual(result['status'], 'assembling')
+        self.assertIn('로컬 파일이 없습니다', result['failures'][0]['reason'])
+        self.assertEqual(result['totalCandidates'], 0)
         with self.assertRaises(ValueError): s.call({'action': 'generate', 'requestId': 'fake', 'data': {}})
         other = self.session('b', 'another-user')
         self.assertEqual(other.call({'action': 'request'})['status'], 'selecting')
@@ -152,8 +122,8 @@ class StudyFlowTests(ProjectTestBase):
         upsert(db, 'fixture-user', data)
         db.close()
         result = self.session().call({'action': 'request', 'selection': {'courseId': 'course-1'}})
-        self.assertEqual(result['status'], 'selecting')
-        self.assertNotIn('hostOnly', result)
+        self.assertEqual(result['status'], 'assembling')
+        self.assertEqual(result['totalCandidates'], 0)
 
     def test_viewer_page_failure_is_shown_without_claiming_readable_slides(self):
         db = LocalDatabase(self.db_path)
@@ -163,66 +133,21 @@ class StudyFlowTests(ProjectTestBase):
         upsert(db, 'fixture-user', data)
         db.close()
         result = self.session().call({'action': 'request', 'selection': {'courseId': 'course-1'}})
-        self.assertIn('문서 뷰어 페이지', result['answer'])
-        self.assertNotIn('hostOnly', result)
+        self.assertIn('문서 뷰어 페이지', result['failures'][0]['reason'])
+        self.assertEqual(result['totalCandidates'], 0)
 
     def test_insufficient_evidence_never_fills_the_requested_count(self):
         s = self.session()
         prepared = s.call({'action': 'request', 'selection': {'courseId': 'course-1'},
-                           'settings': {'count': 5}})
-        self.assertEqual(prepared['status'], 'prepared')
-        result = s.call({'action': 'generate', 'requestId': prepared['requestId'],
-                         'data': {'questions': [], 'shortageReason': '출제 근거가 부족함'}})
+                          'settings': {'count': 5}})
+        s.call({'action': 'extract', 'requestId': prepared['requestId'], 'data': {
+            'context': '탐색 수업', 'learning': [{'concept': '탐색', 'explanation': '정렬 조건',
+            'evidence': self.question()['evidence']}], 'types': [], 'questions': [],
+            'shortageReason': '출제 근거 부족'}})
+        result = s.call({'action': 'assemble', 'candidateIds': [],
+                         'shortageReason': '출제 근거 부족'})
         self.assertEqual(result['status'], 'insufficient')
         self.assertNotIn('question', result)
-
-    def test_concepts_then_ten_or_twenty_questions_and_bulk_grading(self):
-        for count in (10, 20):
-            s = self.session(f'batch-{count}')
-            prepared = s.call(event_from_text('자료구조 공부하고 싶어', [{'id': 'course-1', 'name': '자료구조 (8218)'}]))
-            concepts = s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'concepts': [{
-                'concept': '이진 탐색', 'explanation': '정렬된 배열에서 탐색한다.', 'evidence': self.question()['evidence']}]}})
-            self.assertIn('문제 10개 풀기', concepts['nextCommands'])
-            with self.assertRaises(ValueError): s.call({'action': 'accept', 'replyTo': 'unrelated'})
-            prepared = s.call({'action': 'accept', 'replyTo': concepts['offerId'], 'settings': {'count': count}})
-            self.assertEqual(prepared['hostOnly']['settings']['mode'], 'quiz')
-            types = prepared['hostOnly']['settings']['types']
-            questions = [self.question(t, i) for i, t in enumerate(types, 1)]
-            public = s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': questions}})
-            self.assertEqual(len(public['questions']), count)
-            for q in public['questions']:
-                self.assertEqual(set(q), {'id', 'type', 'question', 'options'})
-            self.assertNotIn('explanation', json.dumps(public))
-            s.call({'action': 'hint', 'questionId': f'q{count}'})
-            answers = [{'questionId': q['id'], 'text': '1' if q['type'] == 'mcq' else '정렬된 리스트를 탐색'} for q in questions]
-            with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': answers[:-1]})
-            invalid = [*answers[:-1], answers[0]]
-            with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': invalid})
-            with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': [{**a, 'questionId': []} for a in answers]})
-            self.assertEqual(len(s.call({'action': 'status'})['questions']), count)
-            grading = s.call({'action': 'submit', 'answers': answers})
-            self.assertEqual(len(grading['hostOnly']['answers']), count * 2 // 5)
-            self.assertNotIn('feedback', grading)
-            grades = [{'questionId': q['id'], 'criteria': [{'criterion': '정렬 조건', 'met': True, 'feedback': '정렬 조건 충족'}]}
-                      for q in questions if q['type'] != 'mcq']
-            with self.assertRaises(ValueError): s.call({'action': 'grade_batch', 'gradeId': 'stale', 'grades': grades})
-            with self.assertRaises(ValueError): s.call({'action': 'grade_batch', 'gradeId': grading['gradeId'], 'grades': grades[:-1]})
-            final = s.call({'action': 'grade_batch', 'gradeId': grading['gradeId'], 'grades': grades})
-            self.assertEqual(final['summary']['counts']['correct'], count)
-            self.assertEqual(final['summary']['selfCorrect'], count - 1)
-            self.assertEqual(s.call({'action': 'status'})['counts']['correct'], count)
-
-    def test_batch_skip_reveal_and_atomic_invalid_answer(self):
-        s = self.session()
-        prepared = s.call({'action': 'request', 'selection': {'courseId': 'course-1'}, 'settings': {'count': 3, 'types': ['mcq'] * 3}})
-        s.call({'action': 'generate', 'requestId': prepared['requestId'], 'data': {'questions': [self.question(index=i) for i in (1, 2, 3)]}})
-        with self.assertRaises(ValueError): s.call({'action': 'submit', 'answers': [
-            {'questionId': 'q1', 'text': '1'}, {'questionId': 'q2', 'text': '9'}, {'questionId': 'q3', 'text': '1'}]})
-        self.assertEqual(len(s.call({'action': 'status'})['questions']), 3)
-        self.assertEqual(s.call({'action': 'reveal', 'questionId': 'q3'})['outcome'], 'revealed')
-        s.call({'action': 'skip', 'questionId': 'q1'})
-        final = s.call({'action': 'submit', 'answers': [{'questionId': 'q2', 'text': '2'}]})
-        self.assertEqual(final['summary']['counts'], {'correct': 0, 'incorrect': 1, 'partial': 0, 'skipped': 1, 'revealed': 1})
 
     def test_concept_followup_is_cleared_by_topic_change(self):
         s = self.session()

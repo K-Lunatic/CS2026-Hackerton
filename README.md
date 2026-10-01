@@ -94,13 +94,13 @@ codex plugin add university-agent@kku-university-agent-local
 macOS:
 
 ```bash
-python3 skills/university-agent/scripts/sync_tls.py
+python3 skills/university-agent/scripts/sync_tls.py --connect
 ```
 
 Windows:
 
 ```powershell
-py -3 skills/university-agent/scripts/sync_tls.py
+py -3 skills/university-agent/scripts/sync_tls.py --connect
 ```
 
 입력창을 표시할 수 없는 실행 환경에서는 별도 터미널에서 첫 연결을 진행해야 합니다.
@@ -167,7 +167,7 @@ py -3 skills/university-agent/scripts/sync_tls.py
 
 - PDF, PPT/PPTX, HWP/HWPX, DOC/DOCX, TXT/MD와 Java·Python·C/C++ 등 지원되는 텍스트·코드 파일.
 - 구형 HWP/DOC/PPT는 해당 변환 도구가 있어야 읽을 수 있습니다.
-- macOS PDF 추출은 PDFKit, Windows PDF 추출은 Poppler의 `pdftotext`를 사용합니다.
+- PDF는 공통 Python 추출기 `pypdf`를 우선 사용합니다. 설치: `python -m pip install -r skills/university-agent/requirements.txt` (Windows: `py -3 -m pip ...`). 실패·빈 본문은 설치된 Poppler, macOS PDFKit으로 재시도합니다. Windows는 Swift가 필요 없습니다.
 - 파일당 10MB 이하를 처리합니다. 이미지형 PDF의 OCR, 손상·암호화 문서는 지원을 보장하지 않습니다.
 - 직접 첨부 파일의 로컬 분석 경로는 PDF/PPTX/PPT/TXT/MD입니다. 학교 자료 읽기와 지원 범위가 다릅니다.
 - TLS의 명시적 다운로드 금지나 서버 거부가 있으면 파일을 가져오거나 분석하지 않습니다.
@@ -265,7 +265,7 @@ python3 -m unittest discover -s skills/university-agent/tests -v
 python3 -m unittest server.test_app server.test_local
 ```
 
-2026-10-02 기준 로컬 테스트 **97개 통과**. 임시 DB에서 단계별 파일 분석·재개·인용 검사·
+2026-10-02 기준 로컬 테스트 **106개 통과**. 임시 DB에서 단계별 파일 분석·재개·인용 검사·
 시험지 API·답안 저장·채점 상태를 검증했습니다. Safari에서는 테스트용 문항의 제출·채점 결과 표시도 확인했습니다.
 Windows 분기는 모의 테스트이며 실제 Windows 브라우저와 실제 학교 자료의 AI 출제 품질은
 아직 검증하지 않았습니다. 과거 검증 이력과 제한은 [검증 기록](skills/university-agent/references/project-tests.md)에 있습니다.

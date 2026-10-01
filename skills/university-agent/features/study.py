@@ -52,9 +52,7 @@ def event_from_text(text, courses):
             configured['count'] = int(count.group(1))
         if re.search(r'핵심\s*개념.*정리', text) or not re.search(r'문제|퀴즈', text):
             configured['mode'] = 'concepts'
-        if re.search(r'한\s*문제씩', text):
-            configured['delivery'] = 'single'
-        elif re.search(r'문제|퀴즈|모의\s*시험', text):
+        if re.search(r'문제|퀴즈|모의\s*시험', text):
             configured['delivery'] = 'web'
         kinds = [('mcq', '객관식'), ('short', '단답형'), ('essay', '서술형')]
         mentioned = [kind for kind, word in kinds if word in text]
@@ -73,12 +71,16 @@ def event_from_text(text, courses):
 
 
 def settings(raw):
-    value = {'count': 10, 'types': ['mcq', 'mcq', 'mcq', 'short', 'essay'] * 2, 'choices': 4, 'difficulty': '기본 개념', 'mode': 'quiz', 'delivery': 'batch'}
+    value = {'count': 10, 'types': ['mcq', 'mcq', 'mcq', 'short', 'essay'] * 2, 'choices': 4, 'difficulty': '기본 개념', 'mode': 'quiz', 'delivery': 'web'}
     if not isinstance(raw, dict) or set(raw) - set(value):
         raise ValueError('설정은 count/types/choices/difficulty/mode/delivery만 지원합니다.')
     if 'types' in raw and 'count' not in raw and isinstance(raw['types'], list):
         raw = {**raw, 'count': len(raw['types'])}
     value.update(raw)
+    if value['delivery'] not in ('batch', 'single', 'web'):
+        raise ValueError('모드나 난이도를 확인하세요.')
+    if value['mode'] == 'quiz':
+        value['delivery'] = 'web'  # New exams cannot silently fall back to chat.
     if type(value['count']) is not int or not 1 <= value['count'] <= 20:
         raise ValueError('문항 수는 1~20입니다.')
     if value['delivery'] == 'web' and 'types' not in raw:
@@ -187,7 +189,7 @@ def validate_generated(data, state):
 
 def current(state):
     if state['settings'].get('delivery') == 'web':
-        return {'status': 'questions', 'examId': state['examId'], 'total': len(state['questions']),
+        return {'status': 'questions', 'needsWeb': True, 'examId': state['examId'], 'total': len(state['questions']),
                 'answer': '시험지가 저장됐어요. 터틀넥 시험 화면을 열어 풀어보세요.'}
     if state['settings'].get('delivery') in ('batch', 'web'):
         done = {h['questionId'] for h in state['history']}

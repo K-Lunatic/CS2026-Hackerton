@@ -6,6 +6,9 @@ import os
 import argparse
 import re
 import sys
+import json
+import shlex
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
@@ -66,13 +69,37 @@ def _progress(step: int, total: int, message: str) -> None:
     print(f"[{step}/{total}] {message}", flush=True)
 
 
+def open_connection_terminal() -> None:
+    """Credentials are typed in a native terminal, never the host's captured PTY."""
+    command = [sys.executable, str(Path(__file__).resolve())]
+    if sys.platform == 'darwin':
+        # Terminal does not inherit the host's configured storage location.
+        env = [f'{key}={os.environ[key]}' for key in ('UNIVERSITY_AGENT_DB', 'UNIVERSITY_AGENT_USER_ID', 'TLS_BASE_URL', 'TLS_USERNAME') if key in os.environ]
+        shell_command = shlex.join(['env', *env, *command])
+        subprocess.run(['osascript', '-e', 'tell application "Terminal"', '-e',
+                        'activate', '-e', 'do script ' + json.dumps(shell_command), '-e', 'end tell'],
+                       check=True, stdout=subprocess.DEVNULL, timeout=30)
+    elif os.name == 'nt':
+        subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    else:
+        raise SystemExit('이 터미널에서 직접 실행해 주세요: ' + shlex.join(command))
+    print('연결창을 열었어요. 그 창에서 로그인을 마친 뒤 이 대화로 돌아와 주세요. 아직 연결 완료는 아니에요.', flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync KKU TLS data into the local SQLite database")
-    parser.parse_args()
+    parser.add_argument('--connect', action='store_true', help='Open a private native terminal for account connection')
+    args = parser.parse_args()
+    if args.connect:
+        try:
+            open_connection_terminal()
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise SystemExit('연결창을 자동으로 열지 못했어요. 직접 터미널에서 실행해 주세요: ' + subprocess.list2cmdline([sys.executable, str(Path(__file__).resolve())])) from exc
+        return
     try:
         username, password = resolve(os.environ.get("TLS_USERNAME"))
     except CredentialInputRequired as error:
-        raise SystemExit(str(error)) from error
+        raise SystemExit(str(error) + '\n연결창 열기: ' + subprocess.list2cmdline([sys.executable, str(Path(__file__).resolve()), '--connect'])) from error
     user_id = os.environ.get("UNIVERSITY_AGENT_USER_ID", username)
     db_path = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-agent" / "university.db"))
     session = MoodleSession(os.environ.get("TLS_BASE_URL", "https://tls.kku.ac.kr"))

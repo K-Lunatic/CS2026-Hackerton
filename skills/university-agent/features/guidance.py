@@ -58,7 +58,8 @@ def usage_guide(text: str = "") -> dict:
 def guidance_request(text: str) -> dict | None:
     if re.search(r"새로\s*고침|동기화|(?:TLS|학교|계정).{0,12}(?:연결|로그인)|(?:최신|다시).{0,8}(?:TLS|학사|제출|시청).{0,12}(?:확인|조회)", text, re.I):
         return {"toolCalls": [], "needsSync": True, "data": {"intent": "sync", "performed": False},
-                "answer": "학교 정보를 새로 확인한 뒤 요청한 내용을 다시 조회할게요. 최초 연결이라면 이 컴퓨터의 보안 입력창에서 로그인합니다. 비밀번호는 채팅에 입력하지 마세요."}
+                "nextCommands": ["python3 scripts/sync_tls.py --connect"],
+                "answer": "터틀넥 연결창을 열어드릴게요. 처음이라면 열린 터미널에 아이디와 비밀번호를 입력해 주세요. 비밀번호는 화면과 채팅에 표시되지 않아요."}
     if re.search(r"과제\s*(?:id|아이디)|저장.{0,12}(?:방법|어떻게)|(?:어떻게|방법).{0,12}저장", text, re.I):
         return {"toolCalls": [], "needsInput": True, "data": {"intent": "find-assignment"},
                 "answer": "‘과제 진행 상황 저장해줘’라고 말하면 대화 속 단서로 과제를 찾아드려요. 후보를 고르거나 직접 이름을 정한 뒤, 안내된 저장 명령을 한 번 보내면 됩니다. 과제 ID는 필요 없어요."}

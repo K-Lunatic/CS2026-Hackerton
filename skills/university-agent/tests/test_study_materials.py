@@ -9,16 +9,42 @@ from unittest.mock import patch
 
 from test_project import ProjectTestBase, snapshot, upsert
 from storage.local_db import LocalDatabase
-from features.study_materials import _docx_sections, _hwpx_sections, _pdf_sections, _text_sections, study_materials
+from features.study_materials import _docx_sections, _hwpx_sections, _pdf_sections, _text_sections, study_materials, attached_material
 
 
 class StudyMaterialsTests(ProjectTestBase):
     def test_windows_pdf_fallback_uses_pdftotext_pages(self):
         path = Path(self.temp.name) / 'lecture.pdf'
         path.write_bytes(b'%PDF-fixture')
-        with patch('features.study_materials.sys.platform', 'win32'), patch('features.study_materials.shutil.which', side_effect=lambda name: 'pdftotext.exe' if name == 'pdftotext' else None), patch('features.study_materials.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='첫 장\f둘째 장')):
+        with patch('features.study_materials.PdfReader', None), patch('features.study_materials.sys.platform', 'win32'), patch('features.study_materials.shutil.which', side_effect=lambda name: 'pdftotext.exe' if name == 'pdftotext' else None), patch('features.study_materials.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='첫 장\f둘째 장')):
             pages = _pdf_sections([path], Path('unused.swift'), Path(self.temp.name) / 'cache')
         self.assertEqual([page['location'] for page in pages[str(path.resolve())]], ['PDF p.1', 'PDF p.2'])
+
+    def test_pdf_fallback_and_missing_tool_are_not_misreported_as_scan(self):
+        pdf = self.files / 'course-1' / 'lecture.pdf'
+        pdf.write_bytes(self._pdf_with_text('Portable PDF'))
+        with patch('features.study_materials.PdfReader', side_effect=ValueError('bad font')), patch('features.study_materials.shutil.which', side_effect=lambda name: 'pdftotext' if name == 'pdftotext' else None), patch('features.study_materials.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='복구된 본문\f')):
+            self.assertEqual(attached_material(str(pdf))['sections'][0]['text'], '복구된 본문')
+        with patch('features.study_materials.PdfReader', None), patch('features.study_materials.shutil.which', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'pip install pypdf'):
+                attached_material(str(pdf))
+
+    def test_empty_reader_retries_other_engine(self):
+        pdf = self.files / 'course-1' / 'lecture.pdf'
+        pdf.write_bytes(self._pdf_with_text('Portable PDF'))
+        reader = SimpleNamespace(is_encrypted=False, pages=[SimpleNamespace(extract_text=lambda: '')])
+        with patch('features.study_materials.PdfReader', return_value=reader), patch('features.study_materials.shutil.which', side_effect=lambda name: 'pdftotext' if name == 'pdftotext' else None), patch('features.study_materials.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='대체 추출 성공')):
+            self.assertEqual(attached_material(str(pdf))['sections'][0]['text'], '대체 추출 성공')
+
+    def test_portable_reader_real_pdf_without_swift_or_poppler(self):
+        from features.study_materials import PdfReader
+        if PdfReader is None:
+            self.skipTest('Install requirements.txt to check portable PDF extraction')
+        pdf = self.files / 'course-1' / 'lecture.pdf'
+        pdf.write_bytes(self._pdf_with_text('Portable PDF'))
+        with patch('features.study_materials.sys.platform', 'win32'), patch('features.study_materials.shutil.which', return_value=None), patch('features.study_materials.subprocess.run') as run:
+            self.assertIn('Portable PDF', attached_material(str(pdf))['sections'][0]['text'])
+            run.assert_not_called()
 
     @staticmethod
     def _pdf_with_text(text):

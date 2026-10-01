@@ -14,6 +14,11 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
+
 
 def _normalize(value: str) -> str:
     return "".join(char for char in unicodedata.normalize("NFKC", value).casefold() if char.isalnum())
@@ -111,25 +116,49 @@ def _text_sections(path: Path) -> list[dict[str, str]]:
 
 
 def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path) -> dict[str, list[dict[str, str]]]:
-    swift = shutil.which("swift") if sys.platform == "darwin" else None
-    if swift:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run([swift, "-module-cache-path", str(cache_dir), str(script), *(str(path) for path in paths)], capture_output=True, text=True, timeout=120)
-        if result.returncode:
-            raise RuntimeError("PDF를 열지 못했습니다. 파일이 손상되었거나 암호화되어 있을 수 있습니다.")
-        decoded = json.loads(result.stdout)
-        return {str(Path(name).resolve()): pages for name, pages in decoded.items()}
-
     pdftotext = shutil.which("pdftotext")
-    if not pdftotext:
-        raise RuntimeError("PDF 읽기 도구가 없습니다. Windows에서는 Poppler의 pdftotext를 설치한 뒤 다시 시도해 주세요.")
+    swift = shutil.which("swift") if sys.platform == "darwin" else None
+    if not (PdfReader or pdftotext or swift):
+        raise RuntimeError("PDF 읽기 도구가 없어요. 같은 Python에서 python -m pip install pypdf를 실행한 뒤 다시 시도해 주세요. Windows에서도 Swift는 필요 없어요.")
     output: dict[str, list[dict[str, str]]] = {}
     for path in paths:
-        result = subprocess.run([pdftotext, "-layout", str(path), "-"], capture_output=True, text=True, timeout=120)
-        if result.returncode:
-            continue
-        output[str(path.resolve())] = [{"location": f"PDF p.{index}", "text": page.strip()}
-                                       for index, page in enumerate(result.stdout.split("\f"), 1) if page.strip()]
+        pages = []
+        succeeded = False
+        if PdfReader:
+            try:
+                reader = PdfReader(path)
+                if reader.is_encrypted:
+                    raise RuntimeError('암호화된 PDF는 자동으로 해제하지 않습니다.')
+                pages = [{"location": f"PDF p.{index}", "text": text.strip()}
+                         for index, page in enumerate(reader.pages, 1) if (text := page.extract_text()) and text.strip()]
+                succeeded = True
+            except Exception:
+                # Different readers handle broken fonts differently; do not label this OCR yet.
+                pass
+        if not pages and pdftotext:
+            try:
+                result = subprocess.run([pdftotext, "-enc", "UTF-8", "-layout", str(path), "-"], capture_output=True, text=True, encoding='utf-8', timeout=120)
+                if result.returncode == 0:
+                    pages = [{"location": f"PDF p.{index}", "text": page.strip()}
+                             for index, page in enumerate(result.stdout.split("\f"), 1) if page.strip()]
+                    succeeded = True
+            except (OSError, UnicodeError, subprocess.SubprocessError):
+                pass
+        if not pages and swift:
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                result = subprocess.run([swift, "-module-cache-path", str(cache_dir), str(script), str(path)], capture_output=True, text=True, encoding='utf-8', timeout=120)
+                if result.returncode == 0:
+                    decoded = json.loads(result.stdout)
+                    pages = decoded.get(str(path), [])
+                    succeeded = succeeded or str(path) in decoded
+            except (OSError, ValueError, subprocess.SubprocessError):
+                pass
+        if not pages:
+            if succeeded:
+                raise RuntimeError("여러 읽기 방법에서도 본문 글자가 나오지 않았어요. 이미지형 자료이거나 글자 정보가 없는 PDF일 수 있어요. OCR 또는 텍스트가 있는 원본이 필요합니다.")
+            raise RuntimeError("PDF 추출기가 파일을 열지 못했어요. 손상·암호화 또는 추출 도구 오류를 확인해 주세요. 스캔본이라고 단정할 수는 없어요.")
+        output[str(path.resolve())] = pages
     return output
 
 
@@ -176,7 +205,9 @@ def attached_material(path_text: str, *, title: str = "", max_chars: int = 30000
             sections = [{"location": f"줄 {number}", "text": line} for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1) if line.strip()]
         else:
             raise ValueError("PDF, PPTX, TXT, MD 파일만 첨부할 수 있습니다.")
-    except (OSError, UnicodeError, RuntimeError, json.JSONDecodeError, zipfile.BadZipFile, ET.ParseError, subprocess.SubprocessError) as exc:
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from exc
+    except (OSError, UnicodeError, json.JSONDecodeError, zipfile.BadZipFile, ET.ParseError, subprocess.SubprocessError) as exc:
         raise ValueError("첨부 파일의 본문을 읽지 못했습니다. 텍스트 파일이나 다른 자료를 골라주세요.") from exc
     usable = []
     remaining = max_chars
@@ -249,11 +280,13 @@ def study_materials(
     pdf_text: dict[str, list[dict[str, str]]] = {}
     if pdf_items:
         script = Path(__file__).resolve().parents[1] / "scripts" / "extract_pdf.swift"
-        try:
-            pdf_text = _pdf_sections([resolved[item["id"]] for item in pdf_items], script, files_root.parent / "cache" / "swift-modules")
-        except (json.JSONDecodeError, OSError, subprocess.SubprocessError, RuntimeError):
-            for item in pdf_items:
-                errors[item["id"]] = "PDF 텍스트를 읽지 못했습니다. 스캔본이면 OCR이 필요합니다."
+        for item in pdf_items:
+            try:
+                pdf_text.update(_pdf_sections([resolved[item["id"]]], script, files_root.parent / "cache" / "swift-modules"))
+            except RuntimeError as exc:
+                errors[item["id"]] = str(exc)
+            except (json.JSONDecodeError, OSError, subprocess.SubprocessError):
+                errors[item["id"]] = "PDF 읽기 도구 실행에 실패했어요. 파일 상태와 도구 설치를 확인해 주세요."
 
     materials = []
     remaining = max_chars

@@ -11,7 +11,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s skills/university-agen
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest server.test_app server.test_local
 ```
 
-- 로컬 Skill 테스트 **67개 통과**. 과목·과제·공지·강의·북마크·체크포인트·TLS
+- 로컬 Skill 테스트 **68개 통과**. 과목·과제·공지·강의·북마크·체크포인트·TLS
   모의 동기화에 더해 학습 제안, 직전 제안 동의, 명시적 요청, 대화별 상태, 자료 범위,
   첨부 TXT, PPTX 슬라이드, 실제 PDFKit 페이지 텍스트 추출, Windows PDF 대체 경로,
   DOCX/HWPX 본문 추출, 비표준 TLS 자료 페이지 처리, 출처 인용 검증,
@@ -20,7 +20,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest server.test_app server.test_local
   과제 체크포인트 명령과 제출 확인 등 기존 기능에 대한 모의 환경 검사다.
 - 전용 화면과 해당 실행 명령·테스트는 제거했다. 구 프로젝트·인수인계 DB 테이블은
   데이터 보존을 위해 남겼으며 삭제 마이그레이션은 실행하지 않았다.
-- 현재 저장소를 가리키는 로컬 Codex 마켓플레이스에 플러그인 0.2.2를 설치·활성화했다.
+- 현재 저장소를 가리키는 로컬 Codex 마켓플레이스에 플러그인 0.2.3을 설치·활성화했다.
   설치된 사본에서 실행기 도움말과 새 학습 코드·문서 존재, 제거된 실행기 부재를 확인했다.
 - AI JSON fixture는 구조·원문 인용·상태 전환 검사용이다. 실제 생성 AI의 의미적
   정확성이나 실제 시험 적합성을 검증한 결과가 아니다.
@@ -31,9 +31,10 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest server.test_app server.test_local
 모두 `PROHIBITED`로 기록돼 있었다. 최신 동기화를 격리된 임시 DB에서 실계정으로
 실행하다 TLS 자료 페이지의 비표준 마크업이 `NotImplementedError`를 내는 문제를
 발견해 수정했다. 수정 후 재실행은 성공했고 과목 7개, 자료 53개가
-`DOWNLOADED`로 저장됐다. 그중 실제 자료 하나에서 본문 107개 구간을 추출했다.
+`DOWNLOADED` 41개와 `PROHIBITED` 12개로 저장됐다. 그중 실제 자료 하나에서 본문 107개 구간을 추출했다.
 자료 이름과 본문은 로그에 출력하지 않았고 임시 파일은 검증 후 삭제했다.
-이어서 기존 로컬 학사 DB도 정상 동기화해 자료 53개가 `DOWNLOADED`가 됐다.
+이어서 기존 로컬 학사 DB도 정상 동기화해 자료 53개가 `DOWNLOADED` 41개와
+`PROHIBITED` 12개로 정리됐다.
 수동 과제·과제 체크포인트·북마크·레거시 프로젝트 기록은 동기화 전후 모두 0건으로
 건수가 유지됐다. 실제 자료 하나를 선택한 학습 세션은 `prepared`가 됐고,
 107개 출처 구간의 합계 30,000자를 호스트 AI용으로 준비했다.

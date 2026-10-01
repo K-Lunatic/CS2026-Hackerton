@@ -307,7 +307,8 @@ class StudySession:
         failures = [{'name': m['title'], 'reason': m['error']} for m in data['materials'] if m.get('error')]
         if not sources:
             prefix = result['answer'] if not data['materials'] else '읽은 본문이 없어 출제하지 않습니다.'
-            return {'status': 'selecting', 'failures': failures, 'answer': prefix + ' 다른 자료를 선택하거나 파일을 직접 첨부해주세요.'}
+            details = ''.join(f" {item['name']}: {item['reason']}" for item in failures)
+            return {'status': 'selecting', 'failures': failures, 'answer': prefix + details + ' 다른 자료를 선택하거나 파일을 직접 첨부해주세요.'}
         state.update(phase='prepared', sources=sources, requestId=secrets.token_hex(12))
         return self.generation_request(state, failures, data['truncated'])
 

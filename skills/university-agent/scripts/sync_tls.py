@@ -43,7 +43,16 @@ def _cached_resources(db_path: Path, user_id: str, file_root: Path) -> dict[str,
                 inside_root = path.resolve().is_relative_to(root)
             except (OSError, ValueError):
                 inside_root = False
-            if inside_root and path.is_file():
+            cached_mime = str(item.get("mimeType") or "").lower()
+            cached_extension = str(item.get("extension") or "").lower()
+            looks_like_html = False
+            if inside_root and path.is_file() and ("html" in cached_mime or cached_extension in {"html", "htm", "php", "unknown"}):
+                try:
+                    sample = path.read_bytes()[:4096].lstrip().lower()
+                    looks_like_html = b"<html" in sample or b"<!doctype" in sample or b"<a " in sample or b"<script" in sample or b"<body" in sample
+                except OSError:
+                    looks_like_html = True
+            if inside_root and path.is_file() and not looks_like_html:
                 cached[str(item.get("externalId", ""))] = item
         return cached
     except (OSError, RuntimeError):

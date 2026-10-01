@@ -1,6 +1,6 @@
 ---
 name: university-agent
-description: Query and manage university courses, notices, assignments, lectures, local PPT/PDF files, bookmarks, assignment context checkpoints, team project progress, and handovers through a provider-neutral local skill. Use for Korean student-workload questions; default data is Mock TLS and needs no API key.
+description: ChatGPT/Codex용 로컬 대학생활 Skill. 과목, 공지, 과제, 강의, 로컬 PPT/PDF, 북마크, 진행 기록과 인수인계를 관리한다. 별도 모델/API가 필요 없다.
 ---
 
 # University Agent
@@ -35,9 +35,7 @@ python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘
 python3 scripts/run_agent.py ask --text "과제 어디까지 했지?"
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
 python3 scripts/ingest_tls.py --input tls_snapshot.json
-# TLS owner: first sync logs in, then stores data and PPT/PDF files locally
-python3 scripts/sync_tls.py --remember
-# Later syncs reuse the username config and macOS Keychain password
+# TLS owner: saved credentials are reused; if absent, local hidden input is shown
 python3 scripts/sync_tls.py
 # Inspect one authenticated page if needed
 python3 scripts/tls_fetch.py --path /my/ --output /tmp/tls-my.html
@@ -64,8 +62,9 @@ The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answ
 - Analyze the returned `data.messages` as the calling AI, then run the same command with the same records/options, replacing `--prepare` with `--analysis-json '<generated JSON>'`. Use a safely quoted argument or call the Python functions to avoid shell interpolation. Only present the validated final `answer`.
 - With a configured API, omit `--prepare` and `--analysis-json` to perform a real remote call.
 - Preserve exact evidence and unknowns (`미정`, `확인 필요`), separate AI suggestions from recorded facts, and leave ambiguous/conflicting records as checks. Never claim a sample response or prepared prompt is a real API result.
-- `sync_tls.py --remember` stores only the username in `~/.university-agent/tls-account.json` (mode 600) and the password in macOS Keychain. The SQLite DB and logs never contain the password; cookies remain in memory.
+- If credentials are missing, `sync_tls.py` asks for the ID and hidden password in the local terminal. After a successful login it stores only the username in `~/.university-agent/tls-account.json` (mode 600) and the password in macOS Keychain. The password is never accepted from environment variables, returned as JSON, shown in output, or exposed to the calling ChatGPT/Codex model; cookies remain in memory.
 - TLS sync imports courses, notices, assignments, lectures, and PDF/PPT/PPTX resources. Downloaded files are stored below `~/.university-agent/files/`.
+- This project targets ChatGPT/Codex. Team-progress analysis is performed by the current caller through the prepare/validate flow; no new model-provider integration is planned.
 - Never expose provider secrets in output. If a real TLS adapter is added, keep it behind the contract in [references/provider-contract.md](references/provider-contract.md).
 
 This skill is deliberately local and dependency-free. Do not add a web app, API server, database server, MCP server, or AI SDK unless the user explicitly asks to expand beyond an installable Skill.

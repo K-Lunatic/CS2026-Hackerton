@@ -16,15 +16,17 @@ if str(ROOT) not in sys.path:
 
 from providers.moodle_provider import MoodleTLSProvider
 from providers.moodle_session import LoginError, MoodleSession
-from providers.credentials import resolve, save
+from providers.credentials import CredentialInputRequired, resolve, save
 from storage.local_db import LocalDatabase
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync KKU TLS data into the local SQLite database")
-    parser.add_argument("--remember", action="store_true", help="save username locally and password in macOS Keychain after login")
-    args = parser.parse_args()
-    username, password = resolve(os.environ.get("TLS_USERNAME"), os.environ.get("TLS_PASSWORD"))
+    parser.parse_args()
+    try:
+        username, password = resolve(os.environ.get("TLS_USERNAME"))
+    except CredentialInputRequired as error:
+        raise SystemExit(str(error)) from error
     user_id = os.environ.get("UNIVERSITY_AGENT_USER_ID", username)
     db_path = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-agent" / "university.db"))
     session = MoodleSession(os.environ.get("TLS_BASE_URL", "https://tls.kku.ac.kr"))
@@ -38,8 +40,7 @@ def main() -> None:
         resources = provider.get_resources(user_id)
     except (LoginError, URLError) as error:
         raise SystemExit(str(error)) from error
-    if args.remember:
-        save(username, password)
+    save(username, password)
     now = datetime.now(timezone.utc).isoformat()
     file_root = db_path.parent / "files"
     for item in resources:

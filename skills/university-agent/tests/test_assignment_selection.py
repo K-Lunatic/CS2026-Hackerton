@@ -61,6 +61,32 @@ class AssignmentSelectionTests(ProjectTestBase):
                 self.assertEqual([item['id'] for item in items], ['private-ex06'])
         self.assertEqual(find_similar_tls_assignments(self.db, 'fixture-user', 'Ex99 Java 과제'), [])
 
+    def test_similar_search_reads_one_snapshot_and_refreshes_each_request(self):
+        with patch.object(self.db, 'get_assignments', wraps=self.db.get_assignments) as assignments, \
+             patch.object(self.db, 'get_courses', wraps=self.db.get_courses) as courses:
+            before = self.db.connection.total_changes
+            found = find_similar_tls_assignments(self.db, 'fixture-user', '자바 Ex06')
+            self.assertEqual([item['id'] for item in found], ['private-ex06'])
+            assignments.assert_called_once_with('fixture-user')
+            courses.assert_called_once_with('fixture-user')
+            self.assertEqual(self.db.connection.total_changes, before)
+            self.db.connection.execute('UPDATE assignments SET title=? WHERE id=?', ('새 과제', 'private-ex06'))
+            self.db.connection.commit()
+            assignments.reset_mock()
+            courses.reset_mock()
+            self.assertEqual(find_similar_tls_assignments(self.db, 'fixture-user', 'Ex06'), [])
+            assignments.assert_called_once_with('fixture-user')
+            courses.assert_called_once_with('fixture-user')
+
+    def test_combined_selectors_keep_manual_fallback_and_empty_query_behavior(self):
+        manual = self.db.add_manual_assignment('fixture-user', '연습과제 - 배열')
+        found = find_assignments(self.db, 'fixture-user', {
+            'source': 'manual', 'query': '기타 배열', 'course': '기타 과제',
+            'title': '연습과제 - 배열', 'dueAt': '미정'})
+        self.assertEqual([item['id'] for item in found], [manual['id']])
+        for query in ('', '---', '  -  '):
+            self.assertEqual(find_assignments(self.db, 'fixture-user', {'query': query}), [])
+
     def test_filename_does_not_match_unrelated_generic_array_task(self):
         self.db.connection.execute('UPDATE assignments SET title=? WHERE id=?',
                                    ('연습과제 - 배열, 구조체, 포인터', 'private-cpp'))

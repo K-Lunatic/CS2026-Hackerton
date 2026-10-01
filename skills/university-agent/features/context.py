@@ -4,14 +4,24 @@ from typing import Any, Callable
 from datetime import datetime
 
 from providers.tls_provider import TLSProvider
-from features.assignments import get_assignments
+from features.assignments import filter_assignments
 from features.lectures import get_lectures
 from features.deadlines import SEOUL, deadline, format_deadline
 
 
 def get_current_context(provider: TLSProvider, user_id: str, bookmarks: Callable[[], list[dict[str, Any]]], *, now: datetime | None = None) -> dict[str, Any]:
     now = (now or datetime.now(SEOUL)).astimezone(SEOUL)
-    pending = get_assignments(provider, user_id, unsubmitted=True)
+    assignments = provider.get_assignments(user_id)
+    pending = filter_assignments(assignments, unsubmitted=True, now=now)
+    upcoming, overdue, undated = [], [], []
+    for item in pending:
+        due = deadline(item.get("dueAt"))
+        if due is None:
+            undated.append(item)
+        elif due >= now:
+            upcoming.append(item)
+        else:
+            overdue.append(item)
     user = provider.get_user(user_id)
     return {
         "user": user,
@@ -19,10 +29,10 @@ def get_current_context(provider: TLSProvider, user_id: str, bookmarks: Callable
         "lastSyncedAt": user.get("lastSyncedAt") if user else None,
         "dataSource": "local",
         "activeCourses": provider.get_courses(user_id),
-        "upcomingAssignments": [item for item in pending if (due := deadline(item.get("dueAt"))) is not None and due >= now],
-        "overdueAssignments": [item for item in pending if (due := deadline(item.get("dueAt"))) is not None and due < now],
-        "undatedAssignments": [item for item in pending if deadline(item.get("dueAt")) is None],
-        "unknownSubmissionAssignments": [item for item in provider.get_assignments(user_id) if item["submissionStatus"] == "UNKNOWN"],
+        "upcomingAssignments": upcoming,
+        "overdueAssignments": overdue,
+        "undatedAssignments": undated,
+        "unknownSubmissionAssignments": [item for item in assignments if item["submissionStatus"] == "UNKNOWN"],
         "unsubmittedAssignments": pending,
         "unfinishedLectures": get_lectures(provider, user_id, unfinished=True),
         "bookmarks": bookmarks(),

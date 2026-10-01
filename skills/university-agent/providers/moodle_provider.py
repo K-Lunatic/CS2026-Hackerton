@@ -97,6 +97,7 @@ class MoodleTLSProvider:
         self.session = session
         self._courses: list[dict[str, Any]] | None = None
         self._course_pages: dict[str, str] = {}
+        self._activity_links: dict[str, list[tuple[str, str]]] = {}
 
     @staticmethod
     def _links(html: str, *, only_activities: bool = False) -> list[tuple[str, str]]:
@@ -125,13 +126,19 @@ class MoodleTLSProvider:
             self._course_pages[external_id] = self.session.get(f"/course/view.php?id={external_id}")
         return self._course_pages[external_id]
 
+    def _course_activity_links(self, course: dict[str, Any]) -> list[tuple[str, str]]:
+        """Reuse parsed links for the lifetime of the cached course page."""
+        external_id = str(course["externalId"])
+        if external_id not in self._activity_links:
+            self._activity_links[external_id] = self._links(self._course_page(course), only_activities=True)
+        return self._activity_links[external_id]
+
     def get_assignments(self, user_id: str) -> list[dict[str, Any]]:
         courses = self.get_courses(user_id)
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         for course in courses:
-            html = self._course_page(course)
-            for href, title in self._links(html, only_activities=True):
+            for href, title in self._course_activity_links(course):
                 match = re.search(r"/mod/assign/view\.php\?id=(\d+)", href)
                 if not match or match.group(1) in seen:
                     continue
@@ -153,7 +160,7 @@ class MoodleTLSProvider:
             html = self._course_page(course)
             durations = _vod_durations(html)
             availability = _vod_availability(html)
-            for href, title in self._links(html, only_activities=True):
+            for href, title in self._course_activity_links(course):
                 match = re.search(r"/mod/vod/view\.php\?id=(\d+)", href)
                 if not match or match.group(1) in seen:
                     continue
@@ -171,8 +178,7 @@ class MoodleTLSProvider:
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         for course in self.get_courses(user_id):
-            course_html = self._course_page(course)
-            for href, title in self._links(course_html, only_activities=True):
+            for href, title in self._course_activity_links(course):
                 match = re.search(r"/mod/ubboard/view\.php\?id=(\d+)", href)
                 if not match or "공지" not in title or match.group(1) in seen:
                     continue

@@ -1,5 +1,6 @@
 """Deadline and conversation regressions using an isolated database."""
 from datetime import datetime
+from itertools import product
 from unittest.mock import patch
 
 from test_project import ProjectTestBase, snapshot, upsert
@@ -65,6 +66,53 @@ class AcademicStatusTests(ProjectTestBase):
         todo_ids = [i['id'] for course in self.db.get_todos('fixture-user') for i in course['items']]
         self.assertNotIn('LATE', todo_ids)
         self.assertIn('UNKNOWN', todo_ids)
+
+    def test_all_filter_combinations_preserve_order_and_input(self):
+        original = self.db.get_assignments('fixture-user')
+        manual = next(item['id'] for item in original if item['source'] == 'manual')
+        pending = ['old', 'monday', 'today', 'sunday', 'next-week', 'bad-date', manual]
+        expected_filters = [set(pending), {'today', 'sunday', 'next-week'},
+                            {'monday', 'today', 'sunday'}, {'old', 'monday'}]
+        for flags in product((False, True), repeat=4):
+            with self.subTest(flags=flags):
+                result = get_assignments(self.db, 'fixture-user', now=self.now,
+                                         **dict(zip(('unsubmitted', 'upcoming', 'this_week', 'overdue'), flags)))
+                if any(flags):
+                    expected = set(pending)
+                    for enabled, allowed in zip(flags, expected_filters):
+                        if enabled:
+                            expected &= allowed
+                    self.assertEqual([item['id'] for item in result], [key for key in pending if key in expected])
+                else:
+                    self.assertEqual(len(result), len(original))
+                    self.assertEqual({item['id'] for item in result}, {item['id'] for item in original})
+        self.assertEqual(self.db.get_assignments('fixture-user'), original)
+
+    def test_filtered_results_are_independent_and_equal_deadlines_are_stable(self):
+        items = [dict(id=key, title=key, dueAt=due, submissionStatus='NOT_SUBMITTED')
+                 for key, due in [('later', None), ('first', '2026-10-02'),
+                                  ('second', '2026-10-02'), ('invalid', 'bad')]]
+        with patch.object(self.db, 'get_assignments', return_value=items):
+            result = get_assignments(self.db, 'fixture-user', unsubmitted=True, now=self.now)
+        self.assertEqual([item['id'] for item in result], ['first', 'second', 'later', 'invalid'])
+        result[0]['title'] = 'changed'
+        self.assertEqual(items[1]['title'], 'first')
+
+    def test_status_requests_read_once_and_see_later_changes(self):
+        readers = [lambda: assignment_answer(self.db, 'fixture-user', '이번 주 과제', now=self.now)['data'],
+                   lambda: get_current_context(self.db, 'fixture-user', lambda: [], now=self.now)['unsubmittedAssignments']]
+        for read in readers:
+            with self.subTest(reader=read), patch.object(self.db, 'get_assignments', wraps=self.db.get_assignments) as getter:
+                before = self.db.connection.total_changes
+                self.assertIn('today', [item['id'] for item in read()])
+                getter.assert_called_once_with('fixture-user')
+                self.assertEqual(self.db.connection.total_changes, before)
+                self.db.connection.execute("UPDATE assignment_submissions SET submission_status='SUBMITTED' WHERE assignment_id='today'")
+                getter.reset_mock()
+                self.assertNotIn('today', [item['id'] for item in read()])
+                getter.assert_called_once_with('fixture-user')
+                self.db.connection.execute("UPDATE assignment_submissions SET submission_status='NOT_SUBMITTED' WHERE assignment_id='today'")
+                self.db.connection.commit()
 
     def test_conversation_routing_and_checkpoint_guards(self):
         with patch.object(run_agent, 'database', return_value=self.db), patch.object(run_agent, 'USER_ID', 'fixture-user'):

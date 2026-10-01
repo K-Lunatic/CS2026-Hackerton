@@ -19,13 +19,15 @@ cd ~/.codex/skills/university-agent
 python3 scripts/run_agent.py ask --text "아직 안 낸 과제 있어?"
 python3 scripts/run_agent.py context
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
-python3 scripts/run_agent.py ask --text '과제 저장 --과제ID assignment-network-5 --진행 "자료 3개 수집 완료" --완료항목 "자료 3개 수집" --막힘 "없음" --다음행동 "두 번째 자료의 통계를 본문에 넣기"'
+python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘"
 python3 scripts/run_agent.py ask --text '과제 불러오기 --과제ID assignment-network-5'
 python3 scripts/sync_tls.py
 python3 scripts/tls_fetch.py --path /my/ --output /tmp/tls-my.html
 ```
 
-자연어로 진행 상황 저장이나 복귀를 요청하면 명령 형식만 안내하며 DB를 읽거나 쓰지 않습니다. 저장 형식은 `과제 저장 --과제ID <id> --진행 "..." --막힘 "..." --다음행동 "..."`이고, 불러오기는 `과제 불러오기`입니다. 특정 기록은 불러오기 명령 뒤에 `--과제ID <id>`를 추가합니다.
+자연어로 저장이나 복귀를 요청하면 명령 형식만 안내하며 체크포인트 DB를 읽거나 쓰지 않습니다. 저장할 때 사용자는 `과제 저장 --과제ID <id>`만 입력하면 됩니다. ChatGPT/Codex Skill이 현재 대화에서 한국어 진행·막힘·다음 행동을 정리해 내부 JSON으로 전달하며, 이 Skill은 외부 AI에 체크포인트 생성을 요청하지 않습니다. 과제 ID는 DB에 등록된 과제에서 확인합니다. 대화에서 확인할 수 없는 내용은 지어내지 않고, 필요한 경우 사용자에게 물어봅니다.
+
+불러오기는 `과제 불러오기`이며, 특정 기록은 뒤에 `--과제ID <id>`를 추가합니다. 직접 CLI 실행은 대화 기록을 볼 수 없으므로 자동 요약하지 않습니다. 자동 저장 요약은 ChatGPT 또는 Codex에서 Skill을 통해 사용하세요.
 
 DB 기본 경로는 `~/.university-agent/university.db`입니다. `UNIVERSITY_AGENT_DB` 환경 변수로 현재 기기의 다른 로컬 경로를 지정할 수 있습니다.
 
@@ -38,8 +40,6 @@ python3 scripts/run_agent.py ask --text "팀플 진행 상황 정리해줘." --r
 ```
 
 호출 방법과 결과 구조는 [handover.md](skills/university-agent/references/handover.md)를 참고하세요. 분석 요청과 테스트용 응답은 실제 분석 결과로 취급하지 않습니다.
-
-상세 동작은 [skills/university-agent/SKILL.md](skills/university-agent/SKILL.md)에 있습니다. TLS 연동은 [provider-contract.md](skills/university-agent/references/provider-contract.md), 로컬 DB 구조는 [data-model.md](skills/university-agent/references/data-model.md)와 `skills/university-agent/database/schema.sql`을 참고하세요.
 
 ## 팀플 화면 실행
 

@@ -1,6 +1,6 @@
 # Provider contract and team split
 
-The default runner is Mock TLS so the Skill works immediately after installation. The TLS owner supplies data; feature owners only consume this contract.
+The default runner is Mock TLS so the Skill works immediately after installation. The TLS owner supplies data; feature owners only consume this contract. The database shape is documented in [data-model.md](data-model.md) and implemented in `database/schema.sql`.
 
 ```python
 class LMSProvider(Protocol):

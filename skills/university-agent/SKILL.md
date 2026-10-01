@@ -13,7 +13,7 @@ Use the bundled standard-library runner for every data lookup or mutation. Do no
 - Feature owners: add or edit one module under `features/` and consume `TLSProvider`; never call TLS endpoints directly from a feature.
 - The runner is composition only. Keep feature logic out of `scripts/run_agent.py`.
 
-Read [references/provider-contract.md](references/provider-contract.md) before changing the data shape.
+Read [references/provider-contract.md](references/provider-contract.md) and [references/data-model.md](references/data-model.md) before changing the data shape. The executable SQLite draft is `database/schema.sql`.
 
 ## Commands
 

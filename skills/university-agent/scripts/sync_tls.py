@@ -106,6 +106,9 @@ def main() -> None:
             continue
         if item.get("downloadStatus") == "DOWNLOADED" and item.get("localPath"):
             continue
+        if "_content" not in item:
+            print(f"원본 파일을 확인하지 못해 건너뜀: {course_names.get(item['courseId'], '과목')} / {item['title']} · {item.get('downloadReason', '파일을 저장하지 않았습니다.')}", flush=True)
+            continue
         content = item.pop("_content")
         safe_name = re.sub(r'[\\/:*?"<>|]+', "_", Path(item["fileName"]).name)
         target = file_root / item["courseId"] / safe_name

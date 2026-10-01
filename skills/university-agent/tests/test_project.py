@@ -20,7 +20,7 @@ from storage.local_db import LocalDatabase
 from providers import credentials
 from providers.forms import collect_local, FormUnavailable, redact, requested_schema, TLS_CREDENTIALS_FORM
 from providers.moodle_session import MoodleSession, LoginError, DownloadRestricted, check_download_url, _DownloadRedirectHandler
-from providers.moodle_provider import MoodleTLSProvider
+from providers.moodle_provider import MoodleTLSProvider, _plain_text
 from features.context import get_current_context
 from features.context_commands import parse_context_command
 
@@ -61,6 +61,9 @@ class FakeTLSSession:
             from urllib.error import HTTPError
             raise HTTPError(path, 403, 'Forbidden', None, BytesIO(b'blocked'))
         headers = Message(); headers['Content-Type'] = 'application/pdf'
+        if path.endswith('id=9'):
+            headers = Message(); headers['Content-Type'] = 'text/html'
+            return '<html><body>뷰어 페이지</body></html>'.encode(), SimpleNamespace(headers=headers, geturl=lambda: 'https://fixture.invalid/mod/ubfile/viewer.php?id=9')
         return b'%PDF-test-fixture', SimpleNamespace(headers=headers, geturl=lambda: 'https://fixture.invalid/test.pdf')
 
 
@@ -316,6 +319,7 @@ class ProjectTests(ProjectTestBase):
         session.pages['/mod/ubfile/view.php?id=9'] = '<a href="/mod/ubfile/viewer.php?id=9">열기</a>'
         item = MoodleTLSProvider(session).get_resources('u')[0]
         self.assertEqual(item['downloadStatus'], 'NOT_DOWNLOADED')
+        self.assertIn('HTML 문서 페이지', item['downloadReason'])
         self.assertEqual(session.byte_requests, ['/mod/ubfile/view.php?id=9'])
         session = FakeTLSSession()
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
@@ -324,6 +328,10 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(item['downloadStatus'], 'PROHIBITED')
         self.assertIn('강의실 자료 항목', item['downloadReason'])
         self.assertEqual(session.byte_requests, [])
+
+    def test_visible_download_text_ignores_hidden_and_malformed_markup(self):
+        html = '<span style="display:none">다운로드 금지</span><script>다운로드 금지</script><p>자료 설명</p><![if gte IE 9]><p>보이는 안내</p><![endif]>'
+        self.assertEqual(_plain_text(html), '자료 설명 보이는 안내')
 
     def test_expired_session_does_not_return_login_page_as_empty_records(self):
         session = MoodleSession()

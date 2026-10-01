@@ -59,8 +59,8 @@ class AssignmentSelectionTests(ProjectTestBase):
     def test_no_similar_tls_match_asks_which_route_applies(self):
         result = self.cli('assignment-find', '--query', 'CompletelyUnrelated', '--source', 'tls')
         self.assertEqual(result['data']['candidates'], [])
-        self.assertIn('TLS에 없는 과제인가요', result['answer'])
-        self.assertIn('TLS의 제목이 다른가요', result['answer'])
+        self.assertIn('학교 과제 목록에 없는 과제인가요', result['answer'])
+        self.assertIn('TLS에 표시된 제목이 다른가요', result['answer'])
         self.assertNotIn('save new', result['nextCommands'])
         self.assertEqual(self.checkpoints(), [])
 
@@ -123,6 +123,9 @@ class AssignmentSelectionTests(ProjectTestBase):
             result = self.cli('ask', '--text', '과제 저장 ' + query, '--checkpoint-json', self.payload)
             self.assertFalse(result['data']['performed'])
             self.assertEqual(result['data']['candidates'], [])
+            self.assertIn('관련 과제를 TLS에서 찾지 못했습니다.', result['answer'])
+            self.assertIn('TLS에 표시된 제목이 다른가요', result['answer'])
+            self.assertIn('목록에 없다면 저장할 제목을 정해 주세요.', result['answer'])
             self.assert_public(result)
         self.assertEqual(self.checkpoints(), [])
 

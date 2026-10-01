@@ -195,6 +195,9 @@ def ask(
     checkpoint_json: str | None = None,
     **options,
 ) -> dict[str, Any]:
+    if re.search(r"과제.{0,20}(?:등록|추가)|(?:등록|추가).{0,20}과제", text):
+        return {"toolCalls": [], "data": None, "needsInput": True,
+                "answer": "등록할 과제 제목을 알려주세요. 과목과 마감일은 선택 사항입니다. 확인된 값으로 assignment-add 명령을 실행할 수 있습니다."}
     checkpoint = _checkpoint_command(text, checkpoint_json=checkpoint_json)
     if checkpoint:
         return checkpoint
@@ -277,6 +280,15 @@ def main() -> None:
     assignment_parser = sub.add_parser("assignments")
     assignment_parser.add_argument("--unsubmitted", action="store_true")
     assignment_parser.add_argument("--upcoming", action="store_true")
+    manual_add = sub.add_parser("assignment-add", help="TLS에 없는 과제를 로컬에 등록")
+    manual_add.add_argument("--title", required=True)
+    manual_add.add_argument("--course-id")
+    manual_add.add_argument("--due-at")
+    manual_add.add_argument("--description")
+    manual_complete = sub.add_parser("assignment-complete", help="직접 등록한 과제를 완료 처리")
+    manual_complete.add_argument("--id", required=True)
+    manual_delete = sub.add_parser("assignment-delete", help="직접 등록한 과제를 삭제")
+    manual_delete.add_argument("--id", required=True)
     lecture_parser = sub.add_parser("lectures")
     lecture_parser.add_argument("--unfinished", action="store_true")
     sub.add_parser("notices")
@@ -315,6 +327,18 @@ def main() -> None:
             "toolCalls": ["get_assignments"],
             "data": get_assignments(database(), USER_ID, unsubmitted=args.unsubmitted, upcoming=args.upcoming),
         }
+    elif args.command == "assignment-add":
+        try:
+            item = database().add_manual_assignment(USER_ID, args.title, course_id=args.course_id, due_at=args.due_at, description=args.description)
+            result = {"toolCalls": ["add_manual_assignment"], "data": item, "answer": "과제를 등록했습니다."}
+        except ValueError as error:
+            result = {"toolCalls": ["add_manual_assignment"], "data": None, "error": {"code": "INVALID_ASSIGNMENT", "message": str(error)}, "answer": str(error)}
+    elif args.command == "assignment-complete":
+        done = database().complete_manual_assignment(USER_ID, args.id)
+        result = {"toolCalls": ["complete_manual_assignment"], "data": {"completed": done, "id": args.id}, "answer": "완료 처리했습니다." if done else "직접 등록한 과제를 찾지 못했습니다."}
+    elif args.command == "assignment-delete":
+        deleted = database().delete_manual_assignment(USER_ID, args.id)
+        result = {"toolCalls": ["delete_manual_assignment"], "data": {"deleted": deleted, "id": args.id}, "answer": "삭제했습니다." if deleted else "직접 등록한 과제를 찾지 못했습니다."}
     elif args.command == "lectures":
         result = {
             "toolCalls": ["get_lectures"],

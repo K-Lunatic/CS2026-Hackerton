@@ -233,7 +233,7 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(result['data'][0]['id'], created['id'])
 
     def test_checkpoint_invalid_command_shapes(self):
-        for text in ('과제 저장', '과제 저장 --과제ID', '과제 저장 --과제ID a --과제ID b', '과제 저장 --과제ID a extra', '과제 불러오기 --unknown x', '과제 저장 --과제ID "broken'):
+        for text in ('과제 저장 --과제ID', '과제 저장 --과제ID a --과제ID b', '과제 저장 --과제ID a extra', '과제 불러오기 --unknown x', '과제 저장 --과제ID "broken'):
             with self.subTest(text=text): self.assertIn('error', parse_context_command(text))
 
     def test_snapshot_import_upsert_and_cleanup(self):

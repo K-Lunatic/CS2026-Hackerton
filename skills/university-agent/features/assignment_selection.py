@@ -65,12 +65,27 @@ def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, s
 def find_similar_tls_assignments(provider: TLSProvider, user_id: str, query: str) -> list[dict[str, Any]]:
     """Show every plausible TLS candidate, including matches in its description."""
     items = find_assignments(provider, user_id, {"source": "tls"})
+    # An explicit exercise number overrides broad clues from prior problems.
+    # Keep Ex06 atomic instead of matching every exercise via "Ex".
+    exercises = re.findall(r"\bex\s*0*(\d+)\b", query, flags=re.I)
+    if exercises:
+        expected = {int(number) for number in exercises}
+        items = [item for item in items if expected.intersection(
+            int(number) for number in re.findall(
+                r"\bex\s*0*(\d+)\b", item["title"] + " " + (item.get("description") or ""), flags=re.I))]
+    else:
+        # Filenames are stronger clues than shared words like 배열/java.
+        filenames = re.findall(r"[\w+-]+\.(?:java|pdf|pptx?|docx?)\b", query, flags=re.I)
+        if filenames:
+            names = [normalize(re.sub(r"\.[^.]+$", "", name)) for name in filenames]
+            items = [item for item in items if any(name in normalize(
+                item["title"] + " " + (item.get("description") or "")) for name in names)]
     query = re.sub(r"\.(?:java|pdf|pptx?|docx?)\b", " ", query, flags=re.I).strip()
     if not query:
         return items
     exact_ids = {item["id"] for item in find_assignments(provider, user_id, {"source": "tls", "query": query})}
     expanded = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", query)
-    terms = [normalize(term) for term in re.findall(r"[A-Za-z]+(?:[+#]+)?|[가-힣]+|\d+", expanded)]
+    terms = [normalize(term) for term in re.findall(r"[A-Za-z]+\d*(?:[+#]+)?|[가-힣]+|\d+", expanded)]
     terms = [term for term in terms if len(term) >= 2]
     whole = normalize(query)
     ranked = []
@@ -78,7 +93,7 @@ def find_similar_tls_assignments(provider: TLSProvider, user_id: str, query: str
         title = normalize(item["title"])
         course = normalize(item["courseName"])
         description = normalize(item.get("description") or "")
-        score = 20 if item["id"] in exact_ids else 0
+        score = 20 if exercises or item["id"] in exact_ids else 0
         if whole and whole in title:
             score += 12
         elif whole and whole in description:

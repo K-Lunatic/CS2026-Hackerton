@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | TLS 동기화 | `users`, `courses`, `enrollments`, `assignments`, `lectures`, `notices`, `resources` | TLS 담당자 |
 | 사용자별 학업 상태 | `assignment_submissions`, `lecture_progress` | TLS 담당자 + 기능 담당자 소비 |
-| 서비스 기능 | `bookmarks`, `context_bookmarks`, `projects`, `project_members`, `project_tasks`, `handovers`, `handover_items` | 기능 담당자 |
+| 서비스 기능 | `manual_assignments`, `bookmarks`, `context_bookmarks`, `projects`, `project_members`, `project_tasks`, `handovers`, `handover_items` | 기능 담당자 |
 | 조회 조합 | `StudentContext` | 저장하지 않고 조회 시 생성 |
 
 ## 핵심 결정
@@ -30,6 +30,7 @@
 5. `StudentContext`는 중복 캐시 테이블로 만들지 않는다. 과제·강의·북마크·프로젝트 조회를 조합한다.
 6. 이 DB는 의도적으로 기기별 단일 저장소다. 기기 간 공유와 충돌 해결은 제공하지 않는다.
 7. 과제 Context Bookmark는 사용자가 보낸 정형 명령에서만 읽거나 쓴다. 저장은 진행 이력을 append-only로 남긴다.
+8. 직접 등록한 과제는 `manual_assignments`에 사용자별로 저장하며 TLS 재동기화에서 삭제하지 않는다. 과목과 마감일은 선택 사항이고, 완료 처리는 TLS 제출 상태를 변경하지 않는다.
 
 ## 기능팀이 받는 형태
 
@@ -52,6 +53,7 @@ TLS 담당자는 DB를 직접 노출하지 않고 `TLSProvider`가 아래처럼 
 ## 1차 기능 범위
 
 - 과제: 전체, 미제출, 임박한 과제
+- 일반 과제: TLS에 없는 과제를 직접 등록해 같은 과제·할 일 조회에 포함
 - 강의: 전체, 미시청, 진행률
 - 영상 시청 기간: 강의실에 표시된 시작·종료 시각만 `lectures.available_from`, `lectures.available_until`에 저장; 없는 값은 `NULL`
 - 할 일: 미제출 과제와 미완료 영상을 과목별로 조합해 조회하며 별도 테이블은 만들지 않음

@@ -50,6 +50,18 @@ CREATE TABLE IF NOT EXISTS assignment_submissions (
   PRIMARY KEY (assignment_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS manual_assignments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  due_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS lectures (
   id TEXT PRIMARY KEY,
   external_id TEXT NOT NULL,
@@ -168,6 +180,7 @@ CREATE TABLE IF NOT EXISTS handover_items (
 
 CREATE INDEX IF NOT EXISTS idx_assignments_course_due ON assignments(course_id, due_at);
 CREATE INDEX IF NOT EXISTS idx_submissions_user_status ON assignment_submissions(user_id, submission_status);
+CREATE INDEX IF NOT EXISTS idx_manual_assignments_user_due ON manual_assignments(user_id, due_at);
 CREATE INDEX IF NOT EXISTS idx_progress_user_completed ON lecture_progress(user_id, completed);
 CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_context_bookmarks_user_assignment ON context_bookmarks(user_id, assignment_id, id DESC);

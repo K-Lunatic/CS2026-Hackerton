@@ -7,8 +7,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
+from urllib.error import HTTPError
 
-from providers.moodle_session import MoodleSession
+from providers.moodle_session import MoodleSession, DownloadRestricted, check_download_url
 
 
 class _LinkParser(HTMLParser):
@@ -46,6 +47,49 @@ class _LinkParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.href is not None and not self.hidden:
             self.text.append(data)
+
+
+class _ActivityParser(HTMLParser):
+    """Collect each resource activity's visible text before fetching its file."""
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.items: list[dict[str, str]] = []
+        self.current: dict[str, Any] | None = None
+        self.li_depth = 0
+        self.anchor_text: list[str] = []
+        self.in_anchor = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "li":
+            classes = (values.get("class") or "").split()
+            if self.current is None and "activity" in classes:
+                self.current = {"href": "", "title": "", "text": []}
+                self.li_depth = 1
+            elif self.current is not None:
+                self.li_depth += 1
+        if self.current is not None and tag == "a" and not self.current["href"]:
+            self.current["href"] = values.get("href") or ""
+            self.anchor_text = []
+            self.in_anchor = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self.current is not None and self.in_anchor:
+            self.current["title"] = " ".join("".join(self.anchor_text).split())
+            self.anchor_text = []
+            self.in_anchor = False
+        if tag == "li" and self.current is not None:
+            self.li_depth -= 1
+            if self.li_depth == 0:
+                self.current["text"] = " ".join("".join(self.current["text"]).split())
+                self.items.append(self.current)
+                self.current = None
+
+    def handle_data(self, data: str) -> None:
+        if self.current is not None:
+            self.current["text"].append(data)
+            if self.in_anchor:
+                self.anchor_text.append(data)
 
 
 class MoodleTLSProvider:
@@ -135,17 +179,57 @@ class MoodleTLSProvider:
                     result.append({"id": f"tls-notice-{article.group(2)}", "externalId": article.group(2), "courseId": course["id"], "title": article_title or f"TLS notice {article.group(2)}", "content": content, "publishedAt": _find_datetime(text, ("작성일", "게시일", "등록일")) or "1970-01-01T00:00:00+09:00", "source": "tls"})
         return result
 
-    def get_resources(self, user_id: str) -> list[dict[str, Any]]:
+    def get_resources(self, user_id: str, notices: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
+        notices_by_course: dict[str, list[dict[str, Any]]] = {}
+        for notice in notices or []:
+            notices_by_course.setdefault(notice.get("courseId", ""), []).append(notice)
         for course in self.get_courses(user_id):
             course_html = self.session.get(f"/course/view.php?id={course['externalId']}")
-            for href, title in self._links(course_html, only_activities=True):
-                match = re.search(r"/mod/resource/view\.php\?id=(\d+)", href)
+            parser = _ActivityParser()
+            parser.feed(course_html)
+            for activity in parser.items:
+                href, title = activity["href"], activity["title"]
+                match = re.search(r"/mod/(?:resource|ubfile)/view\.php\?id=(\d+)", href)
                 if not match or match.group(1) in seen:
                     continue
                 seen.add(match.group(1))
-                content, response = self.session.get_bytes(href)
+                resource_id = match.group(1)
+                restriction = _download_restriction(activity["text"], title, notices_by_course.get(course["id"], []))
+                if not restriction:
+                    try:
+                        check_download_url(href)
+                        if "/mod/ubfile/view.php" in urlsplit(href).path:
+                            links = _LinkParser()
+                            links.feed(self.session.get(href))
+                            viewer = next((url for url, _ in links.links if urlsplit(url).path.endswith("/mod/ubfile/viewer.php")), None)
+                            if viewer:
+                                check_download_url(viewer)
+                            else:
+                                raise DownloadRestricted("문서 페이지에서 원본 다운로드 허용을 확인할 수 없어 가져오지 않았습니다.")
+                    except DownloadRestricted as error:
+                        restriction = str(error)
+                if restriction:
+                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
+                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
+                                   "fileName": title or f"resource-{resource_id}", "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
+                                   "mimeType": None, "remotePath": href, "source": "tls",
+                                   "downloadStatus": "PROHIBITED", "downloadReason": restriction})
+                    continue
+                try:
+                    content, response = self.session.get_bytes(href)
+                except (HTTPError, DownloadRestricted) as error:
+                    if isinstance(error, HTTPError):
+                        if error.code != 403:
+                            raise
+                        error.close()
+                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
+                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
+                                   "fileName": title or f"resource-{resource_id}", "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
+                                   "mimeType": None, "remotePath": href, "source": "tls",
+                                   "downloadStatus": "PROHIBITED", "downloadReason": str(error) if isinstance(error, DownloadRestricted) else "TLS 서버가 파일 다운로드를 거부했습니다. 파일 내용을 가져오지 않았습니다."})
+                    continue
                 final_path = unquote(urlsplit(response.geturl()).path)
                 mime_type = response.headers.get_content_type()
                 extension = Path(final_path).suffix.lower().lstrip(".")
@@ -154,8 +238,34 @@ class MoodleTLSProvider:
                 if extension not in {"pdf", "ppt", "pptx"}:
                     continue
                 file_name = Path(final_path).name or f"resource-{match.group(1)}.{extension}"
-                result.append({"id": f"tls-resource-{match.group(1)}", "externalId": match.group(1), "courseId": course["id"], "title": title or file_name, "fileName": file_name, "extension": extension, "mimeType": mime_type, "remotePath": href, "source": "tls", "_content": content})
+                result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id, "courseId": course["id"], "title": title or file_name, "fileName": file_name, "extension": extension, "mimeType": mime_type, "remotePath": href, "source": "tls", "downloadStatus": "NOT_DOWNLOADED", "_content": content})
         return result
+
+
+def _download_restriction(activity_text: str, title: str, notices: list[dict[str, Any]]) -> str | None:
+    patterns = (
+        r"(?:다운로드|다운받|내려받|저장)\s*(?:은|는|이|가|을|를)?\s*(?:금지|불가|제한|할\s*수\s*없|허용되지\s*않|하지\s*마|지\s*마|하면\s*안)",
+        r"(?:금지|불가|제한)\s*(?:된|되어)?\s*(?:다운로드|저장)",
+        r"(?:do\s+not\s+download|download(?:ing)?\s+(?:is\s+)?(?:prohibited|disabled|not\s+allowed|not\s+downloadable))",
+    )
+    exceptions = r"(?:다운로드|저장).{0,8}(?<!불)(?:가능|허용|할\s*수\s*있)|(?:금지|제한)(?:가|는|을)?\s*(?:아니|해제|하지\s*않)"
+
+    def restricted(text: str) -> bool:
+        return not re.search(exceptions, text, re.I) and any(re.search(pattern, text, re.I) for pattern in patterns)
+
+    if restricted(activity_text):
+        return "강의실 자료 항목에 다운로드 제한이 표시되어 파일을 가져오지 않았습니다."
+
+    normalized_title = re.sub(r"\s+", "", title).casefold()
+    for notice in notices:
+        notice_text = f"{notice.get('title', '')} {notice.get('content', '')}"
+        if not restricted(notice_text):
+            continue
+        notice_compact = re.sub(r"\s+", "", notice_text).casefold()
+        broad_rule = re.search(r"(?:모든|전체|전부)\s*(?:강의|수업)?\s*(?:자료|파일)|(?:강의|수업)(?:자료|파일)\s*(?:모두|전체|전부)", notice_text)
+        if (normalized_title and normalized_title in notice_compact) or broad_rule:
+            return "과목 공지에 해당 자료의 다운로드 제한이 있어 파일을 가져오지 않았습니다."
+    return None
 
 
 def _plain_text(html: str) -> str:

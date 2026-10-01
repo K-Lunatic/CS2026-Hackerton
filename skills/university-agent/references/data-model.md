@@ -33,6 +33,7 @@
    사용자 명령은 `과제 저장 자바 Ex05`처럼 과목명·과제 키워드를 사용한다. 이름 검색은 학사 데이터만 읽으며, 현재 사용자의 후보가 하나로 확정될 때 내부 ID에 연결한다. 여러 후보 또는 검색 실패 시 체크포인트를 읽거나 쓰지 않는다. 안내·후보·저장/불러오기 결과에는 내부 ID를 내보내지 않는다. 저장 스키마는 그대로 유지한다.
 8. 직접 등록한 과제는 `manual_assignments`에 사용자별로 저장하며 TLS 재동기화에서 삭제하지 않는다. 과목과 마감일은 선택 사항이고, 완료 처리는 TLS 제출 상태를 변경하지 않는다.
 9. 조회 컨텍스트의 `asOf`는 한국 시간 조회 시각, `lastSyncedAt`는 사용자 행의 마지막 TLS 가져오기 시각, `dataSource`는 `local`이다. `upcomingAssignments`, `overdueAssignments`, `undatedAssignments`는 미제출 과제를 마감으로 구분하고 `unknownSubmissionAssignments`는 제출 상태 미상 과제를 별도로 반환한다. 새 DB 테이블은 만들지 않는다.
+10. `resources.download_status`는 `NOT_DOWNLOADED`, `DOWNLOADED`, `PROHIBITED` 중 하나다. TLS 활동이나 해당 파일을 언급한 공지에서 명시적 다운로드 금지를 확인하면 파일 바이트를 요청하지 않고 `download_reason`을 보존한다. HTTP 403도 서버 거부로 기록한다. 학습 자료 생성은 `PROHIBITED` 파일을 열지 않고 사용자에게 알린다.
 
 ## 기능팀이 받는 형태
 

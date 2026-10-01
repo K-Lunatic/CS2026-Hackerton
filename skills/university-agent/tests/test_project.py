@@ -1,7 +1,7 @@
 """Project-wide offline integration tests. Never access real accounts or Keychain."""
 from contextlib import redirect_stdout, redirect_stderr
 from email.message import Message
-from io import StringIO
+from io import BytesIO, StringIO
 import json
 import os
 from pathlib import Path
@@ -11,7 +11,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from storage.local_db import LocalDatabase
 from providers import credentials
 from providers.forms import collect_local, FormUnavailable, redact, requested_schema, TLS_CREDENTIALS_FORM
-from providers.moodle_session import MoodleSession, LoginError
+from providers.moodle_session import MoodleSession, LoginError, DownloadRestricted, check_download_url, _DownloadRedirectHandler
 from providers.moodle_provider import MoodleTLSProvider
 from features.context import get_current_context
 from features.context_commands import parse_context_command
@@ -44,15 +44,20 @@ class FakeTLSSession:
     def __init__(self):
         self.pages = {
             '/local/ubion/user/': '<a href="/course/view.php?id=1">테스트 과목</a>',
-            '/course/view.php?id=1': ''.join(f'<li class="activity"><a href="/mod/{kind}/view.php?id={id}">{title}</a></li>' for kind, id, title in [('assign', 2, '테스트 과제'), ('vod', 3, '테스트 강의'), ('ubboard', 10, '공지사항'), ('resource', 5, '테스트 자료')]),
+            '/course/view.php?id=1': ''.join(f'<li class="activity"><a href="/mod/{kind}/view.php?id={id}">{title}</a></li>' for kind, id, title in [('assign', 2, '테스트 과제'), ('vod', 3, '테스트 강의'), ('ubboard', 10, '공지사항'), ('resource', 5, '테스트 자료')]) + '<li class="activity"><a href="/mod/resource/view.php?id=6">보충자료.pdf</a><span>다운로드 금지</span></li><li class="activity"><a href="/mod/resource/view.php?id=7">2주차 보충자료.pdf</a></li><li class="activity"><a href="/mod/resource/view.php?id=8">서버제한.pdf</a></li>',
             '/mod/assign/view.php?id=2': '<p>종료 일시: 2026-10-05 23:59</p><p>제출 완료</p>',
             '/mod/vod/viewer.php?id=3': '<span class="playtime">10:00</span><script>var is_progress = 50; var is_complete = 0;</script>',
             '/mod/ubboard/view.php?id=10': '<a href="/mod/ubboard/article.php?id=10&amp;bwid=11">공지</a>',
             '/mod/ubboard/article.php?id=10&bwid=11': '<div class="content">강의실 메뉴</div><div class="subject"><h3>테스트 공지</h3></div><div class="content"><div class="text_to_html"><p>실제 공지 내용</p></div></div><p>작성일: 2026-10-01 12:00</p>',
         }
+        self.byte_requests = []
     def get(self, path):
         return self.pages[path]
     def get_bytes(self, path):
+        self.byte_requests.append(path)
+        if path.endswith('id=8'):
+            from urllib.error import HTTPError
+            raise HTTPError(path, 403, 'Forbidden', None, BytesIO(b'blocked'))
         headers = Message(); headers['Content-Type'] = 'application/pdf'
         return b'%PDF-test-fixture', SimpleNamespace(headers=headers, geturl=lambda: 'https://fixture.invalid/test.pdf')
 
@@ -240,13 +245,22 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(db.connection.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_moodle_adapter_with_explicit_html_fixtures(self):
-        provider = MoodleTLSProvider(FakeTLSSession())
+        session = FakeTLSSession()
+        provider = MoodleTLSProvider(session)
         self.assertEqual(provider.get_courses('u')[0]['name'], '테스트 과목')
         self.assertEqual(provider.get_assignments('u')[0]['submissionStatus'], 'SUBMITTED')
         self.assertEqual(provider.get_lectures('u')[0]['watchedSeconds'], 300)
         self.assertEqual(provider.get_notices('u')[0]['title'], '테스트 공지')
         self.assertEqual(provider.get_notices('u')[0]['content'], '실제 공지 내용')
-        self.assertEqual(provider.get_resources('u')[0]['_content'], b'%PDF-test-fixture')
+        resources = provider.get_resources('u', notices=[{'courseId': 'tls-course-1', 'title': '2주차 파일 안내', 'content': '2주차 보충자료.pdf는 다운로드 금지입니다.'}])
+        self.assertEqual(resources[0]['_content'], b'%PDF-test-fixture')
+        prohibited = [item for item in resources if item['downloadStatus'] == 'PROHIBITED']
+        self.assertEqual(len(prohibited), 3)
+        self.assertTrue(all('_content' not in item for item in prohibited))
+        self.assertIn('다운로드 제한', prohibited[0]['downloadReason'])
+        self.assertIn('과목 공지', prohibited[1]['downloadReason'])
+        self.assertIn('서버가 파일 다운로드를 거부', prohibited[2]['downloadReason'])
+        self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8'])
 
     def test_moodle_requests_have_timeout(self):
         session = MoodleSession()
@@ -257,10 +271,35 @@ class ProjectTests(ProjectTestBase):
                     fetch('/course/view.php?id=1')
                 self.assertEqual(request.call_args.kwargs['timeout'], 30)
 
+    def test_download_url_and_viewer_restrictions_before_file_read(self):
+        check_download_url('https://fixture.invalid/test.pdf?forcedownload=0')
+        for url in ('https://fixture.invalid/test.pdf?allowDownload=false',
+                    'https://fixture.invalid/test.pdf?disableDownload=1',
+                    'https://fixture.invalid/mod/ubfile/viewer.php?id=9'):
+            with self.assertRaises(DownloadRestricted):
+                check_download_url(url)
+            response = Mock(geturl=lambda: url)
+            session = MoodleSession(); session.logged_in = True
+            with patch.object(session.opener, 'open', return_value=response):
+                with self.assertRaises(DownloadRestricted): session.get_bytes('/test.pdf')
+            response.read.assert_not_called()
+            response.close.assert_called_once()
+            redirect_body = Mock()
+            with self.assertRaises(DownloadRestricted):
+                _DownloadRedirectHandler().redirect_request(None, redirect_body, 302, '', {}, url)
+            redirect_body.close.assert_called_once()
+        session = FakeTLSSession()
+        session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
+        session.pages['/mod/ubfile/view.php?id=9'] = '<a href="/mod/ubfile/viewer.php?id=9">열기</a>'
+        item = MoodleTLSProvider(session).get_resources('u')[0]
+        self.assertEqual(item['downloadStatus'], 'PROHIBITED')
+        self.assertIn('허용을 확인할 수 없어', item['downloadReason'])
+        self.assertEqual(session.byte_requests, [])
+
     def test_expired_session_does_not_return_login_page_as_empty_records(self):
         session = MoodleSession()
         session.logged_in = True
-        response = SimpleNamespace(geturl=lambda: 'https://fixture.invalid/login/index.php')
+        response = Mock(geturl=lambda: 'https://fixture.invalid/login/index.php')
         with patch.object(session.opener, 'open', return_value=response), patch.object(session, '_decode', return_value='<input name="username">'):
             for fetch in (session.get, session.get_bytes):
                 with self.assertRaises(LoginError):

@@ -23,6 +23,12 @@ class LocalDatabase:
             for column in ("available_from", "available_until"):
                 if column not in lecture_columns:
                     self.connection.execute(f"ALTER TABLE lectures ADD COLUMN {column} TEXT")
+            resource_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(resources)")}
+            if "download_status" not in resource_columns:
+                self.connection.execute("ALTER TABLE resources ADD COLUMN download_status TEXT NOT NULL DEFAULT 'NOT_DOWNLOADED'")
+                self.connection.execute("UPDATE resources SET download_status='DOWNLOADED' WHERE local_path IS NOT NULL")
+            if "download_reason" not in resource_columns:
+                self.connection.execute("ALTER TABLE resources ADD COLUMN download_reason TEXT")
 
     def close(self) -> None:
         self.connection.close()
@@ -81,7 +87,7 @@ class LocalDatabase:
         for item in notices or []:
             db.execute("INSERT INTO notices(id, external_id, course_id, title, content, published_at, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, title=excluded.title, content=excluded.content, published_at=excluded.published_at, updated_at=excluded.updated_at", (item["id"], item.get("externalId", item["id"]), item.get("courseId"), item["title"], item.get("content", ""), item["publishedAt"], item.get("source", "tls"), now))
         for item in resources or []:
-            db.execute("INSERT INTO resources(id, external_id, course_id, title, file_name, extension, mime_type, remote_path, local_path, downloaded_at, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, title=excluded.title, file_name=excluded.file_name, extension=excluded.extension, mime_type=excluded.mime_type, remote_path=excluded.remote_path, local_path=excluded.local_path, downloaded_at=excluded.downloaded_at, updated_at=excluded.updated_at", (item["id"], item.get("externalId", item["id"]), item["courseId"], item["title"], item["fileName"], item["extension"], item.get("mimeType"), item["remotePath"], item.get("localPath"), item.get("downloadedAt"), item.get("source", "tls"), now))
+            db.execute("INSERT INTO resources(id, external_id, course_id, title, file_name, extension, mime_type, remote_path, local_path, downloaded_at, download_status, download_reason, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, title=excluded.title, file_name=excluded.file_name, extension=excluded.extension, mime_type=excluded.mime_type, remote_path=excluded.remote_path, local_path=excluded.local_path, downloaded_at=excluded.downloaded_at, download_status=excluded.download_status, download_reason=excluded.download_reason, updated_at=excluded.updated_at", (item["id"], item.get("externalId", item["id"]), item["courseId"], item["title"], item["fileName"], item["extension"], item.get("mimeType"), item["remotePath"], item.get("localPath"), item.get("downloadedAt"), item.get("downloadStatus", "DOWNLOADED" if item.get("localPath") else "NOT_DOWNLOADED"), item.get("downloadReason"), item.get("source", "tls"), now))
         db.commit()
 
     def get_courses(self, user_id: str) -> list[dict[str, Any]]:
@@ -151,7 +157,10 @@ class LocalDatabase:
         return [dict(row) for row in rows]
 
     def get_resources(self, user_id: str) -> list[dict[str, Any]]:
-        rows = self.connection.execute("SELECT r.id, r.course_id AS courseId, r.title, r.file_name AS fileName, r.extension, r.mime_type AS mimeType, r.remote_path AS remotePath, r.local_path AS localPath, r.downloaded_at AS downloadedAt, r.source FROM resources r JOIN enrollments e ON e.course_id=r.course_id AND e.user_id=? ORDER BY r.title", (user_id,))
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(resources)")}
+        status = "r.download_status" if "download_status" in columns else "CASE WHEN r.local_path IS NOT NULL THEN 'DOWNLOADED' ELSE 'NOT_DOWNLOADED' END"
+        reason = "r.download_reason" if "download_reason" in columns else "NULL"
+        rows = self.connection.execute(f"SELECT r.id, r.course_id AS courseId, r.title, r.file_name AS fileName, r.extension, r.mime_type AS mimeType, r.remote_path AS remotePath, r.local_path AS localPath, r.downloaded_at AS downloadedAt, {status} AS downloadStatus, {reason} AS downloadReason, r.source FROM resources r JOIN enrollments e ON e.course_id=r.course_id AND e.user_id=? ORDER BY r.title", (user_id,))
         return [dict(row) for row in rows]
 
     def list_bookmarks(self, user_id: str) -> list[dict[str, Any]]:

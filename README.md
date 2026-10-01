@@ -1,8 +1,8 @@
-# University Agent
+# 터틀넥
 
 대학생활 관리 기능을 두 방식으로 제공합니다.
 
-- **ChatGPT 웹·모바일:** 이 Mac에서 실행하는 로컬 게이트웨이에 HTTPS 터널로 연결합니다. 별도 호스팅 서버·도메인은 필요 없습니다. Mac에서 [University Agent.command](University%20Agent.command)를 더블클릭하고 Custom GPT Actions를 설정합니다. 휴대폰 사용자는 GPT 로그인 화면을 사용하며 Python을 실행하지 않습니다. [로컬 연결 안내](server/README.md)를 참고하세요. 실제 GPT 연결은 GPT ID와 Actions 설정이 필요합니다.
+- **ChatGPT 웹·모바일:** 이 Mac에서 실행하는 로컬 게이트웨이에 HTTPS 터널로 연결합니다. 별도 호스팅 서버·도메인은 필요 없습니다. Mac에서 [University Agent.command](University%20Agent.command)를 더블클릭하고 Custom GPT Actions를 설정합니다. 휴대폰 사용자는 GPT 로그인 화면을 사용하며 Python을 실행하지 않습니다. [로컬 연결 안내](server/README.md)를 참고하세요. 실제 GPT 연결은 GPT ID와 Actions 설정이 필요합니다. 강의 파일 학습 기능은 로컬 Codex 전용입니다.
 - **로컬 Codex:** 기존 플러그인과 현재 기기의 SQLite·macOS Keychain을 사용합니다. 아래 설치 안내는 이 모드에만 해당합니다.
 
 ## 처음 사용한다면
@@ -14,6 +14,7 @@
 - “이번 주 안 낸 과제 알려줘” — 이번 주 마감되는 미제출 과제를 확인합니다.
 - “할 일 추가해줘” — 제목을 물어보고, 과목·마감일은 아는 경우만 받습니다.
 - “팀플 진행 상황 정리해줘” — 회의 내용이나 작업 메모를 받아 정리합니다.
+- “자료구조 3주차 자료로 퀴즈 만들어줘” — 동기화한 강의 파일을 읽고 페이지·슬라이드 출처가 있는 학습 자료를 만듭니다.
 
 대화의 앞뒤 문맥은 Codex가 해석하고 필요한 기능을 선택합니다. 로컬 실행기는 정해진
 표현을 처리하는 보조 도구이며, 혼자서 모든 자연어를 이해하는 모델은 아닙니다.
@@ -21,7 +22,7 @@
 
 ## 로컬 플러그인 설치·테스트
 
-이 저장소를 받은 Mac에서 다음을 실행합니다. 설치 후 새 Codex 대화를 시작하고 `$university-agent`로 호출합니다.
+이 저장소를 받은 Mac에서 다음을 실행합니다. 설치 후 새 Codex 대화를 시작하고 `$turtleneck`으로 호출합니다.
 
 ```bash
 codex plugin marketplace add .
@@ -50,7 +51,11 @@ TLS 계정, 실제 DB, API 키는 플러그인에 포함되지 않습니다.
 cp -R skills/university-agent ~/.codex/skills/
 ```
 
-이후 `$university-agent`를 호출하거나 과제·강의·북마크·팀플 진행·인수인계를 자연어로 요청할 수 있습니다. 과제 Context Bookmark의 저장과 불러오기는 정해진 명령 형식을 다시 입력해야 실행됩니다.
+이후 `$turtleneck`을 호출하거나 과제·강의·북마크·팀플 진행·인수인계를 자연어로 요청할 수 있습니다. 강의 자료 학습 요청은 TLS 동기화로 내려받은 과목 PDF/PPT를 로컬에서 읽어 요약·핵심 개념·암기 카드·퀴즈를 만들며, 자료와 페이지/슬라이드 출처를 함께 표시합니다. 원본은 기기에 남지만, 생성에 필요한 추출 텍스트는 호출한 ChatGPT/Codex 모델에 전달됩니다. 과제 Context Bookmark의 저장과 불러오기는 정해진 명령 형식을 다시 입력해야 실행됩니다.
+
+TLS 강의실 항목이나 해당 파일을 지목한 공지에서 다운로드 금지를 감지하면 동기화 단계에서 파일을 요청하지 않고, 제외된 과목·자료명을 안내합니다. 금지 자료는 학습 자료 생성에서도 열지 않습니다.
+
+문서 페이지의 실제 링크와 리다이렉트 주소도 검사합니다. 다운로드 금지 플래그가 있는 주소는 차단하며, 자료구조에서 확인된 `ubfile/viewer.php` 뷰어 전용 자료는 원본 다운로드 허용이 확인되지 않아 제외합니다. 뷰어 전용 주소만으로 명시적 금지라고 단정하지 않으며, 제외 이유를 안내합니다. `forcedownload=0`은 화면 표시 옵션이므로 금지로 판단하지 않습니다.
 
 ## 직접 실행
 
@@ -61,6 +66,8 @@ python3 scripts/run_agent.py context
 python3 scripts/run_agent.py assignments --this-week
 python3 scripts/run_agent.py assignments --upcoming
 python3 scripts/run_agent.py assignments --overdue
+python3 scripts/run_agent.py study-materials --course "자료구조"
+python3 scripts/run_agent.py study-materials --course "자료구조" --resource "3주차"
 python3 scripts/run_agent.py ask --text "나.. 지금은 어때?"
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
 python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘"

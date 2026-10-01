@@ -18,7 +18,7 @@ Minimum record fields:
 - `Assignment`: `id`, `courseId`, `title`, `dueAt`, `submissionStatus`, `source`
 - `Lecture`: `id`, `courseId`, `title`, `durationSeconds`, `watchedSeconds`, `watchProgress`, `completed`, optional `availableFrom`, `availableUntil`, `source`
 - `Notice`: `id`, `courseId`, `title`, `content`, `publishedAt`, `source`
-- `Resource`: `id`, `courseId`, `title`, `fileName`, `extension`, `mimeType`, `remotePath`, `localPath`, `downloadedAt`, `source`
+- `Resource`: `id`, `courseId`, `title`, `fileName`, `extension`, `mimeType`, `remotePath`, `localPath`, `downloadedAt`, `downloadStatus`, `downloadReason`, `source`. `PROHIBITED` means an explicit TLS activity/notice rule matched or the TLS server returned HTTP 403; sync must not fetch file bytes, and study-material features must report the restriction rather than read a local copy.
 
 Use ISO-8601 timestamps with timezone offsets and the statuses `NOT_SUBMITTED`, `SUBMITTED`, `LATE`, or `UNKNOWN`.
 

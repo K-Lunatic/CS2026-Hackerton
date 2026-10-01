@@ -24,7 +24,7 @@ def usage_guide(text: str = "") -> dict:
 def guidance_request(text: str) -> dict | None:
     if re.search(r"과제\s*(?:id|아이디)|저장.{0,12}(?:방법|어떻게)|(?:어떻게|방법).{0,12}저장", text, re.I):
         return {"toolCalls": [], "needsInput": True, "data": {"intent": "find-assignment"},
-                "answer": "과목명이나 과제 제목의 일부로 고르면 됩니다. 예: ‘과제 저장 자바 Ex05’. 어떤 과제인지 알려주시면 맞는 이름을 찾아드릴게요. 여러 개가 일치하면 과제명과 마감일로 골라 주세요."}
+                "answer": "TLS 과제라면 save \"과제명\", TLS에 없는 과제라면 save new \"새 과제명\"을 입력해 주세요. 여러 TLS 과제가 일치하면 과제명과 마감일로 고를 수 있습니다."}
     if re.search(r"도움말|사용법|사용\s*방법|어떻게\s*(?:써|쓰|사용)|뭘\s*할\s*수|뭐\s*할\s*수|무슨\s*기능|처음이|처음\s*(?:써|사용)|기능.*알려", text):
         return usage_guide(text)
     if re.search(r"(?:과제|할\s*일).{0,20}(?:등록|추가)|(?:등록|추가).{0,20}(?:과제|할\s*일)", text):

@@ -10,6 +10,8 @@
 - “오늘 뭐 해야 해?” — 기한 지난 과제, 다음 마감과 급한 강의를 확인합니다.
 - “이번 주 안 낸 과제 알려줘” — 이번 주 마감되는 미제출 과제를 확인합니다.
 - “할 일 추가해줘” — 제목을 물어보고, 과목·마감일은 아는 경우만 받습니다.
+- “캡처한 과제 지금까지 한 것 저장해줘” — TLS에 없어도 제목을 정한 뒤 진행 기록을 저장합니다.
+- `list` — 저장된 미완성 과제를 모두 봅니다. 이 명령을 정확히 입력해야 목록을 읽습니다.
 - “팀플 진행 상황 정리해줘” — 회의 내용이나 작업 메모를 받아 정리합니다.
 - “자료구조 3주차 자료로 퀴즈 만들어줘” — 동기화한 강의 파일을 읽고 페이지·슬라이드 출처가 있는 학습 자료를 만듭니다.
 
@@ -64,12 +66,24 @@ cd ~/.codex/skills/university-agent
 # Windows에서는 각 줄의 python3를 py -3으로 바꿔 실행합니다.
 python3 scripts/run_agent.py ask --text "아직 안 낸 과제 있어?"
 python3 scripts/run_agent.py context
+python3 scripts/run_agent.py assignments --unsubmitted
+python3 scripts/run_agent.py assignments --this-week
+python3 scripts/run_agent.py assignments --upcoming
+python3 scripts/run_agent.py assignments --overdue
+python3 scripts/run_agent.py study-materials --course "자료구조"
+python3 scripts/run_agent.py study-materials --course "자료구조" --resource "3주차"
+python3 scripts/run_agent.py ask --text "나.. 지금은 어때?"
+python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
+python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘"
+python3 scripts/run_agent.py ask --text 'load "자바 Ex05"'
 python3 scripts/sync_tls.py
 ```
 
-자연어로 저장이나 복귀를 요청하면 명령 형식만 안내하며 체크포인트 DB를 읽거나 쓰지 않습니다. 이 규칙은 첫 사용부터 적용하며, `지금 이 대화를 북마크로 저장해줘`도 저장 명령 안내 대상입니다. 대화 내용을 일반 북마크나 파일로 대신 저장하지 않습니다. 실행기는 `CUSTOM` 북마크 생성을 거부하며, 기존 북마크 조회·삭제와 학업 대상 북마크 생성은 유지합니다. 저장할 때 사용자는 `과제 저장 자바 Ex05`처럼 과목명이나 과제 키워드를 입력하면 됩니다. 대화에 나온 이름으로 후보를 찾아 안내하고, 여러 개가 일치하면 과제명·마감일과 함께 선택할 명령을 보여줍니다. 실제 과제 ID는 사용자에게 표시하거나 입력하도록 요구하지 않습니다. ChatGPT/Codex Skill이 현재 대화에서 한국어 진행·막힘·다음 행동을 정리해 내부 JSON으로 전달하며, 이 Skill은 외부 AI에 체크포인트 생성을 요청하지 않습니다. 키워드는 현재 사용자의 등록된 과제에만 연결하며, 일치하는 과제가 없거나 여러 개이면 저장하지 않습니다. 대화에서 확인할 수 없는 내용은 지어내지 않고, 필요한 경우 사용자에게 물어봅니다.
+자연어로 저장이나 복귀를 요청하면 명령 형식만 안내하며 체크포인트 DB를 읽거나 쓰지 않습니다. 이 규칙은 첫 사용부터 적용하며, `지금 이 대화를 북마크로 저장해줘`도 저장 명령 안내 대상입니다. 대화 내용을 일반 북마크나 파일로 대신 저장하지 않습니다. 실행기는 `CUSTOM` 북마크 생성을 거부하며, 기존 북마크 조회·삭제와 학업 대상 북마크 생성은 유지합니다. TLS 과제에 연결하려면 `save "자바 Ex05"`, TLS에 없는 과제를 직접 등록하려면 `save new "캡처 문제 풀이"`를 입력합니다. `save new`로 이미 직접 등록한 같은 제목을 다시 저장하면 기존 과제에 진행 기록이 추가됩니다. 대화에 나온 이름으로 후보를 찾아 안내하고, 여러 개가 일치하면 과제명·마감일과 함께 선택할 명령을 보여줍니다. 실제 과제 ID는 사용자에게 표시하거나 입력하도록 요구하지 않습니다. ChatGPT/Codex Skill이 현재 대화에서 한국어 진행·막힘·다음 행동을 정리해 내부 JSON으로 전달하며, 이 Skill은 외부 AI에 체크포인트 생성을 요청하지 않습니다. 기존 과제 키워드가 일치하지 않거나 여러 개이면 저장하지 않습니다. 대화에서 확인할 수 없는 내용은 지어내지 않고, 필요한 경우 사용자에게 물어봅니다.
 
-불러오기는 `과제 불러오기`이며, 특정 기록은 `과제 불러오기 자바 Ex05`처럼 키워드를 덧붙입니다. `과제 저장 --과목 "과목명" --과제 "과제명"`처럼 구체적으로 선택할 수도 있습니다. 제목까지 같으면 안내된 마감일을 함께 지정하세요. 직접 CLI 실행은 대화 기록을 볼 수 없으므로 자동 요약하지 않습니다. 자동 저장 요약은 ChatGPT 또는 Codex에서 Skill을 통해 사용하세요.
+불러오기는 `load`이며, 특정 기록은 `load "자바 Ex05"`처럼 이름을 덧붙입니다. 후보가 겹치면 안내된 `--course`, `--title`, `--due` 명령으로 구분할 수 있습니다. 직접 CLI 실행은 대화 기록을 볼 수 없으므로 자동 요약하지 않습니다. 자동 저장 요약은 ChatGPT 또는 Codex에서 Skill을 통해 사용하세요.
+
+저장된 미완성 과제 전체는 `list`를 정확히 입력하면 볼 수 있습니다. 비슷한 표현에는 명령만 안내합니다. 모든 결과 뒤에는 이어서 사용할 수 있는 명령 목록이 나오며, `list` 뒤에는 각 과제를 불러오는 명령도 나옵니다. 직접 등록한 과제를 모두 마치면 제출 여부를 묻고 정확히 `예`라고 답했을 때만 저장 기록을 제거합니다. `아니요`나 다른 답변에는 기록을 유지합니다. TLS 과제는 동기화에서 제출 완료(`SUBMITTED` 또는 `LATE`)가 확인되면 제거합니다.
 
 DB 기본 경로는 `~/.university-agent/university.db`입니다. `UNIVERSITY_AGENT_DB` 환경 변수로 현재 기기의 다른 로컬 경로를 지정할 수 있습니다.
 

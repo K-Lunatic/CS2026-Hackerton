@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import shlex
 import unicodedata
 from typing import Any
 
@@ -27,6 +26,8 @@ def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, s
     courses = {course["id"]: course["name"] for course in provider.get_courses(user_id)}
     found = []
     for original in provider.get_assignments(user_id):
+        if "source" in selectors and original.get("source") != selectors["source"]:
+            continue
         item = dict(original, courseName=courses.get(original.get("courseId"), ""))
         course_label = item["courseName"] or "기타 과제"
         if "assignmentId" in selectors and item["id"] != selectors["assignmentId"]:
@@ -52,11 +53,16 @@ def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, s
 
 
 def selection_command(item: dict[str, Any], operation: str) -> str:
-    tokens = ["과제 저장" if operation == "save" else "과제 불러오기"]
-    tokens.extend(["--과목", shlex.quote(item.get("courseName") or "기타 과제")])
-    tokens.extend(["--과제", shlex.quote(item["title"])])
-    tokens.extend(["--마감", shlex.quote(item.get("dueAt") or "미정")])
+    tokens = ["save new" if operation == "save" and item.get("source") == "manual" else operation]
+    tokens.extend(["--course", _quoted(item.get("courseName") or "기타 과제")])
+    tokens.extend(["--title", _quoted(item["title"])])
+    tokens.extend(["--due", _quoted(item.get("dueAt") or "미정")])
     return " ".join(tokens)
+
+
+def _quoted(value: str) -> str:
+    import json
+    return json.dumps(value, ensure_ascii=False)
 
 
 def selection_guidance(items: list[dict[str, Any]], operation: str = "save") -> dict[str, Any]:
@@ -64,7 +70,7 @@ def selection_guidance(items: list[dict[str, Any]], operation: str = "save") -> 
     candidates = [dict(courseName=item["courseName"] or "기타 과제", title=item["title"],
                        dueAt=item.get("dueAt"), command=selection_command(item, operation)) for item in items]
     if not items:
-        intro = "일치하는 과제를 찾지 못했습니다. 과목명이나 과제 제목의 다른 단어로 다시 찾아 주세요."
+        intro = '일치하는 과제를 찾지 못했습니다. TLS 과제라면 다른 이름으로 save "과제명"을, 새 과제라면 save new "제목"을 입력해 주세요.'
     elif len(items) == 1:
         action = "저장" if operation == "save" else "불러오기"
         intro = f"해당 과제를 찾았습니다. 진행 기록의 {action}을 요청하려면 아래 명령을 보내 주세요."

@@ -54,9 +54,9 @@ class GatewayTests(unittest.TestCase):
         self.provider.stop()
         self.temp.cleanup()
 
-    def request(self, path, method='GET', fields=None, bearer=None, query=None, extra=None):
-        raw = urlencode(fields or {}).encode()
-        env = {'REQUEST_METHOD': method, 'PATH_INFO': path, 'QUERY_STRING': urlencode(query or {}), 'CONTENT_TYPE': 'application/x-www-form-urlencoded', 'CONTENT_LENGTH': str(len(raw)), 'wsgi.input': io.BytesIO(raw)}
+    def request(self, path, method='GET', fields=None, bearer=None, query=None, extra=None, json_body=None):
+        raw = json.dumps(json_body, ensure_ascii=False).encode() if json_body is not None else urlencode(fields or {}).encode()
+        env = {'REQUEST_METHOD': method, 'PATH_INFO': path, 'QUERY_STRING': urlencode(query or {}), 'CONTENT_TYPE': 'application/json' if json_body is not None else 'application/x-www-form-urlencoded', 'CONTENT_LENGTH': str(len(raw)), 'wsgi.input': io.BytesIO(raw)}
         if bearer:
             env['HTTP_AUTHORIZATION'] = 'Bearer ' + bearer
         env.update(extra or {})
@@ -176,6 +176,74 @@ class GatewayTests(unittest.TestCase):
         ticket = self.authorize()
         self.assertEqual(self.request('/oauth/login', 'POST', {'ticket': ticket, 'username': 'alice', 'password': 'fixture-password'}, extra={'HTTP_ORIGIN': 'https://evil.invalid'})['status'], 403)
         self.assertEqual(self.request('/oauth/token', 'POST', extra={'CONTENT_LENGTH': '999999'})['status'], 413)
+
+    def test_new_screenshot_assignment_checkpoint_list_load_and_completion(self):
+        token = self.connect('alice')['access_token']
+        exact = {'userMessage': '과제 목록 불러오기'}
+        self.assertEqual(self.request('/v1/checkpoints', bearer=token, query=exact)['body']['data'], [])
+        for command in ('과제 목록 불러와', '과제 목록 불러오기 ', '저장한 과제 목록 보여줘'):
+            self.assertEqual(self.request('/v1/checkpoints', bearer=token, query={'userMessage': command})['status'], 400)
+        payload = {'command': '과제 저장 --새과제 "캡처 문제 풀이"', 'progress': '절반 풀이 완료',
+                   'blocker': '대화에서 확인되지 않음', 'nextAction': 'AI 제안: 남은 문제 풀기', 'completedItems': ['1번 풀이']}
+        saved = self.request('/v1/checkpoint', 'POST', bearer=token, json_body=payload)
+        self.assertEqual(saved['status'], 201)
+        self.assertEqual(saved['body']['data']['assignmentTitle'], '캡처 문제 풀이')
+        listed = self.request('/v1/checkpoints', bearer=token, query=exact)
+        self.assertEqual(listed['body']['total'], 1)
+        self.assertEqual(listed['body']['data'][0]['progress'], '절반 풀이 완료')
+        loaded = self.request('/v1/checkpoint', bearer=token, query={'command': '과제 불러오기 캡처 문제'})
+        self.assertEqual(loaded['body']['data'], saved['body']['data'])
+        self.assertEqual(self.request('/v1/checkpoint', bearer=token, query={'command': '캡처 문제 불러와'})['status'], 400)
+        assignment = next(item for item in self.request('/v1/assignments', bearer=token)['body']['data'] if item['title'] == '캡처 문제 풀이')
+        for answer in (None, '아니요', '응', '예 '):
+            payload = {'assignmentId': assignment['id']}
+            if answer is not None:
+                payload['submissionAnswer'] = answer
+            response = self.request('/v1/assignments/complete', 'POST', bearer=token, json_body=payload)
+            self.assertEqual(response['status'], 200 if answer == '아니요' else 400)
+            self.assertEqual(self.request('/v1/checkpoints', bearer=token, query=exact)['body']['total'], 1)
+        completed = self.request('/v1/assignments/complete', 'POST', bearer=token,
+                                 json_body={'assignmentId': assignment['id'], 'submissionAnswer': '예'})
+        self.assertTrue(completed['body']['completed'])
+        self.assertEqual(self.request('/v1/checkpoints', bearer=token, query=exact)['body']['data'], [])
+        self.assertIsNone(self.request('/v1/checkpoint', bearer=token, query={'command': '과제 불러오기 캡처 문제'})['body']['data'])
+
+    def test_checkpoint_user_isolation_and_invalid_save_has_no_assignment(self):
+        alice, bob = self.connect('alice')['access_token'], self.connect('bob')['access_token']
+        payload = {'command': '과제 저장 --새과제 "개인 과제"', 'progress': '초안 작성',
+                   'blocker': '대화에서 확인되지 않음', 'nextAction': 'AI 제안: 검토'}
+        self.assertEqual(self.request('/v1/checkpoint', 'POST', bearer=alice, json_body={**payload, 'command': '지금 과제 저장해줘'})['status'], 400)
+        self.assertEqual(self.request('/v1/checkpoint', 'POST', bearer=alice, json_body={**payload, 'nextAction': ''})['status'], 400)
+        self.assertEqual(self.request('/v1/assignments', bearer=alice)['body']['total'], 1)
+        self.assertEqual(self.request('/v1/checkpoint', 'POST', bearer=alice, json_body=payload)['status'], 201)
+        self.assertEqual(self.request('/v1/checkpoints', bearer=bob, query={'userMessage': '과제 목록 불러오기'})['body']['data'], [])
+
+    def test_english_checkpoint_commands_and_followup_choices(self):
+        token = self.connect('alice')['access_token']
+        summary = {'progress': '입력 처리 완료', 'blocker': '대화에서 확인되지 않음', 'nextAction': 'AI 제안: 검토'}
+        tls = self.request('/v1/checkpoint', 'POST', bearer=token,
+                           json_body={'command': 'save "alice assignment"', **summary})
+        self.assertEqual(tls['status'], 201)
+        self.assertEqual(tls['body']['data']['assignmentTitle'], 'alice assignment')
+        self.assertIn('list', tls['body']['nextCommands'])
+
+        self.assertEqual(self.request('/v1/checkpoint', 'POST', bearer=token,
+                                      json_body={'command': 'save "개인 과제"', **summary})['status'], 409)
+        manual = self.request('/v1/checkpoint', 'POST', bearer=token,
+                              json_body={'command': 'save new "개인 과제"', **summary})
+        self.assertEqual(manual['status'], 201)
+        again = self.request('/v1/checkpoint', 'POST', bearer=token,
+                             json_body={'command': 'save new "개인 과제"', **summary})
+        self.assertEqual(again['status'], 201)
+        assignments = self.request('/v1/assignments', bearer=token)['body']['data']
+        self.assertEqual(len([item for item in assignments if item['title'] == '개인 과제']), 1)
+
+        listed = self.request('/v1/checkpoints', bearer=token, query={'userMessage': 'list'})
+        self.assertEqual(listed['body']['total'], 2)
+        self.assertIn('load "개인 과제"', listed['body']['nextCommands'])
+        self.assertEqual(self.request('/v1/checkpoint', bearer=token,
+                                      query={'command': 'load "개인 과제"'})['body']['data'], again['body']['data'])
+        self.assertIn('nextCommands', self.request('/v1/lectures', bearer=token)['body'])
 
 
 if __name__ == '__main__':

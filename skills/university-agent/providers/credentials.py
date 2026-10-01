@@ -4,16 +4,15 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
-from getpass import getpass
 from pathlib import Path
+
+from providers.forms import FormUnavailable, TLS_CREDENTIALS_FORM, collect_local
 
 SERVICE = "university-agent/tls"
 CONFIG_PATH = Path.home() / ".university-agent" / "tls-account.json"
 
 
-class CredentialInputRequired(RuntimeError):
-    pass
+CredentialInputRequired = FormUnavailable
 
 
 def save(username: str, password: str) -> None:
@@ -43,6 +42,5 @@ def resolve(username: str | None = None) -> tuple[str, str]:
         stored_username, stored_password = "", ""
     if stored_username and stored_password and (not username or username == stored_username):
         return username or stored_username, stored_password
-    if not sys.stdin.isatty() or not sys.stderr.isatty():
-        raise CredentialInputRequired("TLS credentials are not saved. Run sync_tls.py in a local terminal to enter them securely.")
-    return username or stored_username or input("TLS username: "), getpass("TLS password: ")
+    values = collect_local(TLS_CREDENTIALS_FORM, initial={"username": username or stored_username})
+    return values["username"], values["password"]

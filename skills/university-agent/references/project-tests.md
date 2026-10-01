@@ -11,7 +11,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s skills/university-agen
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest server.test_app server.test_local
 ```
 
-- 로컬 Skill 테스트 **68개 통과**. 과목·과제·공지·강의·북마크·체크포인트·TLS
+- 로컬 Skill 테스트 **71개 통과**. 과목·과제·공지·강의·북마크·체크포인트·TLS
   모의 동기화에 더해 학습 제안, 직전 제안 동의, 명시적 요청, 대화별 상태, 자료 범위,
   첨부 TXT, PPTX 슬라이드, 실제 PDFKit 페이지 텍스트 추출, Windows PDF 대체 경로,
   DOCX/HWPX 본문 추출, 비표준 TLS 자료 페이지 처리, 출처 인용 검증,

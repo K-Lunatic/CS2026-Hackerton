@@ -1,0 +1,43 @@
+---
+name: university-agent
+description: Query and manage university assignments, lectures, bookmarks, and project handovers through a provider-neutral local skill. Use for Korean student-workload questions; default data is Mock TLS and needs no API key.
+---
+
+# University Agent
+
+Use the bundled standard-library runner for every data lookup or mutation. Do not invent a response from the mock data when the runner can return the result.
+
+## Team boundary
+
+- TLS integration owner: implement the `TLSProvider` contract in `providers/tls_provider.py`. Replace `MockTLSProvider` only after the real response mapping is verified.
+- Feature owners: add or edit one module under `features/` and consume `TLSProvider`; never call TLS endpoints directly from a feature.
+- The runner is composition only. Keep feature logic out of `scripts/run_agent.py`.
+
+Read [references/provider-contract.md](references/provider-contract.md) before changing the data shape.
+
+## Commands
+
+Run from this skill directory:
+
+```bash
+python3 scripts/run_agent.py ask --text "아직 안 낸 과제 있어?"
+python3 scripts/run_agent.py context
+python3 scripts/run_agent.py assignments --unsubmitted
+python3 scripts/run_agent.py lectures --unfinished
+python3 scripts/run_agent.py bookmarks
+python3 scripts/run_agent.py bookmark-add --target-type ASSIGNMENT --target-id assignment-network-5 --note "이번 주 우선"
+python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
+```
+
+The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answer`. Use the answer directly when it is sufficient; otherwise summarize the returned data without changing dates or status.
+
+## Behavior
+
+- Default user is `홍길동` in `컴퓨터공학과`; default source is Mock TLS.
+- Every feature receives the same provider-shaped records, so a feature can be developed against Mock TLS while the TLS owner works independently.
+- `ask` routes Korean intent to the same command handlers used by direct commands, so demo flows do not use hardcoded chat-only responses.
+- Bookmark mutations persist to `UNIVERSITY_AGENT_STATE` when set, or `~/.university-agent/state.json` otherwise. Read the result after a mutation.
+- Handover extraction is intentionally conservative and returns a structured draft. Preserve uncertain text in `notes` instead of claiming it is completed.
+- Never expose provider secrets in output. If a real TLS adapter is added, keep it behind the contract in [references/provider-contract.md](references/provider-contract.md).
+
+This skill is deliberately local and dependency-free. Do not add a web app, API server, database, MCP server, or AI SDK unless the user explicitly asks to expand beyond an installable Skill.

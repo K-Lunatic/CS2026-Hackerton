@@ -50,8 +50,8 @@ def main() -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
         item.update(localPath=str(target), downloadedAt=now)
-    database = LocalDatabase(db_path, seed_mock=False)
-    database.upsert_tls_snapshot(user_id, courses, assignments, lectures, username, "", now, notices, resources)
+    database = LocalDatabase(db_path)
+    database.upsert_tls_snapshot(user_id, courses, assignments, lectures, username, None, now, notices, resources)
     database.close()
     print(f"synced courses={len(courses)} assignments={len(assignments)} lectures={len(lectures)} notices={len(notices)} resources={len(resources)}")
 

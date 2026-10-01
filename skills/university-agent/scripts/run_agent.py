@@ -28,7 +28,7 @@ from storage.local_db import LocalDatabase
 try:
     default_user_id = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))["username"]
 except (OSError, ValueError, KeyError):
-    default_user_id = "user-hong"
+    default_user_id = ""
 USER_ID = os.environ.get("UNIVERSITY_AGENT_USER_ID", default_user_id)
 DB_PATH = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-agent" / "university.db")).expanduser()
 DB: LocalDatabase | None = None
@@ -37,8 +37,14 @@ DB: LocalDatabase | None = None
 def database() -> LocalDatabase:
     """Open the device database only when a command actually needs it."""
     global DB
+    if not USER_ID:
+        raise SystemExit("TLS 계정이 없습니다. python3 scripts/sync_tls.py를 먼저 실행하거나 UNIVERSITY_AGENT_USER_ID를 지정하세요.")
     if DB is None:
         DB = LocalDatabase(DB_PATH)
+        if DB.get_user(USER_ID) is None:
+            DB.close()
+            DB = None
+            raise SystemExit("이 사용자의 학사 데이터가 없습니다. python3 scripts/sync_tls.py로 먼저 동기화하세요.")
     return DB
 
 

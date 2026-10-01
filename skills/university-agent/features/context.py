@@ -10,12 +10,10 @@ from features.lectures import get_lectures
 def get_current_context(provider: TLSProvider, user_id: str, bookmarks: Callable[[], list[dict[str, Any]]]) -> dict[str, Any]:
     pending = get_assignments(provider, user_id, unsubmitted=True)
     return {
-        "user": {"id": user_id, "name": "홍길동", "department": "컴퓨터공학과"},
+        "user": provider.get_user(user_id),
         "activeCourses": provider.get_courses(user_id),
         "upcomingAssignments": pending,
         "unsubmittedAssignments": pending,
         "unfinishedLectures": get_lectures(provider, user_id, unfinished=True),
         "bookmarks": bookmarks(),
-        "activeProjects": [],
-        "pendingProjectTasks": [],
     }

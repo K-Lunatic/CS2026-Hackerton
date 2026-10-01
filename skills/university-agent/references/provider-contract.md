@@ -1,11 +1,12 @@
 # Provider contract and team split
 
-The default runner is Mock TLS so the Skill works immediately after installation. The TLS owner supplies data; feature owners only consume this contract. With no server or cross-device sync layer, `sync_tls.py` logs into KKU TLS and imports normalized data into the current device's local SQLite DB. The database shape is documented in [data-model.md](data-model.md) and implemented in `database/schema.sql`.
+The runner reads the device-local database only; it does not invent sample TLS data. The TLS owner supplies data; feature owners only consume this contract. With no server or cross-device sync layer, `sync_tls.py` logs into KKU TLS and imports normalized data into the current device's local SQLite DB. The database shape is documented in [data-model.md](data-model.md) and implemented in `database/schema.sql`.
 
-`providers/moodle_session.py` handles the Moodle login form, hidden fields such as `logintoken`, redirects, and the in-memory `MoodleSession` cookie. `providers/credentials.py` keeps the username in local config and the password in macOS Keychain. It is intentionally separate from record parsers. Use `scripts/sync_tls.py --remember` for the first sync, then `scripts/sync_tls.py` for later syncs.
+`providers/moodle_session.py` handles the Moodle login form, hidden fields such as `logintoken`, redirects, and the in-memory `MoodleSession` cookie. `providers/credentials.py` keeps the username in local config and the password in macOS Keychain. It is intentionally separate from record parsers. Run `scripts/sync_tls.py` for the first and later syncs.
 
 ```python
-class LMSProvider(Protocol):
+class TLSProvider(Protocol):
+    def get_user(self, user_id: str) -> dict | None: ...
     def get_courses(self, user_id: str) -> list[dict]: ...
     def get_assignments(self, user_id: str) -> list[dict]: ...
     def get_lectures(self, user_id: str) -> list[dict]: ...
@@ -25,4 +26,4 @@ AI integrations should call the Skill commands or consume their JSON; they shoul
 
 ## Parallel work
 
-The TLS owner changes `providers/tls_provider.py`, `providers/moodle_provider.py`, and this contract only when the upstream TLS response requires it. Feature owners work independently in `features/assignments.py`, `features/lectures.py`, `features/context.py`, `features/bookmarks.py`, or `features/handover.py`. Keep `MockTLSProvider` compatible until the real adapter is ready.
+The TLS owner changes `providers/tls_provider.py`, `providers/moodle_provider.py`, and this contract only when the upstream TLS response requires it. Feature owners work independently in `features/assignments.py`, `features/lectures.py`, `features/context.py`, `features/bookmarks.py`, or `features/handover.py`. Tests use explicit fixtures without seeding runtime data.

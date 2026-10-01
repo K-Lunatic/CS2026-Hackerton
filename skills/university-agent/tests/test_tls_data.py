@@ -21,7 +21,7 @@ class TLSDataTests(unittest.TestCase):
             legacy = sqlite3.connect(path)
             legacy.execute("CREATE TABLE lectures (id TEXT PRIMARY KEY, external_id TEXT, course_id TEXT, title TEXT, duration_seconds INTEGER, source TEXT, updated_at TEXT)")
             legacy.close()
-            db = LocalDatabase(path, seed_mock=False)
+            db = LocalDatabase(path)
             db.upsert_tls_snapshot(
                 "student", [{"id": "course-1", "name": "Course 1"}],
                 [{"id": "task-1", "courseId": "course-1", "title": "Assignment", "dueAt": end, "submissionStatus": "NOT_SUBMITTED"}],

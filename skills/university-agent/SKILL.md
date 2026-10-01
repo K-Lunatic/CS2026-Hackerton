@@ -9,7 +9,7 @@ Use the bundled standard-library runner for every data lookup or mutation. Do no
 
 ## Team boundary
 
-- TLS integration owner: implement the `TLSProvider` contract in `providers/tls_provider.py`. The runner currently uses the device-local `LocalDatabase`, seeded with Mock TLS data on first access.
+- TLS integration owner: maintain the `TLSProvider` contract and `MoodleTLSProvider`. The runner reads only the device-local `LocalDatabase` populated by TLS sync.
 - Feature owners: add or edit one module under `features/` and consume `TLSProvider` or a feature store; never call TLS endpoints directly from a feature.
 - The runner is composition only. Keep feature logic out of `scripts/run_agent.py`.
 - The SQLite file is private to the current chat device. It is not synchronized across devices.
@@ -30,13 +30,13 @@ python3 scripts/run_agent.py todos
 python3 scripts/run_agent.py notices
 python3 scripts/run_agent.py resources
 python3 scripts/run_agent.py bookmarks
-python3 scripts/run_agent.py bookmark-add --target-type ASSIGNMENT --target-id assignment-network-5 --note "이번 주 우선"
-python3 scripts/run_agent.py ask --text '과제 저장 --과제ID assignment-network-5' --checkpoint-json '{"progress":"자료 3개 수집 완료","completedItems":["자료 3개 수집"],"blocker":"없음","nextAction":"두 번째 자료의 통계를 본문에 넣기"}'
-python3 scripts/run_agent.py ask --text '과제 불러오기 --과제ID assignment-network-5'
+python3 scripts/run_agent.py bookmark-add --target-type ASSIGNMENT --target-id '<조회된 과제 ID>' --note "이번 주 우선"
+python3 scripts/run_agent.py ask --text '과제 저장 --과제ID <조회된 과제 ID>' --checkpoint-json '{"progress":"자료 3개 수집 완료","completedItems":["자료 3개 수집"],"blocker":"없음","nextAction":"두 번째 자료의 통계를 본문에 넣기"}'
+python3 scripts/run_agent.py ask --text '과제 불러오기 --과제ID <조회된 과제 ID>'
 python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘"
 python3 scripts/run_agent.py ask --text "과제 어디까지 했지?"
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
-python3 scripts/ingest_tls.py --input tls_snapshot.json
+python3 scripts/ingest_tls.py --input tls_snapshot.json --user-id '<사용자 ID>'
 # TLS owner: saved credentials are reused; if absent, local hidden input is shown
 python3 scripts/sync_tls.py
 # Inspect one authenticated page if needed
@@ -47,7 +47,7 @@ The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answ
 
 ## Behavior
 
-- Default user is `홍길동` in `컴퓨터공학과`; first access creates `~/.university-agent/university.db` and seeds Mock TLS data. `UNIVERSITY_AGENT_DB` can select another local path.
+- No sample user or coursework is created. Run `sync_tls.py` first; the saved TLS username selects the local user. `UNIVERSITY_AGENT_DB` can select another local path. Unknown profile fields remain null.
 - Pass the user's exact, unmodified message to `ask`. Never rewrite a paraphrase into a checkpoint command.
 - Natural-language checkpoint save/load requests return a command template and perform no checkpoint database read or write. The user must send the canonical command before checkpoint data is read or changed.
 - If a paraphrase clearly asks to save or resume a checkpoint but the runner does not recognize it, show the matching template without invoking another data command. If it could mean either operation, show both templates and wait for the user to send one.

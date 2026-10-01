@@ -7,13 +7,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from providers.tls_provider import MockTLSProvider
-
 SCHEMA = Path(__file__).resolve().parents[1] / "database" / "schema.sql"
 
 
 class LocalDatabase:
-    def __init__(self, path: Path, *, seed_mock: bool = True):
+    def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
@@ -23,20 +21,15 @@ class LocalDatabase:
         for column in ("available_from", "available_until"):
             if column not in lecture_columns:
                 self.connection.execute(f"ALTER TABLE lectures ADD COLUMN {column} TEXT")
-        if seed_mock:
-            self.seed_mock_if_empty()
 
     def close(self) -> None:
         self.connection.close()
 
-    def seed_mock_if_empty(self) -> None:
-        if self.connection.execute("SELECT 1 FROM users LIMIT 1").fetchone():
-            return
-        provider = MockTLSProvider()
-        now = datetime.now(timezone.utc).isoformat()
-        self.upsert_tls_snapshot("user-hong", provider.get_courses("user-hong"), provider.get_assignments("user-hong"), provider.get_lectures("user-hong"), "홍길동", "컴퓨터공학과", now)
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute("SELECT id, name, department FROM users WHERE id=?", (user_id,)).fetchone()
+        return dict(row, department=row["department"] or None) if row else None
 
-    def upsert_tls_snapshot(self, user_id: str, courses: list[dict[str, Any]], assignments: list[dict[str, Any]], lectures: list[dict[str, Any]], user_name: str, department: str, now: str | None = None, notices: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None) -> None:
+    def upsert_tls_snapshot(self, user_id: str, courses: list[dict[str, Any]], assignments: list[dict[str, Any]], lectures: list[dict[str, Any]], user_name: str, department: str | None, now: str | None = None, notices: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None) -> None:
         now = now or datetime.now(timezone.utc).isoformat()
         db = self.connection
         db.execute("INSERT INTO users(id, external_id, name, department, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, department=excluded.department, updated_at=excluded.updated_at", (user_id, user_id, user_name, department, now, now))

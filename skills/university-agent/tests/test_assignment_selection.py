@@ -62,6 +62,9 @@ class AssignmentSelectionTests(ProjectTestBase):
         self.assertEqual(result['data']['stage'], 'not_found')
         self.assertIn('단어를 하나 더', result['answer'])
         self.assertIn('새 이름:', result['answer'])
+        self.assertIn('학교 과제 목록에 없는 과제인가요', result['answer'])
+        self.assertIn('TLS에 표시된 제목이 다른가요', result['answer'])
+        self.assertNotIn('save new', result['nextCommands'])
         self.assertEqual(result['nextCommands'], [])
         self.assertEqual(self.checkpoints(), [])
 
@@ -161,6 +164,8 @@ class AssignmentSelectionTests(ProjectTestBase):
         result = self.cli('assignment-find', '--query', '자바')
         self.assert_public(result)
         for candidate in result['data']['candidates']:
+            self.assertTrue(candidate['command'].startswith('save "'))
+            self.assertNotIn('--course', candidate['command'])
             saved = self.cli('ask', '--text', candidate['command'], '--checkpoint-json', self.payload)
             self.assertEqual(saved['data']['assignmentTitle'], candidate['title'])
         self.assertEqual(len(self.checkpoints()), 2)
@@ -196,6 +201,9 @@ class AssignmentSelectionTests(ProjectTestBase):
             result = self.cli('ask', '--text', '과제 저장 ' + query, '--checkpoint-json', self.payload)
             self.assertFalse(result['data']['performed'])
             self.assertEqual(result['data']['candidates'], [])
+            self.assertIn('관련 과제를 TLS에서 찾지 못했습니다.', result['answer'])
+            self.assertIn('TLS에 표시된 제목이 다른가요', result['answer'])
+            self.assertIn('목록에 없다면 저장할 제목을 정해 주세요.', result['answer'])
             self.assert_public(result)
         self.assertEqual(self.checkpoints(), [])
 

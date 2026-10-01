@@ -94,8 +94,14 @@ def search_save_targets(provider: TLSProvider, user_id: str, query: str) -> dict
     return result
 
 
-def selection_command(item: dict[str, Any], operation: str) -> str:
-    tokens = ["save new" if operation == "save" and item.get("source") == "manual" else operation]
+def selection_command(item: dict[str, Any], operation: str, *, simple: bool = True) -> str:
+    command = "save new" if operation == "save" and item.get("source") == "manual" else operation
+    if simple:
+        label = item["title"]
+        if command != "save new" and item.get("courseName"):
+            label = f'{item["courseName"]} {label}'
+        return f'{command} {_quoted(label)}'
+    tokens = [command]
     tokens.extend(["--course", _quoted(item.get("courseName") or "기타 과제")])
     tokens.extend(["--title", _quoted(item["title"])])
     tokens.extend(["--due", _quoted(item.get("dueAt") or "미정")])
@@ -109,16 +115,28 @@ def _quoted(value: str) -> str:
 
 def selection_guidance(items: list[dict[str, Any]], operation: str = "save") -> dict[str, Any]:
     """Return only names/deadlines and copyable commands, never database IDs."""
+    title_counts = {}
+    for item in items:
+        key = normalize(item["title"])
+        title_counts[key] = title_counts.get(key, 0) + 1
     candidates = []
     for item in items:
         status = item.get("submissionStatus", "UNKNOWN")
         available = status not in {"SUBMITTED", "LATE"}
-        command = selection_command(item, operation) if available else None
+        command = (selection_command(item, operation, simple=title_counts[normalize(item["title"])] == 1)
+                   if available else None)
         candidates.append(dict(courseName=item["courseName"] or "기타 과제", title=item["title"],
                                dueAt=item.get("dueAt"), submissionStatus=status, command=command))
     if not items:
         intro = ("저장된 TLS 과제에서 후보를 찾지 못했어요. 과목명이나 기억나는 단어를 하나 더 알려주세요. "
                  "직접 정한 이름으로 저장하려면 ‘새 이름: 내 과제’처럼 말해 주세요. 아직 저장하지 않았어요."
+                 if operation == "save" else
+                 "해당 이름의 과제를 찾지 못했어요. 다른 과목명·키워드를 알려주시거나 `list`로 저장 목록을 확인해 주세요.")
+    if not items:
+        intro = ("관련 과제를 TLS에서 찾지 못했습니다. TLS에 표시된 제목이 다른가요, "
+                 "아니면 학교 과제 목록에 없는 과제인가요? 과목명이나 기억나는 단어를 하나 더 알려주세요. "
+                 "목록에 없다면 저장할 제목을 정해 주세요. 직접 정한 이름으로 저장하려면 ‘새 이름: 내 과제’처럼 말해 주세요. "
+                 "아직 저장하지 않았어요."
                  if operation == "save" else
                  "해당 이름의 과제를 찾지 못했어요. 다른 과목명·키워드를 알려주시거나 `list`로 저장 목록을 확인해 주세요.")
     elif len(items) == 1:

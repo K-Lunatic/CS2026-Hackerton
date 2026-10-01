@@ -50,6 +50,49 @@ class ReviewTests(unittest.TestCase):
         data = local_analysis('2026년 1월 2일: 민수는 테스트 완료.\n12월 31일: 민수는 테스트 미완료.')
         self.assertEqual(data['tasks'][0]['status'], '확인 필요')
 
+    def test_task_subject_is_not_an_owner(self):
+        for text, status in [('테스트는 완료.', '완료'), ('API는 진행 중.', '진행 중'),
+                             ('테스트는 미완료.', '미완료'), ('테스트는 할 예정이다.', '확인 필요')]:
+            with self.subTest(text=text):
+                data = local_analysis(text)
+                self.assertEqual(len(data['tasks']), 1)
+                self.assertEqual(data['tasks'][0]['owner'], '미정')
+                self.assertEqual(data['tasks'][0]['title'], text.split('는')[0])
+                self.assertEqual(data['tasks'][0]['status'], status)
+
+    def test_unrelated_work_is_not_merged(self):
+        data = local_analysis('민수는 DB 담당.\n민수는 화면 구현 완료.')
+        self.assertEqual({t['title']: t['status'] for t in data['tasks']},
+                         {'DB': '확인 필요', '화면': '완료'})
+
+    def test_multiple_roles_and_ambiguous_abbreviation(self):
+        data = local_analysis('민수는 로그인 화면 담당. 민수는 관리자 화면 담당. 민수는 화면 구현 완료.')
+        self.assertFalse(data['completed'])
+        self.assertTrue(data['checks'])
+        self.assertEqual({t['title'] for t in data['tasks']}, {'로그인 화면', '관리자 화면', '화면'})
+
+    def test_inline_dates_match_line_separated_records(self):
+        data = local_analysis(SAMPLE.replace('\n', ' '))
+        expected = local_analysis(SAMPLE)
+        fields = ('title', 'owner', 'status', 'deadline')
+        self.assertEqual([{k: t[k] for k in fields} for t in data['tasks']],
+                         [{k: t[k] for k in fields} for t in expected['tasks']])
+        self.assertEqual(len(data['tasks']), 4)
+        self.assertEqual({t['owner'] for t in data['completed']}, {'현우', '민수'})
+        for task in data['tasks']:
+            for evidence in task['evidence']:
+                self.assertIn(evidence['quote'], data['records'][evidence['recordId']])
+
+    def test_inline_dates_conflict_and_deadline_are_separate(self):
+        data = local_analysis('10월 3일: 민수는 테스트 완료. 10월 2일: 민수는 테스트 진행 중.')
+        self.assertEqual(data['tasks'][0]['status'], '완료')
+        data = local_analysis('10월 3일: 민수는 테스트 완료. 10월 3일: 민수는 테스트 미완료.')
+        self.assertEqual(data['tasks'][0]['status'], '확인 필요')
+        self.assertTrue(data['checks'])
+        data = local_analysis('10월 2일 회의: 지연은 API 작업 중이며 완료 목표는 10월 4일. 10월 3일 작업 기록: 지연은 API 완료.')
+        self.assertEqual(data['tasks'][0]['status'], '완료')
+        self.assertEqual(data['tasks'][0]['deadline'], '10월 4일')
+
     def test_edits_draft_and_immutable_evidence(self):
         data = local_analysis(SAMPLE)
         before = deepcopy(data)

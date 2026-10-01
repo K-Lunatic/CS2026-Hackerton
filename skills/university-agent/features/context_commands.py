@@ -19,6 +19,9 @@ def parse_context_command(text: str) -> dict[str, Any] | None:
         text = fenced.group(1)
     if text in {"list", "과제 목록 불러오기"}:
         return {"operation": "list", "values": {}}
+    # Conversational request: let host-supplied clues drive metadata search.
+    if text.strip() == "과제 저장":
+        return None
     if detect_context_intent(text) == "list":
         return None
     if re.search(r"\b(?:save|bookmark)\s+(?:this|my)\s+(?:chat|conversation)\b", text, re.I):

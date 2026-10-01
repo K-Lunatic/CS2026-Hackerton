@@ -347,10 +347,6 @@ class ProjectTests(ProjectTestBase):
 
 class KnownIntegrationIssues(ProjectTestBase):
     """Regression checks for previously reproduced integration defects."""
-    def test_team_progress_intent_reaches_handover(self):
-        result = self.cli('ask', '--text', '팀플 진행 상황 알려줘', '--records', '민수는 테스트 완료.', '--prepare')
-        self.assertEqual(result['toolCalls'], ['prepare_handover'])
-
     def test_current_context_uses_real_user_identity(self):
         db = LocalDatabase(self.db_path); self.addCleanup(db.close)
         upsert(db, 'student-a', snapshot())

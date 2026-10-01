@@ -29,7 +29,7 @@ AI integrations should call the Skill commands or consume their JSON; they shoul
 
 ## Parallel work
 
-The TLS owner changes `providers/tls_provider.py`, `providers/moodle_provider.py`, and this contract only when the upstream TLS response requires it. Feature owners work independently in `features/assignments.py`, `features/lectures.py`, `features/context.py`, `features/bookmarks.py`, or `features/handover.py`. Tests use explicit fixtures without seeding runtime data.
+The TLS owner changes `providers/tls_provider.py`, `providers/moodle_provider.py`, and this contract only when the upstream TLS response requires it. Feature owners work independently in `features/assignments.py`, `features/lectures.py`, `features/context.py`, `features/bookmarks.py`, or `features/study.py`. Tests use explicit fixtures without seeding runtime data.
 
 ## ChatGPT Actions gateway
 

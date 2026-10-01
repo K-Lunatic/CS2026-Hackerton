@@ -58,20 +58,22 @@ class LocalDatabase:
             db.execute(f"DELETE FROM lecture_progress WHERE user_id=? AND lecture_id NOT IN ({marks})", [user_id, *lecture_ids])
         else:
             db.execute("DELETE FROM lecture_progress WHERE user_id=?", (user_id,))
-        if notices is not None:
+        if notices is not None and course_ids:
             notice_ids = [item["id"] for item in notices]
+            course_marks = ",".join("?" for _ in course_ids)
             if notice_ids:
                 marks = ",".join("?" for _ in notice_ids)
-                db.execute(f"DELETE FROM notices WHERE source='tls' AND id NOT IN ({marks})", notice_ids)
+                db.execute(f"DELETE FROM notices WHERE source='tls' AND course_id IN ({course_marks}) AND id NOT IN ({marks})", [*course_ids, *notice_ids])
             else:
-                db.execute("DELETE FROM notices WHERE source='tls'")
-        if resources is not None:
+                db.execute(f"DELETE FROM notices WHERE source='tls' AND course_id IN ({course_marks})", course_ids)
+        if resources is not None and course_ids:
             resource_ids = [item["id"] for item in resources]
+            course_marks = ",".join("?" for _ in course_ids)
             if resource_ids:
                 marks = ",".join("?" for _ in resource_ids)
-                db.execute(f"DELETE FROM resources WHERE source='tls' AND id NOT IN ({marks})", resource_ids)
+                db.execute(f"DELETE FROM resources WHERE source='tls' AND course_id IN ({course_marks}) AND id NOT IN ({marks})", [*course_ids, *resource_ids])
             else:
-                db.execute("DELETE FROM resources WHERE source='tls'")
+                db.execute(f"DELETE FROM resources WHERE source='tls' AND course_id IN ({course_marks})", course_ids)
         for course in courses:
             db.execute("INSERT INTO courses(id, external_id, name, professor, semester, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, professor=excluded.professor, semester=excluded.semester, updated_at=excluded.updated_at", (course["id"], course.get("externalId", course["id"]), course["name"], course.get("professor"), course.get("semester"), course.get("source", "tls"), now))
             db.execute("INSERT OR IGNORE INTO enrollments(user_id, course_id) VALUES (?, ?)", (user_id, course["id"]))

@@ -307,7 +307,11 @@ def _plain_text(html: str) -> str:
     parser = HTMLParser(convert_charrefs=True)
     parts: list[str] = []
     parser.handle_data = parts.append  # type: ignore[method-assign]
-    parser.feed(html)
+    try:
+        parser.feed(html)
+    except NotImplementedError:
+        # ponytail: TLS's malformed <![...]> needs this fallback; use a tolerant parser if script text causes false matches.
+        return " ".join(unescape(re.sub(r"<[^>]*>", " ", html)).split())
     return " ".join("".join(parts).split())
 
 

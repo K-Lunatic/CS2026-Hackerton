@@ -325,6 +325,14 @@ class ProjectTests(ProjectTestBase):
         self.assertIn('강의실 자료 항목', item['downloadReason'])
         self.assertEqual(session.byte_requests, [])
 
+    def test_malformed_viewer_markup_keeps_download_restriction(self):
+        session = FakeTLSSession()
+        session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
+        session.pages['/mod/ubfile/view.php?id=9'] = '<p>안내</p><![broken]><p>다운로드 금지</p>'
+        item = MoodleTLSProvider(session).get_resources('u')[0]
+        self.assertEqual(item['downloadStatus'], 'PROHIBITED')
+        self.assertEqual(session.byte_requests, [])
+
     def test_expired_session_does_not_return_login_page_as_empty_records(self):
         session = MoodleSession()
         session.logged_in = True

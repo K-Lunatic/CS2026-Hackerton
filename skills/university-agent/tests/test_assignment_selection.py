@@ -170,6 +170,33 @@ class AssignmentSelectionTests(ProjectTestBase):
             self.assertEqual(saved['data']['assignmentTitle'], candidate['title'])
         self.assertEqual(len(self.checkpoints()), 2)
 
+    def test_single_tls_match_offers_title_only_command_without_saving(self):
+        title = '연습과제 - 배열, 구조체, 포인터'
+        self.db.connection.execute('UPDATE assignments SET title=? WHERE id=?', (title, 'private-ex05'))
+        self.db.connection.commit()
+        result = self.cli('assignment-find', '--query', '구조체 배열', '--source', 'tls')
+        command = f'save "{title}"'
+        self.assertEqual([item['command'] for item in result['data']['candidates']], [command])
+        self.assertIn(command, result['answer'])
+        self.assertEqual(result['nextCommands'], ['list', 'load', command])
+        for option in ('--course', '--title', '--due'):
+            self.assertNotIn(option, result['answer'])
+        self.assertEqual(self.checkpoints(), [])
+        saved = self.cli('ask', '--text', command, '--checkpoint-json', self.payload)
+        self.assertEqual(saved['data']['assignmentTitle'], title)
+
+    def test_title_only_tls_command_prefers_exact_title_over_longer_match(self):
+        self.db.connection.execute('UPDATE assignments SET title=? WHERE id=?', ('실습 보고서', 'private-ex05'))
+        self.db.connection.execute('UPDATE assignments SET title=? WHERE id=?', ('실습 보고서 초안', 'private-ex06'))
+        self.db.connection.commit()
+        result = self.cli('assignment-find', '--query', '실습 보고서', '--source', 'tls')
+        candidates = [item for item in result['data']['candidates'] if item['title'].startswith('실습 보고서')]
+        self.assertEqual(len(candidates), 2)
+        for candidate in candidates:
+            saved = self.cli('ask', '--text', candidate['command'], '--checkpoint-json', self.payload)
+            self.assertEqual(saved['data']['assignmentTitle'], candidate['title'])
+        self.assertEqual(len(self.checkpoints()), 2)
+
     def test_same_title_in_different_courses_and_missing_deadline_are_selectable(self):
         self.db.add_manual_assignment('fixture-user', '보고서', course_id='course-java')
         self.db.add_manual_assignment('fixture-user', '보고서', course_id='course-cpp', due_at='2026-11-01')

@@ -25,7 +25,7 @@ def matches(query: str, *texts: str) -> bool:
     return bool(terms) and all(term and any(term in text for text in haystack) for term in terms)
 
 
-def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, str]) -> list[dict[str, Any]]:
+def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, str], *, prefer_exact_title: bool = False) -> list[dict[str, Any]]:
     courses = {course["id"]: course["name"] for course in provider.get_courses(user_id)}
     found = []
     for original in provider.get_assignments(user_id):
@@ -47,6 +47,13 @@ def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, s
             if expected != item.get("dueAt") and not (due and expected == due.date().isoformat()) and not (expected == "미정" and not item.get("dueAt")):
                 continue
         found.append(item)
+    # A copied title-only command must resolve that title before broader
+    # keyword matches (for example "보고서" versus "보고서 초안"). Keep
+    # duplicate exact titles ambiguous so course/deadline selection still works.
+    if prefer_exact_title and "query" in selectors:
+        exact = [item for item in found if normalize(item["title"]) == normalize(selectors["query"])]
+        if exact:
+            found = exact
     for selector, field in (("course", "courseName"), ("title", "title")):
         if selector in selectors:
             exact = [item for item in found if normalize(item[field] or ("기타 과제" if field == "courseName" else "")) == normalize(selectors[selector])]

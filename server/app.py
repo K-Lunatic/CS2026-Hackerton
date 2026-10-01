@@ -345,7 +345,7 @@ class Gateway:
                 elif find_assignments(db, user, {'title': title, 'source': 'tls'}):
                     return reply({'error': 'assignment_exists', 'message': 'TLS 과제는 save "과제명"으로 선택해 주세요.'}, 409)
             elif values:
-                matches = find_assignments(db, user, values)
+                matches = find_assignments(db, user, values, prefer_exact_title=True)
                 if len(matches) != 1:
                     return reply({'error': 'ambiguous_assignment' if matches else 'assignment_not_found',
                                   'candidates': [{'courseName': item['courseName'], 'title': item['title'], 'dueAt': item.get('dueAt'),

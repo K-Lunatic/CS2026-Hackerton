@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "university-agent",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "터틀넥: 대학생활 관리와 읽은 수업자료 기반 대화형 학습보조",
   "author": {
     "name": "K-Lunatic"

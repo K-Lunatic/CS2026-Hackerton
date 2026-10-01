@@ -88,6 +88,18 @@ class ProjectTestBase(unittest.TestCase):
         return json.loads(result.stdout)
 
 class ProjectTests(ProjectTestBase):
+    def test_legacy_migration_releases_write_lock(self):
+        schema = (ROOT / 'database/schema.sql').read_text(encoding='utf-8')
+        legacy_schema = '\n'.join(line for line in schema.splitlines()
+                                  if 'download_status' not in line and 'download_reason' not in line)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.executescript(legacy_schema)
+        db = LocalDatabase(self.db_path)
+        self.addCleanup(db.close)
+        self.assertFalse(db.connection.in_transaction)
+        with sqlite3.connect(self.db_path, timeout=0.1) as connection:
+            connection.execute('CREATE TABLE migration_lock_probe (id INTEGER)')
+
     def test_new_database_has_no_invented_data(self):
         db = LocalDatabase(self.db_path)
         self.addCleanup(db.close)

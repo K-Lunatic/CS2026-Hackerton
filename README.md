@@ -1,32 +1,31 @@
-# University Agent Skill
+# University Agent
 
-설치 즉시 사용할 수 있는 대학생활 관리 Skill입니다. 별도 서버·기기 간 동기화 없이 현재 기기의 SQLite DB를 사용합니다. npm이나 DB 서버는 필요 없습니다.
+Codex에서 사용할 수 있는 기기 로컬 대학생활 관리 플러그인입니다. 별도 서버·기기 간 동기화 없이 현재 기기의 SQLite DB를 사용합니다. npm이나 DB 서버는 필요 없습니다.
 
-## 설치
+## 로컬 플러그인 설치·테스트
 
-### 플러그인 설치 (권장)
-
-저장소 루트에서 실행합니다. 기존 Python Skill과 화면을 함께 설치합니다.
+이 저장소를 받은 Mac에서 다음을 실행합니다. 설치 후 새 Codex 대화를 시작하고 `$university-agent`로 호출합니다.
 
 ```bash
 codex plugin marketplace add .
-codex plugin add university-agent@cs2026-hackerton
+codex plugin add university-agent@kku-university-agent-local
+python3 skills/university-agent/scripts/sync_tls.py
 ```
 
-설치 후 앱을 다시 시작하고 새 대화에서 University Agent를 선택하여 “팀플 정리해줘”를 요청합니다.
-팀원은 `dev` 브랜치로 등록할 수도 있습니다.
+TLS 로그인은 첫 동기화 때 로컬 터미널에서 진행합니다. 자격 증명이 Keychain에 이미 있으면 재사용합니다. 이 플러그인은 **Codex가 해당 Mac의 로컬 파일·Keychain에 접근할 수 있는 환경**에서만 동작합니다. ChatGPT 웹·모바일에는 로컬 DB와 Keychain이 연결되지 않으며, 공개 Plugins Directory에 게시된 상태가 아닙니다.
+
+팀원은 `dev` 브랜치를 직접 등록할 수도 있습니다.
 
 ```bash
 codex plugin marketplace add K-Lunatic/CS2026-Hackerton --ref dev
-codex plugin add university-agent@cs2026-hackerton
+codex plugin add university-agent@kku-university-agent-local
 ```
 
-플러그인은 설치 시점의 코드 사본을 사용합니다. 변경 후 같은 설치 명령으로 갱신하세요.
-TLS 계정, 실제 DB, API 키는 포함하지 않으며 각 기기에서 별도로 설정합니다.
-팀플 웹 화면은 스킬이 로컬 Python 서버를 실행해 연결합니다.
-공개 플러그인 디렉터리 게시가 아닌 로컬·팀 저장소 등록입니다.
+코드 변경 후 마켓플레이스를 갱신하고 다시 설치합니다. 설치된 코드는 사본이므로 저장소 수정이 즉시 반영되지 않습니다.
+TLS 계정, 실제 DB, API 키는 플러그인에 포함되지 않습니다.
+팀플 화면은 스킬이 로컬 Python 서버를 실행해 연결합니다.
 
-### Skill만 설치
+## 스킬만 설치
 
 이 저장소의 `skills/university-agent` 폴더를 Codex의 Skills 디렉터리에 복사합니다.
 
@@ -80,7 +79,7 @@ python3 skills/university-agent/scripts/handover_web.py
 `python3 skills/university-agent/scripts/run_agent.py ask --text "팀플 정리해줘" --ui`를 실행합니다.
 화면은 별도 설치 없이 Python으로 실행되며, 저장소의 DB/TLS 코드와 분리되어 있습니다.
 실행·프론트엔드 API·검증·제한 사항은 [handover.md](skills/university-agent/references/handover.md)에 있습니다.
-저장된 TLS 계정이 없으면 `sync_tls.py`가 로컬 터미널에서 아이디와 숨김 비밀번호 입력 양식을 띄웁니다. 로그인 성공 후 아이디는 `~/.university-agent/tls-account.json`(권한 600), 비밀번호는 macOS Keychain에 저장합니다. 비밀번호는 환경변수·SQLite·로그·JSON 출력으로 받거나 노출하지 않으며, 호출한 ChatGPT/Codex 모델이 직접 읽을 수 없습니다. 이 프로젝트의 모델 범위는 ChatGPT/Codex로 고정하며 새 모델 제공자 연동은 추가하지 않습니다.
+저장된 TLS 계정이 없으면 `sync_tls.py`가 로컬 터미널에서 아이디와 숨김 비밀번호 입력 양식을 띄웁니다. 로그인 성공 후 아이디는 `~/.university-agent/tls-account.json`(권한 600), 비밀번호는 macOS Keychain에 저장합니다. 스킬 명령은 비밀번호를 환경변수·SQLite·로그·JSON 출력으로 받거나 반환하지 않습니다. 다만 로컬 명령 실행 권한이 있는 AI 실행 환경을 Keychain 비밀값과 완전히 격리하는 장치는 아직 없으므로, 모델이 기술적으로 읽을 수 없다고 보장하지 않습니다. 이 프로젝트의 모델 범위는 ChatGPT/Codex로 고정하며 새 모델 제공자 연동은 추가하지 않습니다.
 
 향후 입력 폼은 [form-pattern.md](skills/university-agent/references/form-pattern.md)의 공통 계약을 사용합니다. 현재는 Skill 단독 배포 조건에 맞춰 로컬 숨김 입력을 사용하며, ChatGPT 네이티브 폼을 붙이더라도 같은 필드·비밀값 규칙을 유지합니다.
 

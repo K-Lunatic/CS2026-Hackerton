@@ -34,13 +34,15 @@ DB_PATH = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-
 DB: LocalDatabase | None = None
 
 
-def database() -> LocalDatabase:
+def database(*, write: bool = False) -> LocalDatabase:
     """Open the device database only when a command actually needs it."""
     global DB
     if not USER_ID:
         raise SystemExit("TLS 계정이 없습니다. python3 scripts/sync_tls.py를 먼저 실행하거나 UNIVERSITY_AGENT_USER_ID를 지정하세요.")
     if DB is None:
-        DB = LocalDatabase(DB_PATH)
+        if not write and not DB_PATH.exists():
+            raise SystemExit("학사 데이터가 없습니다. python3 scripts/sync_tls.py로 먼저 동기화하세요.")
+        DB = LocalDatabase(DB_PATH, read_only=not write)
         if DB.get_user(USER_ID) is None:
             DB.close()
             DB = None
@@ -154,7 +156,7 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
             ),
         }
 
-    provider = database()
+    provider = database(write=True)
     assignment = next(
         (item.copy() for item in provider.get_assignments(USER_ID) if item["id"] == values["assignmentId"]),
         None,
@@ -195,6 +197,9 @@ def ask(
     checkpoint_json: str | None = None,
     **options,
 ) -> dict[str, Any]:
+    if re.search(r"과제.{0,20}(?:등록|추가)|(?:등록|추가).{0,20}과제", text):
+        return {"toolCalls": [], "data": None, "needsInput": True,
+                "answer": "등록할 과제 제목을 알려주세요. 과목과 마감일은 선택 사항입니다. 확인된 값으로 assignment-add 명령을 실행할 수 있습니다."}
     checkpoint = _checkpoint_command(text, checkpoint_json=checkpoint_json)
     if checkpoint:
         return checkpoint
@@ -277,6 +282,15 @@ def main() -> None:
     assignment_parser = sub.add_parser("assignments")
     assignment_parser.add_argument("--unsubmitted", action="store_true")
     assignment_parser.add_argument("--upcoming", action="store_true")
+    manual_add = sub.add_parser("assignment-add", help="TLS에 없는 과제를 로컬에 등록")
+    manual_add.add_argument("--title", required=True)
+    manual_add.add_argument("--course-id")
+    manual_add.add_argument("--due-at")
+    manual_add.add_argument("--description")
+    manual_complete = sub.add_parser("assignment-complete", help="직접 등록한 과제를 완료 처리")
+    manual_complete.add_argument("--id", required=True)
+    manual_delete = sub.add_parser("assignment-delete", help="직접 등록한 과제를 삭제")
+    manual_delete.add_argument("--id", required=True)
     lecture_parser = sub.add_parser("lectures")
     lecture_parser.add_argument("--unfinished", action="store_true")
     sub.add_parser("notices")
@@ -315,6 +329,18 @@ def main() -> None:
             "toolCalls": ["get_assignments"],
             "data": get_assignments(database(), USER_ID, unsubmitted=args.unsubmitted, upcoming=args.upcoming),
         }
+    elif args.command == "assignment-add":
+        try:
+            item = database(write=True).add_manual_assignment(USER_ID, args.title, course_id=args.course_id, due_at=args.due_at, description=args.description)
+            result = {"toolCalls": ["add_manual_assignment"], "data": item, "answer": "과제를 등록했습니다."}
+        except ValueError as error:
+            result = {"toolCalls": ["add_manual_assignment"], "data": None, "error": {"code": "INVALID_ASSIGNMENT", "message": str(error)}, "answer": str(error)}
+    elif args.command == "assignment-complete":
+        done = database(write=True).complete_manual_assignment(USER_ID, args.id)
+        result = {"toolCalls": ["complete_manual_assignment"], "data": {"completed": done, "id": args.id}, "answer": "완료 처리했습니다." if done else "직접 등록한 과제를 찾지 못했습니다."}
+    elif args.command == "assignment-delete":
+        deleted = database(write=True).delete_manual_assignment(USER_ID, args.id)
+        result = {"toolCalls": ["delete_manual_assignment"], "data": {"deleted": deleted, "id": args.id}, "answer": "삭제했습니다." if deleted else "직접 등록한 과제를 찾지 못했습니다."}
     elif args.command == "lectures":
         result = {
             "toolCalls": ["get_lectures"],
@@ -331,10 +357,10 @@ def main() -> None:
     elif args.command == "bookmark-add":
         result = {
             "toolCalls": ["create_bookmark"],
-            "data": add_bookmark(database(), USER_ID, args.target_type, args.target_id, args.note),
+            "data": add_bookmark(database(write=True), USER_ID, args.target_type, args.target_id, args.note),
         }
     elif args.command == "bookmark-delete":
-        result = {"toolCalls": ["delete_bookmark"], "data": delete_bookmark(database(), USER_ID, args.target_id)}
+        result = {"toolCalls": ["delete_bookmark"], "data": delete_bookmark(database(write=True), USER_ID, args.target_id)}
     elif args.command == "ask":
         result = ask(
             args.text,

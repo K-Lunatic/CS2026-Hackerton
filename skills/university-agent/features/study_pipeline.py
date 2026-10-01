@@ -63,7 +63,7 @@ def advance(session, state):
         return {'status': 'prepared', 'needsExtraction': True, 'requestId': state['requestId'],
                 'progress': progress, 'failures': p['failures'],
                 'answer': f"자료 {p['fileIndex'] + 1}/{len(p['files'])} · {p['fileName']}의 {p['chunkIndex'] + 1}/{len(p['chunks'])} 부분을 차근차근 정리하고 있어요.",
-                'hostOnly': {'instruction': PROMPT + '\n이 파일 부분만 분석하라. previousPart는 같은 파일 앞부분의 맥락 안내일 뿐 새 문항의 원문 근거가 아니다. 주요 학습 내용과 수업 맥락을 분리하고 가능한 유형별 완성 문항을 보통 1~5개, 최대 20개 작성하라. 자료에 맞지 않는 유형은 만들지 마라. 인용은 1000자 이내. 20개보다 적으면 shortageReason을 적어라.',
+            'hostOnly': {'instruction': PROMPT + '\n이번 파일 부분만 분석한다. 앞부분 요약은 맥락으로만 참고하고 새 문제의 근거로 사용하지 않는다. 핵심 개념·수업 맥락·자료에 맞는 문제 후보를 만들고, 원문 인용은 1000자 이내로 제한한다. 후보가 부족하면 이유를 적는다.',
                     'previousPart': {'context': prior['context'][:1000], 'concepts': [x['concept'][:100] for x in prior['learning'][:10]]} if prior else None,
                     'courseName': next((c['name'] for c in session.provider.get_courses(session.user) if c['id'] == state['selection']['courseId']), state['selection'].get('attachmentTitle', '첨부 자료')),
                     'settings': state['settings'], 'SOURCE': p['chunks'][p['chunkIndex']],
@@ -83,7 +83,7 @@ def catalog(state, event):
             'processedFiles': p['fileIndex'], 'totalFiles': len(p['files']), 'failures': p['failures'],
             'answer': f"자료 {len(p['files'])}개를 확인했어요. 저장한 후보 {len(candidates)}개에서 범위와 유형을 맞춰 시험지를 엮을게요.",
             'nextOffset': offset + limit if offset + limit < len(candidates) else None,
-            'hostOnly': {'instruction': '모든 페이지의 후보를 비교해 개념·파일·유형을 균형 있게 선택하라. 중복·정답 누설을 검토하라. 읽지 못한 파일은 포함하지 마라. 새 문항을 즉석에서 만들지 말고 assemble에 candidateIds를 전달하라.',
+            'hostOnly': {'instruction': '모든 후보를 비교해 개념·파일·문제 유형이 골고루 포함되게 고른다. 중복과 정답 노출을 확인하고, 읽지 못한 파일은 제외한다. 새 문제를 만들지 말고 선택한 후보 ID만 assemble에 전달한다.',
                 'settings': state['settings'], 'candidates': [{k: q[k] for k in ('id', 'type', 'concept', 'question', 'unitId')}
                     for q in candidates[offset:offset + limit]]}}
 

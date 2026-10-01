@@ -1,25 +1,21 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Protocol
 
 
-def list_bookmarks(read_state: Callable[[], dict[str, Any]]) -> list[dict[str, Any]]:
-    return read_state().get("bookmarks", [])
+class BookmarkStore(Protocol):
+    def list_bookmarks(self, user_id: str) -> list[dict[str, Any]]: ...
+    def add_bookmark(self, user_id: str, target_type: str, target_id: str, note: str) -> dict[str, Any]: ...
+    def delete_bookmark(self, user_id: str, target_id: str) -> dict[str, Any]: ...
 
 
-def add_bookmark(read_state: Callable[[], dict[str, Any]], write_state: Callable[[dict[str, Any]], None], target_type: str, target_id: str, note: str) -> dict[str, Any]:
-    state = read_state()
-    bookmarks = state.setdefault("bookmarks", [])
-    item = {"id": f"bookmark-{len(bookmarks) + 1}", "userId": "user-hong", "targetType": target_type, "targetId": target_id, "note": note, "createdAt": datetime.now(timezone.utc).isoformat()}
-    bookmarks.append(item)
-    write_state(state)
-    return item
+def list_bookmarks(store: BookmarkStore, user_id: str) -> list[dict[str, Any]]:
+    return store.list_bookmarks(user_id)
 
 
-def delete_bookmark(read_state: Callable[[], dict[str, Any]], write_state: Callable[[dict[str, Any]], None], target_id: str) -> dict[str, Any]:
-    state = read_state()
-    before = len(state.get("bookmarks", []))
-    state["bookmarks"] = [item for item in state.get("bookmarks", []) if item["targetId"] != target_id]
-    write_state(state)
-    return {"deleted": before - len(state["bookmarks"]), "targetId": target_id}
+def add_bookmark(store: BookmarkStore, user_id: str, target_type: str, target_id: str, note: str) -> dict[str, Any]:
+    return store.add_bookmark(user_id, target_type, target_id, note)
+
+
+def delete_bookmark(store: BookmarkStore, user_id: str, target_id: str) -> dict[str, Any]:
+    return store.delete_bookmark(user_id, target_id)

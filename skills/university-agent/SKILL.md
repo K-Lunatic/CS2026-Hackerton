@@ -12,7 +12,7 @@ Use the bundled standard-library runner for every data lookup or mutation. Do no
 - TLS integration owner: implement the `TLSProvider` contract in `providers/tls_provider.py`. Replace `MockTLSProvider` only after the real response mapping is verified.
 - Feature owners: add or edit one module under `features/` and consume `TLSProvider`; never call TLS endpoints directly from a feature.
 - The runner is composition only. Keep feature logic out of `scripts/run_agent.py`.
-- No server is required. Set `UNIVERSITY_AGENT_DATA_DIR` to a private sync folder shared by the user's devices and set `UNIVERSITY_AGENT_USER_ID` per private user space.
+- No server or cross-device sync is used. The default SQLite file is private to the current chat device; optionally set `UNIVERSITY_AGENT_DB` to another local path.
 
 Read [references/provider-contract.md](references/provider-contract.md) and [references/data-model.md](references/data-model.md) before changing the data shape. The executable SQLite draft is `database/schema.sql`.
 
@@ -28,8 +28,8 @@ python3 scripts/run_agent.py lectures --unfinished
 python3 scripts/run_agent.py bookmarks
 python3 scripts/run_agent.py bookmark-add --target-type ASSIGNMENT --target-id assignment-network-5 --note "이번 주 우선"
 python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh token은 아직이야. API는 /api/auth/login."
-# TLS owner: write a normalized snapshot into the shared user folder
-python3 scripts/sync_tls_snapshot.py --input tls_snapshot.json
+# TLS owner: import normalized data into this device's local DB
+python3 scripts/ingest_tls.py --input tls_snapshot.json
 ```
 
 The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answer`. Use the answer directly when it is sufficient; otherwise summarize the returned data without changing dates or status.
@@ -37,7 +37,7 @@ The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answ
 ## Behavior
 
 - Default user is `홍길동` in `컴퓨터공학과`; default source is Mock TLS.
-- Without a snapshot, the runner uses Mock TLS. With `UNIVERSITY_AGENT_DATA_DIR`, it reads `users/<user-id>/tls_snapshot.json` and stores private feature state in `users/<user-id>/app_state.json`.
+- On first run, the runner creates `~/.university-agent/university.db` and seeds Mock TLS data. The TLS owner can replace it with real normalized data through `ingest_tls.py`.
 - Every feature receives the same provider-shaped records, so a feature can be developed against Mock TLS while the TLS owner works independently.
 - `ask` routes Korean intent to the same command handlers used by direct commands, so demo flows do not use hardcoded chat-only responses.
 - Bookmark mutations persist to `UNIVERSITY_AGENT_STATE` when set, or `~/.university-agent/state.json` otherwise. Read the result after a mutation.

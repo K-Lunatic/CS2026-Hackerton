@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Write normalized TLS data into the user's private sync space."""
+"""Import normalized TLS data into the current device's private SQLite DB."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import tempfile
+import sys
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-def data_root() -> Path:
-    return Path(os.environ.get("UNIVERSITY_AGENT_DATA_DIR", Path.home() / ".university-agent" / "data"))
+from storage.local_db import LocalDatabase
 
 
 def validate(snapshot: dict[str, Any]) -> None:
@@ -27,24 +29,19 @@ def validate(snapshot: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sync a normalized TLS snapshot")
+    parser = argparse.ArgumentParser(description="Import normalized TLS data locally")
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--user-id", default=os.environ.get("UNIVERSITY_AGENT_USER_ID", "user-hong"))
+    parser.add_argument("--name", default="홍길동")
+    parser.add_argument("--department", default="컴퓨터공학과")
     args = parser.parse_args()
     snapshot = json.loads(args.input.read_text(encoding="utf-8"))
     validate(snapshot)
-    target_dir = data_root() / "users" / args.user_id
-    target_dir.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix="tls_snapshot.", suffix=".json", dir=target_dir)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(snapshot, output, ensure_ascii=False, indent=2)
-            output.write("\n")
-        os.replace(temporary, target_dir / "tls_snapshot.json")
-    except Exception:
-        Path(temporary).unlink(missing_ok=True)
-        raise
-    print(target_dir / "tls_snapshot.json")
+    db_path = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-agent" / "university.db"))
+    database = LocalDatabase(db_path, seed_mock=False)
+    database.upsert_tls_snapshot(args.user_id, snapshot["courses"], snapshot["assignments"], snapshot["lectures"], args.name, args.department)
+    database.close()
+    print(db_path)
 
 
 if __name__ == "__main__":

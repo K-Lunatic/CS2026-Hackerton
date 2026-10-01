@@ -1,6 +1,6 @@
 # Provider contract and team split
 
-The default runner is Mock TLS so the Skill works immediately after installation. The TLS owner supplies data; feature owners only consume this contract. With no server, the normalized result is written to the user's sync folder as `users/<user-id>/tls_snapshot.json`. The database shape is documented in [data-model.md](data-model.md) and modeled in `database/schema.sql`.
+The default runner is Mock TLS so the Skill works immediately after installation. The TLS owner supplies data; feature owners only consume this contract. With no server or sync layer, normalized TLS data is imported into the current device's local SQLite DB by `ingest_tls.py`. The database shape is documented in [data-model.md](data-model.md) and implemented in `database/schema.sql`.
 
 ```python
 class LMSProvider(Protocol):

@@ -1,5 +1,5 @@
--- SQLite-compatible shared schema draft.
--- TLS-owned tables are source data; app-owned tables are collaboration data.
+-- SQLite-compatible device-local schema.
+-- TLS-owned tables are source data; app-owned tables are local feature data.
 
 PRAGMA foreign_keys = ON;
 

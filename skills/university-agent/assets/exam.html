@@ -1,10 +1,30 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>터틀넥 · 연습 시험</title><link rel="stylesheet" href="/exam.css"><script src="/exam.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>터틀넥 연습 시험</title><link rel="icon" href="/icon.png"><link rel="stylesheet" href="/exam.css"><script src="/exam.js" defer></script></head>
 <body>
-<header><a href="#"><img src="/icon.png" alt="">터틀넥 <span>나만의 시험실</span></a><span id="phase">시험지 준비 중</span></header>
-<main><section class="intro"><p class="eyebrow">수업자료 기반 연습 시험</p><h1 id="title">시험지를 가져오고 있어요</h1><p>차근차근 풀어보세요. 답안은 이 컴퓨터에 저장돼요.</p><div class="meta"><span id="total"></span><span id="progress"></span><span id="saved" role="status" aria-live="polite"></span></div></section>
-<div id="error" role="alert" hidden></div><section id="notice" role="status" aria-live="polite" hidden></section>
-<div class="layout"><form id="paper"><div id="questions"></div><footer><p>제출 후에는 답안을 수정할 수 없어요.</p><button id="submit" type="submit">답안 제출하기</button></footer></form><aside><h2>문항 이동</h2><nav id="nav" aria-label="문항 이동"></nav><p>표시가 채워진 번호는 답안을 입력한 문항이에요.</p><p>실제 학교 시험이나 예상 기출이 아닌, 읽은 수업자료 기반 연습이에요.</p></aside></div>
-<section id="results" hidden></section></main>
+<header class="topbar"><a class="brand" href="#"><img src="/icon.png" alt="" width="36" height="36">터틀넥 연습 시험</a><span id="phase" class="phase">시험지 준비 중</span></header>
+<div id="exam" class="exam">
+  <main class="paper">
+    <div class="paper-head">
+      <div><h1 id="title">시험지를 가져오고 있어요</h1><p id="total" class="subtitle"></p></div>
+      <div id="score" class="score" hidden>
+        <p class="score-number"><span id="score-got"></span><span id="score-total" class="score-total"></span></p>
+        <svg viewBox="0 0 120 14" aria-hidden="true"><path pathLength="1" d="M4 4 C 32 1, 78 6, 116 3"/><path pathLength="1" d="M8 10 C 40 7, 82 12, 112 9"/></svg>
+      </div>
+    </div>
+    <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
+    <section id="review" class="review" aria-labelledby="review-title" hidden><h2 id="review-title">다시 볼 개념</h2><ul id="review-list"></ul></section>
+    <ol id="questions" class="questions"></ol>
+  </main>
+  <aside class="omr" aria-label="답안지">
+    <div class="omr-head"><h2>답안지</h2><p id="progress" class="progress"></p><p id="saved" class="saved" role="status" aria-live="polite"></p></div>
+    <ol id="nav" class="omr-rows"></ol>
+    <div id="submit-area" class="submit-area">
+      <p id="confirm-text" class="confirm-text" role="alert" hidden></p>
+      <button id="submit" class="button primary" type="button">답안 제출하기</button>
+      <button id="cancel" class="button" type="button" hidden>계속 풀기</button>
+    </div>
+    <p id="error" class="error" role="alert" hidden></p>
+  </aside>
+</div>
 </body></html>

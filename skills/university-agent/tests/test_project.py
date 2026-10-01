@@ -61,7 +61,14 @@ class ProjectTestBase(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.db_path = Path(self.temp.name) / 'test.db'
-        self.env = dict(os.environ, UNIVERSITY_AGENT_DB=str(self.db_path), UNIVERSITY_AGENT_USER_ID='user-hong', TEAM_HANDOVER_API_URL='', TEAM_HANDOVER_MODEL='')
+        self.env = dict(os.environ, UNIVERSITY_AGENT_DB=str(self.db_path), UNIVERSITY_AGENT_USER_ID='fixture-user', TEAM_HANDOVER_API_URL='', TEAM_HANDOVER_MODEL='')
+
+    def seed(self):
+        db = LocalDatabase(self.db_path)
+        data = snapshot()
+        data['assignments'].append(dict(data['assignments'][0], id='assignment-2'))
+        upsert(db, 'fixture-user', data)
+        db.close()
 
     def cli(self, *args):
         result = subprocess.run([sys.executable, str(ROOT / 'scripts/run_agent.py'), *args], env=self.env, capture_output=True, text=True, timeout=10)
@@ -69,7 +76,20 @@ class ProjectTestBase(unittest.TestCase):
         return json.loads(result.stdout)
 
 class ProjectTests(ProjectTestBase):
+    def test_new_database_has_no_invented_data(self):
+        db = LocalDatabase(self.db_path)
+        self.addCleanup(db.close)
+        self.assertIsNone(db.get_user('fixture-user'))
+        self.assertEqual(db.get_courses('fixture-user'), [])
+        self.assertIsNone(get_current_context(db, 'fixture-user', lambda: [])['user'])
+
+    def test_runner_requires_real_sync(self):
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/run_agent.py'), 'assignments'], env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('동기화', result.stderr)
+
     def test_all_read_commands_and_json(self):
+        self.seed()
         for command in ('context', 'assignments', 'lectures', 'bookmarks', 'notices', 'resources'):
             with self.subTest(command=command):
                 data = self.cli(command)
@@ -82,22 +102,24 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(self.cli('ask', '--text', 'PDF 자료 보여줘')['toolCalls'], ['get_resources'])
 
     def test_bookmark_persistence_and_delete(self):
-        created = self.cli('bookmark-add', '--target-type', 'ASSIGNMENT', '--target-id', 'assignment-network-5', '--note', '테스트 메모')['data']
+        self.seed()
+        created = self.cli('bookmark-add', '--target-type', 'ASSIGNMENT', '--target-id', 'assignment-1', '--note', '테스트 메모')['data']
         self.assertEqual(self.cli('bookmarks')['data'][0]['id'], created['id'])
-        self.assertEqual(self.cli('bookmark-delete', '--target-id', 'assignment-network-5')['data']['deleted'], 1)
+        self.assertEqual(self.cli('bookmark-delete', '--target-id', 'assignment-1')['data']['deleted'], 1)
         self.assertEqual(self.cli('bookmarks')['data'], [])
 
     def test_checkpoint_gates_persistence_and_history(self):
         gated = self.cli('ask', '--text', '지금까지 진행 상황 저장해줘')
         self.assertFalse(gated['data']['performed'])
         self.assertFalse(self.db_path.exists())
+        self.seed()
         payload = dict(progress='자료 2개 정리', blocker='없음', nextAction='초안 작성', completedItems=['자료 수집'])
         for progress in ('자료 2개 정리', '초안 완성'):
             payload['progress'] = progress
-            result = self.cli('ask', '--text', '과제 저장 --과제ID assignment-network-5', '--checkpoint-json', json.dumps(payload))
+            result = self.cli('ask', '--text', '과제 저장 --과제ID assignment-1', '--checkpoint-json', json.dumps(payload))
             self.assertEqual(result['data']['progress'], progress)
         self.assertEqual(self.cli('ask', '--text', '과제 불러오기')['data']['progress'], '초안 완성')
-        malformed = self.cli('ask', '--text', '과제 저장 --과제ID assignment-network-5', '--checkpoint-json', '{}')
+        malformed = self.cli('ask', '--text', '과제 저장 --과제ID assignment-1', '--checkpoint-json', '{}')
         self.assertFalse(malformed['data']['performed'])
         unknown = self.cli('ask', '--text', '과제 저장 --과제ID missing', '--checkpoint-json', json.dumps(payload))
         self.assertFalse(unknown['data']['performed'])
@@ -118,7 +140,7 @@ class ProjectTests(ProjectTestBase):
         for _ in range(2):
             result = subprocess.run([sys.executable, str(ROOT / 'scripts/ingest_tls.py'), '--input', str(input_path), '--user-id', 'u1'], env=self.env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-        db = LocalDatabase(self.db_path, seed_mock=False); self.addCleanup(db.close)
+        db = LocalDatabase(self.db_path); self.addCleanup(db.close)
         self.assertEqual(len(db.get_assignments('u1')), 1)
         upsert(db, 'u1', data)
         self.assertEqual(len(db.get_notices('u1')), 1); self.assertEqual(len(db.get_resources('u1')), 1)
@@ -184,15 +206,15 @@ class KnownIntegrationIssues(ProjectTestBase):
         result = self.cli('ask', '--text', '팀플 진행 상황 알려줘', '--records', '민수는 테스트 완료.', '--prepare')
         self.assertEqual(result['toolCalls'], ['prepare_handover'])
 
-    @unittest.expectedFailure
     def test_current_context_uses_real_user_identity(self):
-        db = LocalDatabase(self.db_path, seed_mock=False); self.addCleanup(db.close)
+        db = LocalDatabase(self.db_path); self.addCleanup(db.close)
         upsert(db, 'student-a', snapshot())
         context = get_current_context(db, 'student-a', lambda: [])
         self.assertEqual(context['user']['name'], 'student-a')
+        self.assertEqual(context['user']['department'], '테스트학과')
 
     def test_other_users_notices_survive_sync(self):
-        db = LocalDatabase(self.db_path, seed_mock=False); self.addCleanup(db.close)
+        db = LocalDatabase(self.db_path); self.addCleanup(db.close)
         upsert(db, 'student-a', snapshot('1'))
         upsert(db, 'student-b', snapshot('2'))
         self.assertEqual(len(db.get_notices('student-a')), 1)

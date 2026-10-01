@@ -31,15 +31,17 @@ def validate(snapshot: dict[str, Any]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import normalized TLS data locally")
     parser.add_argument("--input", required=True, type=Path)
-    parser.add_argument("--user-id", default=os.environ.get("UNIVERSITY_AGENT_USER_ID", "user-hong"))
-    parser.add_argument("--name", default="홍길동")
-    parser.add_argument("--department", default="컴퓨터공학과")
+    parser.add_argument("--user-id", default=os.environ.get("UNIVERSITY_AGENT_USER_ID"))
+    parser.add_argument("--name")
+    parser.add_argument("--department")
     args = parser.parse_args()
+    if not args.user_id:
+        parser.error("--user-id 또는 UNIVERSITY_AGENT_USER_ID가 필요합니다")
     snapshot = json.loads(args.input.read_text(encoding="utf-8"))
     validate(snapshot)
     db_path = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-agent" / "university.db"))
-    database = LocalDatabase(db_path, seed_mock=False)
-    database.upsert_tls_snapshot(args.user_id, snapshot["courses"], snapshot["assignments"], snapshot["lectures"], args.name, args.department)
+    database = LocalDatabase(db_path)
+    database.upsert_tls_snapshot(args.user_id, snapshot["courses"], snapshot["assignments"], snapshot["lectures"], args.name or args.user_id, args.department)
     database.close()
     print(db_path)
 

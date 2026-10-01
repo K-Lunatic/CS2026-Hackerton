@@ -17,8 +17,8 @@ PLAYWRIGHT_MODULE=/tmp/handover-browser/node_modules/playwright \
 
 ## 결과
 
-- Python 테스트 총 38개(학사 DB 영상 기간 테스트 추가): 실제 AI 설정이 필요한 테스트 3개 건너뜀,
-  미해결 통합 오류 2개 `expected failure`. 공지·자료의 다른 사용자 데이터 삭제 문제는 수정했다.
+- 현재 테스트는 빈 DB에 가짜 학사 데이터를 넣지 않는 동작과 DB에서 사용자 이름·학과를 읽는 동작도 검증한다.
+  미해결 통합 오류는 팀플 의도 오분류 1개다.
 - `expected failure`는 알려진 실패를 추적하는 표시다. 기능 통과나 수정 완료가 아니다.
   문제가 수정되어 해당 테스트가 성공하면 `unexpected success`로 전체 테스트가 실패하므로
   수정 담당자는 기대 실패 표시를 제거하고 정상 회귀 테스트로 전환해야 한다.
@@ -45,15 +45,6 @@ PLAYWRIGHT_MODULE=/tmp/handover-browser/node_modules/playwright \
 위치: `scripts/run_agent.py`의 ask 및 `features/context_commands.py`의 detect_context_intent.
 재현 테스트: `test_team_progress_intent_reaches_handover`.
 명시적인 과제 저장/불러오기 계약을 유지하면서 팀플 요청을 구별해야 한다.
-
-### 2. 실제 사용자 이름·학과 대신 기본 정보 표시
-
-student-a를 이름으로 등록하고 해당 사용자 컨텍스트를 조회해도
-사용자 이름은 홍길동, 학과는 컴퓨터공학과로 반환된다.
-
-위치: `features/context.py`의 get_current_context.user.
-재현 테스트: `test_current_context_uses_real_user_identity`.
-사용자 ID는 전달된 값이지만 프로필 정보가 하드코딩되어 있다.
 
 ## 검증하지 못한 항목
 

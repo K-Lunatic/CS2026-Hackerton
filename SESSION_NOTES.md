@@ -2,6 +2,11 @@
 
 저장일: 2026-10-02 (Asia/Seoul)
 
+저장하면서 원격 dev의 `0ced035`까지 병합했다. 팀원이 추가한 로컬 ChatGPT Actions
+게이트웨이와 과제 이름 기반 선택 기능도 포함되어 있다. 아래 테스트 수치와 알려진 실패는
+이 대화에서 마지막으로 실행한 시점의 결과이며 병합 후 전체 코드 재검증 결과가 아니다.
+게이트웨이의 실제 ChatGPT 웹·모바일 연결은 미검증이고, 상세 상태는 project-tests.md 참고.
+
 ## 구현 완료
 
 - Python 기반 팀플 진행 정리·인수인계 기능: `skills/university-agent/features/handover.py`.

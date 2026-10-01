@@ -4,6 +4,30 @@
 
 ## 설치
 
+### 플러그인 설치 (권장)
+
+저장소 루트에서 실행합니다. 기존 Python Skill과 화면을 함께 설치합니다.
+
+```bash
+codex plugin marketplace add .
+codex plugin add university-agent@cs2026-hackerton
+```
+
+설치 후 앱을 다시 시작하고 새 대화에서 University Agent를 선택하여 “팀플 정리해줘”를 요청합니다.
+팀원은 `dev` 브랜치로 등록할 수도 있습니다.
+
+```bash
+codex plugin marketplace add K-Lunatic/CS2026-Hackerton --ref dev
+codex plugin add university-agent@cs2026-hackerton
+```
+
+플러그인은 설치 시점의 코드 사본을 사용합니다. 변경 후 같은 설치 명령으로 갱신하세요.
+TLS 계정, 실제 DB, API 키는 포함하지 않으며 각 기기에서 별도로 설정합니다.
+팀플 웹 화면은 스킬이 로컬 Python 서버를 실행해 연결합니다.
+공개 플러그인 디렉터리 게시가 아닌 로컬·팀 저장소 등록입니다.
+
+### Skill만 설치
+
 이 저장소의 `skills/university-agent` 폴더를 Codex의 Skills 디렉터리에 복사합니다.
 
 ```bash

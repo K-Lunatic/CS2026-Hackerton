@@ -140,7 +140,7 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
                     "data": {"performed": False, "assignmentTitle": title},
                     "answer": f"새 과제 ‘{title}’의 현재 대화 내용을 정리한 뒤 저장할 수 있습니다."}
     elif values:
-        matches = find_assignments(database(), USER_ID, values)
+        matches = find_assignments(database(), USER_ID, values, prefer_exact_title=True)
         if len(matches) != 1:
             return selection_guidance(matches, operation)
         assignment = matches[0]

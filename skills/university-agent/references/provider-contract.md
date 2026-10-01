@@ -15,7 +15,7 @@ Minimum record fields:
 
 - `Course`: `id`, `name`, optional `professor`, `semester`
 - `Assignment`: `id`, `courseId`, `title`, `dueAt`, `submissionStatus`, `source`
-- `Lecture`: `id`, `courseId`, `title`, `durationSeconds`, `watchedSeconds`, `watchProgress`, `completed`, `source`
+- `Lecture`: `id`, `courseId`, `title`, `durationSeconds`, `watchedSeconds`, `watchProgress`, `completed`, optional `availableFrom`, `availableUntil`, `source`
 - `Notice`: `id`, `courseId`, `title`, `content`, `publishedAt`, `source`
 - `Resource`: `id`, `courseId`, `title`, `fileName`, `extension`, `mimeType`, `remotePath`, `localPath`, `downloadedAt`, `source`
 

@@ -22,6 +22,7 @@ python3 scripts/run_agent.py handover --text "로그인 UI 구현했고 refresh 
 python3 scripts/run_agent.py ask --text "지금까지 진행 상황 저장해줘"
 python3 scripts/run_agent.py ask --text '과제 불러오기 --과제ID assignment-network-5'
 python3 scripts/sync_tls.py
+python3 scripts/run_agent.py todos
 python3 scripts/tls_fetch.py --path /my/ --output /tmp/tls-my.html
 ```
 
@@ -30,6 +31,8 @@ python3 scripts/tls_fetch.py --path /my/ --output /tmp/tls-my.html
 불러오기는 `과제 불러오기`이며, 특정 기록은 뒤에 `--과제ID <id>`를 추가합니다. 직접 CLI 실행은 대화 기록을 볼 수 없으므로 자동 요약하지 않습니다. 자동 저장 요약은 ChatGPT 또는 Codex에서 Skill을 통해 사용하세요.
 
 DB 기본 경로는 `~/.university-agent/university.db`입니다. `UNIVERSITY_AGENT_DB` 환경 변수로 현재 기기의 다른 로컬 경로를 지정할 수 있습니다.
+
+TLS 동기화는 수강 과목별 과제(마감·제출 상태), 영상(길이·시청 진행률·완료 여부·표시된 시청 기간), 공지(제목·본문·게시일), PDF/PPT 자료를 저장합니다. `todos`는 미제출 과제와 미완료 영상을 과목별로 묶어 보여줍니다. TLS에 기간이 표시되지 않은 영상의 시청 기한은 비워 둡니다.
 
 ## 팀플 진행 정리·인수인계
 

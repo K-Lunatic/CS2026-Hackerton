@@ -26,6 +26,7 @@ python3 scripts/run_agent.py ask --text "아직 안 낸 과제 있어?"
 python3 scripts/run_agent.py context
 python3 scripts/run_agent.py assignments --unsubmitted
 python3 scripts/run_agent.py lectures --unfinished
+python3 scripts/run_agent.py todos
 python3 scripts/run_agent.py notices
 python3 scripts/run_agent.py resources
 python3 scripts/run_agent.py bookmarks
@@ -67,6 +68,7 @@ The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answ
 - Preserve exact evidence and unknowns (`미정`, `확인 필요`), separate AI suggestions from recorded facts, and leave ambiguous/conflicting records as checks. Never claim a sample response or prepared prompt is a real API result.
 - If credentials are missing, `sync_tls.py` asks for the ID and hidden password in the local terminal. After a successful login it stores only the username in `~/.university-agent/tls-account.json` (mode 600) and the password in macOS Keychain. The password is never accepted from environment variables, returned as JSON, shown in output, or exposed to the calling ChatGPT/Codex model; cookies remain in memory.
 - TLS sync imports courses, notices, assignments, lectures, and PDF/PPT/PPTX resources. Downloaded files are stored below `~/.university-agent/files/`.
+- `todos` groups unsubmitted assignments and unfinished lectures by course. A lecture deadline is shown only when TLS displays its viewing end time; unknown dates remain null.
 - This project targets ChatGPT/Codex. Team-progress analysis is performed by the current caller through the prepare/validate flow; no new model-provider integration is planned.
 - Never expose provider secrets in output. Keep the TLS adapter behind the contract in [references/provider-contract.md](references/provider-contract.md).
 

@@ -18,32 +18,34 @@ def _database_path(db_path: str | Path | None = None) -> Path:
     return Path.home() / ".university-agent" / "university.db"
 
 
-def _connect(db_path: str | Path | None = None) -> sqlite3.Connection:
+def _connect(db_path: str | Path | None = None, *, read_only: bool = False) -> sqlite3.Connection:
     path = _database_path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    if not read_only:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True) if read_only else sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS context_bookmarks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            assignment_id TEXT NOT NULL,
-            course_id TEXT,
-            course_name TEXT,
-            assignment_title TEXT NOT NULL,
-            progress TEXT NOT NULL,
-            completed_items_json TEXT NOT NULL,
-            blocker TEXT NOT NULL,
-            next_action TEXT NOT NULL,
-            saved_at TEXT NOT NULL
+    if not read_only:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS context_bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                assignment_id TEXT NOT NULL,
+                course_id TEXT,
+                course_name TEXT,
+                assignment_title TEXT NOT NULL,
+                progress TEXT NOT NULL,
+                completed_items_json TEXT NOT NULL,
+                blocker TEXT NOT NULL,
+                next_action TEXT NOT NULL,
+                saved_at TEXT NOT NULL
+            )
+            """
         )
-        """
-    )
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS idx_context_bookmarks_user_assignment "
-        "ON context_bookmarks (user_id, assignment_id, id DESC)"
-    )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_context_bookmarks_user_assignment "
+            "ON context_bookmarks (user_id, assignment_id, id DESC)"
+        )
     return connection
 
 
@@ -125,7 +127,9 @@ def get_context_bookmark(
     db_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
     """Return the latest saved checkpoint, optionally for one assignment."""
-    connection = _connect(db_path)
+    if not _database_path(db_path).exists():
+        return None
+    connection = _connect(db_path, read_only=True)
     try:
         if assignment_id:
             row = connection.execute(
@@ -151,7 +155,9 @@ def list_context_bookmarks(
     *, user_id: str, db_path: str | Path | None = None
 ) -> list[dict[str, Any]]:
     """List the latest checkpoint for each assignment, newest first."""
-    connection = _connect(db_path)
+    if not _database_path(db_path).exists():
+        return []
+    connection = _connect(db_path, read_only=True)
     try:
         rows = connection.execute(
             """

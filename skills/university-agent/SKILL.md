@@ -13,6 +13,7 @@ Use the bundled standard-library runner for every data lookup or mutation. Do no
 - Feature owners: add or edit one module under `features/` and consume `TLSProvider` or a feature store; never call TLS endpoints directly from a feature.
 - The runner is composition only. Keep feature logic out of `scripts/run_agent.py`.
 - The SQLite file is private to the current chat device. It is not synchronized across devices.
+- This plugin requires local Codex execution on the Mac holding the DB and Keychain; ChatGPT web/mobile cannot access those device-local files. Do not claim that Keychain is technically inaccessible to an AI process with unrestricted local command execution.
 
 Read [references/provider-contract.md](references/provider-contract.md) and [references/data-model.md](references/data-model.md) before changing the data shape. The executable SQLite draft is `database/schema.sql`.
 For any future user input, follow [references/form-pattern.md](references/form-pattern.md). Secret fields must use the secure form contract and never be returned to the calling model.

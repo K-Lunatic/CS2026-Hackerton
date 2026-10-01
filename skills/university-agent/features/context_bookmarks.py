@@ -180,6 +180,16 @@ def list_context_bookmarks(
         connection.close()
 
 
+def list_unfinished_context_bookmarks(
+    provider, *, user_id: str, db_path: str | Path | None = None
+) -> list[dict[str, Any]]:
+    """Show one saved checkpoint per assignment whose completion is unconfirmed."""
+    active = {item["id"] for item in provider.get_assignments(user_id)
+              if item["submissionStatus"] not in {"SUBMITTED", "LATE"}}
+    return [item for item in list_context_bookmarks(user_id=user_id, db_path=db_path)
+            if item["assignmentId"] in active]
+
+
 def format_resume_card(record: dict[str, Any]) -> str:
     """Render a card strictly from a persisted checkpoint."""
     course = record.get("courseName") or "과목 정보 없음"

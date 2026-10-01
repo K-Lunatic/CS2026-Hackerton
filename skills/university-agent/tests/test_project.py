@@ -94,6 +94,7 @@ class ProjectTests(ProjectTestBase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('동기화', result.stderr)
         self.assertEqual(self.cli('ask', '--text', '과제 불러오기')['data'], None)
+        self.assertEqual(self.cli('ask', '--text', '과제 목록 불러오기')['data'], [])
         self.assertFalse(self.db_path.exists())
 
     def test_read_commands_open_database_without_schema_writes(self):
@@ -138,11 +139,11 @@ class ProjectTests(ProjectTestBase):
         upsert(db, 'other-user', snapshot('2'))
         self.assertEqual([item for item in db.get_assignments('other-user') if item['source'] == 'manual'], [])
         self.assertIn(added['id'], [item['id'] for item in db.get_assignments('fixture-user')])
-        self.assertFalse(db.complete_manual_assignment('other-user', added['id']))
-        self.assertEqual(self.cli('assignment-complete', '--id', added['id'])['data']['completed'], True)
+        self.assertFalse(db.complete_manual_assignment('other-user', added['id'], submission_answer='예'))
+        self.assertEqual(self.cli('assignment-complete', '--id', added['id'], '--submission-answer', '예')['data']['completed'], True)
         self.assertNotIn(added['id'], [item['id'] for item in self.cli('assignments', '--unsubmitted')['data']])
         self.assertEqual(self.cli('assignment-delete', '--id', course_item['id'])['data']['deleted'], True)
-        self.assertFalse(self.cli('assignment-complete', '--id', 'assignment-1')['data']['completed'])
+        self.assertFalse(self.cli('assignment-complete', '--id', 'assignment-1', '--submission-answer', '예')['data']['completed'])
 
     def test_manual_assignment_rejects_invalid_input_without_writing(self):
         self.seed()

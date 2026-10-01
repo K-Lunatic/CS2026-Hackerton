@@ -9,20 +9,19 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from features.assignments import assignment_answer, get_assignments
-from features.assignment_selection import find_assignments, selection_guidance, public_checkpoint, normalize
+from features.assignment_selection import find_assignments, find_similar_tls_assignments, selection_guidance, public_checkpoint, normalize
 from features.study_materials import study_materials
 from features.bookmarks import add_bookmark, delete_bookmark, list_bookmarks, validate_bookmark_target
 from features.context import format_current_context, get_current_context
 from features.context_bookmarks import format_resume_card, get_context_bookmark, list_unfinished_context_bookmarks, save_context_bookmark
 from features.context_commands import command_template, detect_context_intent, parse_context_command, with_next_commands
-from features.handover import HandoverError, create_handover, format_handover, prepare_handover, is_handover_request
+from features.study import StudySession, study_intent, event_from_text
 from features.lectures import get_lectures
 from features.guidance import guidance_request, is_status_request, usage_guide
 from features.deadlines import format_deadline
@@ -55,29 +54,6 @@ def database(*, write: bool = False) -> LocalDatabase:
             DB = None
             raise SystemExit("이 사용자의 학사 데이터가 없습니다. python3 scripts/sync_tls.py로 먼저 동기화하세요.")
     return DB
-
-
-def handover_result(text: str, *, prepare: bool = False, **options) -> dict[str, Any]:
-    try:
-        if prepare:
-            if options.pop("analysis_json", None) is not None:
-                raise HandoverError("--prepare와 --analysis-json은 함께 사용할 수 없습니다.")
-            messages = prepare_handover(text, **options)
-            return {
-                "toolCalls": ["prepare_handover"],
-                "data": {"messages": messages},
-                "needsAnalysis": True,
-                "answer": "호출한 AI가 messages를 분석하고 --analysis-json으로 검증해주세요.",
-            }
-        data = create_handover(text, **options)
-        return {"toolCalls": ["create_handover"], "data": data, "answer": format_handover(data)}
-    except HandoverError as exc:
-        return {
-            "toolCalls": ["create_handover"],
-            "data": None,
-            "error": {"code": "HANDOVER_FAILED", "message": str(exc)},
-            "answer": str(exc),
-        }
 
 
 def _checkpoint_data(raw: str | None) -> dict[str, Any]:
@@ -118,6 +94,9 @@ def _checkpoint_data(raw: str | None) -> dict[str, Any]:
 
 
 def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dict[str, Any] | None:
+    # Natural-language conversation requests must reach the guidance path without opening SQLite.
+    if re.search(r"\b(?:save|bookmark)\s+(?:this|my)\s+(?:chat|conversation)\b", text, re.I):
+        return None
     command = parse_context_command(text)
     if command is None:
         return None
@@ -227,10 +206,8 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
 def _ask(
     text: str,
     *,
-    records: str = "",
-    ui: bool = False,
+    conversation: str = "",
     checkpoint_json: str | None = None,
-    **options,
 ) -> dict[str, Any]:
     checkpoint = _checkpoint_command(text, checkpoint_json=checkpoint_json)
     if checkpoint:
@@ -257,7 +234,7 @@ def _ask(
             )
             if intent == "save":
                 answer += (
-                    '\n예: save "자바 Ex05" 또는 save new "캡처 문제". '
+                    '\n예: save 자바 Ex05 또는 save new "캡처 문제". '
                     "ChatGPT/Codex가 명령을 받은 뒤 현재 대화에서 확인되는 내용을 한국어로 정리합니다. "
                     "사용자가 진행·막힘·다음 행동을 직접 입력할 필요는 없습니다."
                 )
@@ -269,19 +246,18 @@ def _ask(
             "answer": answer,
         }
 
-    if is_handover_request(text):
-        if ui:
-            url = "http://127.0.0.1:8765/?" + urlencode({"request": text})
-            return {"toolCalls": ["open_handover"], "data": {"url": url},
-                    "answer": "팀플 화면에서 자료를 입력하고 결과를 수정하세요: " + url}
-        if not records.strip():
-            return {
-                "toolCalls": [],
-                "data": None,
-                "needsInput": True,
-                "answer": "회의 내용이나 작업 메모를 보내주세요. 누가 무엇을 했고 무엇이 남았는지 정리해 드릴게요. 예: ‘민수는 로그인 구현 완료, 지수는 발표 자료 작성 중.’",
-            }
-        return handover_result(records, **options)
+    learning = study_intent(text)
+    if learning:
+        if not conversation:
+            return {"toolCalls": ["study"], "needsConversation": True,
+                    "answer": "학습 대화를 구분할 세션 ID가 필요합니다. 호출한 AI가 이 대화에서만 유지할 ID를 만들어 다시 호출하세요."}
+        event = event_from_text(text, database().get_courses(USER_ID))
+        try:
+            response = StudySession(DB_PATH.parent / "study-sessions.db", USER_ID, conversation,
+                                    database(), DB_PATH.parent / "files").call(event)
+        except ValueError as exc:
+            response = {"status": "error", "answer": str(exc)}
+        return {"toolCalls": ["study"], **response}
     if re.search(r"과제|안 낸|미제출|밀린", text):
         return assignment_answer(database(), USER_ID, text)
     if re.search(r"강의|시청|안 본", text):
@@ -305,7 +281,13 @@ def _ask(
 
 
 def ask(text: str, **options) -> dict[str, Any]:
-    return with_next_commands(_ask(text, **options))
+    result = _ask(text, **options)
+    conversation = options.get("conversation")
+    if (conversation and result.get("toolCalls") != ["study"] and USER_ID and DB_PATH.exists()
+            and (DB_PATH.parent / "study-sessions.db").exists()):
+        StudySession(DB_PATH.parent / "study-sessions.db", USER_ID, conversation,
+                     database(), DB_PATH.parent / "files").call({"action": "observe"})
+    return result if result.get("toolCalls") == ["study"] else with_next_commands(result)
 
 
 def main() -> None:
@@ -349,17 +331,11 @@ def main() -> None:
     remove.add_argument("--target-id", required=True)
     ask_parser = sub.add_parser("ask")
     ask_parser.add_argument("--text", required=True)
-    ask_parser.add_argument("--ui", action="store_true", help="실행 중인 로컬 팀플 화면 링크 반환")
-    ask_parser.add_argument("--records", default="", help="팀플 분석 대상 기록 (요청과 분리)")
+    ask_parser.add_argument("--conversation", default="", help="호스트 대화별 고유 ID")
     ask_parser.add_argument("--checkpoint-json", default=None, help=argparse.SUPPRESS)
-    handover_parser = sub.add_parser("handover")
-    handover_parser.add_argument("--text", required=True)
-    for target in (ask_parser, handover_parser):
-        target.add_argument("--prepare", action="store_true", help="현재 AI용 분석 요청 생성; 결과가 아님")
-        target.add_argument("--analysis-json", default=None, help="현재 AI가 생성한 JSON 결과 검증")
-        target.add_argument("--project-name", default="")
-        target.add_argument("--team", default="", help="팀원 이름과 역할 설명")
-        target.add_argument("--assignee", default="", help="작업을 넘기는 현재 담당자")
+    study_parser = sub.add_parser("study", help="학습 세션 이벤트 처리")
+    study_parser.add_argument("--conversation", required=True, help="호스트 대화별 고유 ID")
+    study_parser.add_argument("--event-json", required=True, help="학습 이벤트 JSON")
     args = parser.parse_args()
 
     if args.command == "context":
@@ -377,7 +353,9 @@ def main() -> None:
         selectors = {"query": args.query} if args.query.strip() else {}
         if args.source:
             selectors["source"] = args.source
-        result = selection_guidance(find_assignments(database(), USER_ID, selectors), args.operation)
+        matches = (find_similar_tls_assignments(database(), USER_ID, args.query)
+                   if args.source == "tls" else find_assignments(database(), USER_ID, selectors))
+        result = selection_guidance(matches, args.operation)
     elif args.command == "assignment-add":
         try:
             item = database(write=True).add_manual_assignment(USER_ID, args.title, course_id=args.course_id, due_at=args.due_at, description=args.description)
@@ -430,27 +408,16 @@ def main() -> None:
     elif args.command == "bookmark-delete":
         result = {"toolCalls": ["delete_bookmark"], "data": delete_bookmark(database(write=True), USER_ID, args.target_id)}
     elif args.command == "ask":
-        result = ask(
-            args.text,
-            records=args.records,
-            ui=args.ui,
-            checkpoint_json=args.checkpoint_json,
-            project_name=args.project_name,
-            team=args.team,
-            assignee=args.assignee,
-            prepare=args.prepare,
-            analysis_json=args.analysis_json,
-        )
-    else:
-        result = handover_result(
-            args.text,
-            project_name=args.project_name,
-            team=args.team,
-            assignee=args.assignee,
-            prepare=args.prepare,
-            analysis_json=args.analysis_json,
-        )
-    if args.command != "ask":
+        result = ask(args.text, conversation=args.conversation, checkpoint_json=args.checkpoint_json)
+    elif args.command == "study":
+        try:
+            event = json.loads(args.event_json)
+            store = database()
+            result = {"toolCalls": ["study"], **StudySession(DB_PATH.parent / "study-sessions.db", USER_ID,
+                args.conversation, store, DB_PATH.parent / "files").call(event)}
+        except (ValueError, json.JSONDecodeError) as exc:
+            result = {"toolCalls": ["study"], "status": "error", "error": {"code": "STUDY_INVALID", "message": str(exc)}, "answer": str(exc)}
+    if args.command not in ("ask", "study"):
         result = with_next_commands(result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if DB is not None:

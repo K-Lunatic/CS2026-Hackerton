@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import shutil
 import subprocess
@@ -24,8 +25,11 @@ def _pptx_sections(path: Path) -> list[dict[str, str]]:
             (name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)),
             key=lambda name: int(re.search(r"slide(\d+)", name).group(1)),
         )
+        if len(slides) > 200 or any(archive.getinfo(name).file_size > 2_000_000 for name in slides):
+            raise ValueError("슬라이드 수나 크기가 너무 커서 읽을 수 없습니다.")
         sections = []
-        for number, name in enumerate(slides, 1):
+        for name in slides:
+            number = int(re.search(r"slide(\d+)", name).group(1))
             root = ET.fromstring(archive.read(name))
             paragraphs = []
             for paragraph in root.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}p"):
@@ -39,6 +43,8 @@ def _pptx_sections(path: Path) -> list[dict[str, str]]:
 
 def _xml_sections(path: Path, names: list[str], location: str) -> list[dict[str, str]]:
     with zipfile.ZipFile(path) as archive:
+        if len(names) > 200 or any(archive.getinfo(name).file_size > 2_000_000 for name in names):
+            raise ValueError("문서 XML의 크기가 너무 커서 읽을 수 없습니다.")
         sections: list[dict[str, str]] = []
         for name in names:
             root = ET.fromstring(archive.read(name))
@@ -50,7 +56,8 @@ def _xml_sections(path: Path, names: list[str], location: str) -> list[dict[str,
                 if text:
                     paragraphs.append(text)
             if paragraphs:
-                suffix = f" {len(sections) + 1}" if len(names) > 1 else ""
+                section_number = re.search(r"section(\d+)\.xml$", name)
+                suffix = f" {section_number.group(1)}" if section_number else ""
                 sections.append({"location": f"{location}{suffix}".strip(), "text": "\n".join(paragraphs)})
         return sections
 
@@ -121,8 +128,8 @@ def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path) -> dict[str,
         result = subprocess.run([pdftotext, "-layout", str(path), "-"], capture_output=True, text=True, timeout=120)
         if result.returncode:
             continue
-        pages = [page.strip() for page in result.stdout.split("\f") if page.strip()]
-        output[str(path.resolve())] = [{"location": f"PDF p.{index}", "text": page} for index, page in enumerate(pages, 1)]
+        output[str(path.resolve())] = [{"location": f"PDF p.{index}", "text": page.strip()}
+                                       for index, page in enumerate(result.stdout.split("\f"), 1) if page.strip()]
     return output
 
 
@@ -151,12 +158,49 @@ def _ppt_sections(path: Path) -> list[dict[str, str]]:
     raise RuntimeError("구형 PPT를 읽을 변환 도구가 없습니다. PPTX 또는 PDF로 변환해 다시 동기화해 주세요.")
 
 
+def attached_material(path_text: str, *, title: str = "", max_chars: int = 30000) -> dict[str, Any]:
+    """Read a file explicitly supplied by the current user, without claiming TLS ownership."""
+    path = Path(path_text).expanduser().resolve(strict=True)
+    if not path.is_file() or path.stat().st_size > 10_000_000:
+        raise ValueError("첨부 파일은 10MB 이하의 일반 파일이어야 합니다.")
+    extension = path.suffix.lower()
+    try:
+        if extension == ".pdf":
+            script = Path(__file__).resolve().parents[1] / "scripts" / "extract_pdf.swift"
+            sections = _pdf_sections([path], script, Path(tempfile.gettempdir()) / "turtleneck-swift-cache").get(str(path), [])
+        elif extension == ".pptx":
+            sections = _pptx_sections(path)
+        elif extension == ".ppt":
+            sections = _ppt_sections(path)
+        elif extension in (".txt", ".md"):
+            sections = [{"location": f"줄 {number}", "text": line} for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1) if line.strip()]
+        else:
+            raise ValueError("PDF, PPTX, TXT, MD 파일만 첨부할 수 있습니다.")
+    except (OSError, UnicodeError, RuntimeError, json.JSONDecodeError, zipfile.BadZipFile, ET.ParseError, subprocess.SubprocessError) as exc:
+        raise ValueError("첨부 파일의 본문을 읽지 못했습니다. 텍스트 파일이나 다른 자료를 골라주세요.") from exc
+    usable = []
+    remaining = max_chars
+    for section in sections:
+        if section.get("text", "").strip() and remaining:
+            excerpt = section["text"][:remaining]
+            usable.append({"location": section["location"], "text": excerpt})
+            remaining -= len(excerpt)
+    if not usable:
+        raise ValueError("첨부 파일에서 읽을 수 있는 텍스트가 없습니다. 이미지형 PDF라면 OCR이 필요합니다.")
+    identifier = "attachment-" + hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    return {"id": identifier, "title": title or path.name, "sections": usable,
+            "truncated": sum(len(s.get("text", "")) for s in sections) > max_chars}
+
+
 def study_materials(
     courses: list[dict[str, Any]], resources: list[dict[str, Any]], *,
     files_root: Path, course_query: str = "", resource_query: str = "", max_chars: int = 30000,
+    course_id: str = "", resource_ids: list[str] | None = None, locations: dict | None = None, include_ids: bool = False,
 ) -> dict[str, Any]:
     """Return grounded, bounded source text without local paths or database IDs."""
-    if course_query:
+    if course_id:
+        matching_courses = [c for c in courses if c["id"] == course_id]
+    elif course_query:
         needle = _normalize(course_query)
         matching_courses = [course for course in courses if needle in _normalize(course["name"])]
     else:
@@ -171,6 +215,14 @@ def study_materials(
     selected = [item for item in resources if item.get("courseId") == course["id"]]
     if needle:
         selected = [item for item in selected if needle in _normalize(item.get("title", "") + item.get("fileName", ""))]
+    if resource_ids is not None:
+        available = {item['id'] for item in selected}
+        if not resource_ids or not set(resource_ids) <= available:
+            raise ValueError('선택 과목에서 접근 가능한 자료 ID만 사용하세요.')
+        selected = [item for item in selected if item['id'] in resource_ids]
+    if len(selected) > 3:
+        return {'needsInput': True, 'answer': '자료가 많습니다. 사용할 자료를 3개 이하로 골라주세요.',
+                'data': {'materials': [{'id': x['id'], 'title': x['title']} for x in selected[:10]], 'totalMaterials': len(selected)}}
     if not selected:
         return {"needsInput": bool(not resource_query), "answer": "이 과목에서 조건에 맞는 다운로드 자료를 찾지 못했습니다.", "data": {"courseName": course["name"], "materials": []}}
 
@@ -186,6 +238,9 @@ def study_materials(
             path.relative_to(root)
             if not path.is_file():
                 raise ValueError
+            if path.stat().st_size > 10_000_000:
+                errors[item["id"]] = "파일이 10MB를 넘어서 현재 읽을 수 없습니다. 범위를 좁히거나 작은 파일을 첨부해주세요."
+                continue
             resolved[item["id"]] = path
         except (OSError, ValueError):
             errors[item["id"]] = "로컬 파일이 없습니다. TLS 동기화를 다시 실행해 주세요."
@@ -208,6 +263,8 @@ def study_materials(
             material["error"] = errors[item["id"]]
             materials.append(material)
             continue
+        if include_ids:
+            material.update(id=item['id'], courseId=course['id'])
         path = resolved[item["id"]]
         try:
             extension = item["extension"].lower()
@@ -215,6 +272,8 @@ def study_materials(
                 sections = pdf_text.get(str(path), [])
             elif extension == "pptx":
                 sections = _pptx_sections(path)
+            elif extension in ("txt", "md"):
+                sections = [{"location": f"줄 {i}", "text": line} for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1) if line.strip()]
             elif extension == "ppt":
                 sections = _ppt_sections(path)
             elif extension == "docx":
@@ -226,11 +285,24 @@ def study_materials(
             elif extension == "hwp":
                 sections = _legacy_office_sections(path)
             else:
-                sections = _text_sections(path)
+                if extension in ("py", "js", "java", "c", "cpp", "html", "css", "csv", "json", "xml", "yaml", "yml"):
+                    sections = _text_sections(path)
+                else:
+                    material["error"] = "지원하지 않는 파일 형식입니다. PDF/PPTX/TXT/MD 또는 읽을 수 있는 문서·코드 파일을 선택해주세요."
+                    materials.append(material)
+                    continue
         except (OSError, ValueError, zipfile.BadZipFile, ET.ParseError, subprocess.SubprocessError, RuntimeError):
             material["error"] = "파일 텍스트를 읽지 못했습니다. 오래된 HWP/DOC 파일은 HWPX/DOCX 또는 PDF로 변환해 주세요."
             materials.append(material)
             continue
+        requested = (locations or {}).get(item['id'])
+        if requested is not None:
+            found = {section['location'] for section in sections}
+            if not requested or not set(requested) <= found:
+                material['error'] = '지정한 페이지/슬라이드/줄의 본문을 전부 읽지 못했습니다. 범위를 확인하세요.'
+                materials.append(material)
+                continue
+            sections = [section for section in sections if section['location'] in requested]
         text_found = False
         for section in sections:
             text = section["text"].strip()
@@ -254,10 +326,10 @@ def study_materials(
     loaded = any(item["sections"] for item in materials)
     answer = "강의 자료 텍스트를 불러왔습니다. 출처 위치가 표시된 내용만 근거로 학습 자료를 만드세요." if loaded else "읽을 수 있는 강의 자료 텍스트가 없습니다."
     if blocked:
-        answer += "\n다운로드 금지 표시가 있어 가져오지 않은 자료: " + ", ".join(blocked)
+        answer += "\n다운로드 제한으로 가져오지 않은 자료: " + ", ".join(blocked)
     return {
         "needsInput": False,
         "toolCalls": ["read_course_files"],
-        "data": {"courseName": course["name"], "materials": materials, "truncated": remaining <= 0},
+        "data": {"courseName": course["name"], **({"courseId": course["id"]} if include_ids else {}), "materials": materials, "truncated": remaining <= 0},
         "answer": answer,
     }

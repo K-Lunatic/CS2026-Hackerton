@@ -11,11 +11,11 @@ def usage_guide(text: str = "") -> dict:
     elif re.search(r"강의|영상|수업", text):
         examples = ["아직 안 본 강의 알려줘", "지금 내 상태 어때?"]
         intro = "덜 본 강의와 시청률, 학교에 표시된 시청 기한을 확인할 수 있어요."
-    elif re.search(r"팀플|팀\s*프로젝트|인수인계", text):
-        examples = ["팀플 진행 상황 정리해줘", "팀플 인수인계 정리해줘"]
-        intro = "회의 내용이나 작업 메모를 보내주면 누가 무엇을 했고 무엇이 남았는지 정리해요."
+    elif re.search(r"공부|복습|시험|퀴즈|문제|수업\s*자료", text):
+        examples = ["자료구조 공부 좀 해야겠다", "이 자료로 객관식 5문제 만들어줘", "핵심 개념부터 정리해줘"]
+        intro = "읽을 수 있는 수업자료를 바탕으로 핵심 개념을 정리하거나 연습문제를 만들 수 있어요."
     else:
-        examples = ["지금 내 상태 어때?", "이번 주 안 낸 과제 알려줘", "아직 안 본 강의 알려줘", "새 과제 추가해줘", "팀플 진행 상황 정리해줘"]
+        examples = ["지금 내 상태 어때?", "이번 주 안 낸 과제 알려줘", "아직 안 본 강의 알려줘", "새 과제 추가해줘", "자료구조 복습하고 싶어"]
         intro = "학교에서 할 일을 확인하고 정리하는 도우미예요. 기능 이름을 몰라도 평소 말하듯 요청하면 돼요."
     return {"toolCalls": [], "data": {"suggestions": examples}, "needsInput": True,
             "answer": intro + "\n예를 들면:\n" + "\n".join(f"• {example}" for example in examples) + "\n원하는 일을 한 문장으로 말해 주세요."}

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from difflib import SequenceMatcher
 from typing import Any
 
 from features.deadlines import deadline, deadline_key, format_deadline
@@ -17,7 +18,9 @@ def normalize(value: str) -> str:
 
 
 def matches(query: str, *texts: str) -> bool:
-    terms = [normalize(term) for term in query.split()]
+    # Punctuation-only fragments (for example the hyphen in
+    # `연습과제 - 배열`) are separators, not search terms.
+    terms = [term for term in (normalize(part) for part in query.split()) if term]
     haystack = [normalize(text) for text in texts]
     return bool(terms) and all(term and any(term in text for text in haystack) for term in terms)
 
@@ -52,6 +55,36 @@ def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, s
     return sorted(found, key=lambda item: (deadline_key(item), item["courseName"], item["title"]))
 
 
+def find_similar_tls_assignments(provider: TLSProvider, user_id: str, query: str) -> list[dict[str, Any]]:
+    """Show every plausible TLS candidate, including matches in its description."""
+    items = find_assignments(provider, user_id, {"source": "tls"})
+    query = re.sub(r"\.(?:java|pdf|pptx?|docx?)\b", " ", query, flags=re.I).strip()
+    if not query:
+        return items
+    expanded = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", query)
+    terms = [normalize(term) for term in re.findall(r"[A-Za-z]+|[가-힣]+|\d+", expanded)]
+    terms = [term for term in terms if len(term) >= 2]
+    whole = normalize(query)
+    ranked = []
+    for item in items:
+        title = normalize(item["title"])
+        course = normalize(item["courseName"])
+        description = normalize(item.get("description") or "")
+        score = 0
+        if whole and whole in title:
+            score += 12
+        elif whole and whole in description:
+            score += 8
+        score += sum(4 for term in terms if term in title)
+        score += sum(2 for term in terms if term in description)
+        score += sum(1 for term in terms if term in course)
+        if whole and len(whole) >= 5 and SequenceMatcher(None, whole, title).ratio() >= 0.72:
+            score += 3
+        if score:
+            ranked.append((score, item))
+    return [item for _, item in sorted(ranked, key=lambda row: (-row[0], deadline_key(row[1]), row[1]["courseName"], row[1]["title"]))]
+
+
 def selection_command(item: dict[str, Any], operation: str) -> str:
     tokens = ["save new" if operation == "save" and item.get("source") == "manual" else operation]
     tokens.extend(["--course", _quoted(item.get("courseName") or "기타 과제")])
@@ -70,7 +103,8 @@ def selection_guidance(items: list[dict[str, Any]], operation: str = "save") -> 
     candidates = [dict(courseName=item["courseName"] or "기타 과제", title=item["title"],
                        dueAt=item.get("dueAt"), command=selection_command(item, operation)) for item in items]
     if not items:
-        intro = '일치하는 과제를 찾지 못했습니다. TLS 과제라면 다른 이름으로 save "과제명"을, 새 과제라면 save new "제목"을 입력해 주세요.'
+        intro = ('비슷한 과제를 찾지 못했습니다. TLS에 없는 과제인가요, 아니면 TLS의 제목이 다른가요? '
+                 '제목이 다르면 TLS에 표시된 과제명을 알려주세요. TLS에 없다면 새 과제 제목을 알려주세요.')
     elif len(items) == 1:
         action = "저장" if operation == "save" else "불러오기"
         intro = f"해당 과제를 찾았습니다. 진행 기록의 {action}을 요청하려면 아래 명령을 보내 주세요."

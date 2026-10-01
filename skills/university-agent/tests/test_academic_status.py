@@ -75,8 +75,6 @@ class AcademicStatusTests(ProjectTestBase):
                 self.assertEqual(run_agent.ask(text)['toolCalls'], ['get_unsubmitted_assignments'])
         self.assertEqual(detect_context_intent('지금까지 진행 상황 저장해줘'), 'save')
         self.assertEqual(detect_context_intent('과제 어디까지 했지?'), 'load')
-        self.assertEqual(detect_context_intent('팀플 체크포인트 불러줘'), 'load')
-        self.assertIsNone(detect_context_intent('팀플 진행 상황 알려줘'))
         self.assertEqual(self.cli('ask', '--text', '나.. 지금은 어때?')['toolCalls'], ['get_current_context'])
 
     def test_beginner_guidance_is_read_only_and_routes_examples(self):

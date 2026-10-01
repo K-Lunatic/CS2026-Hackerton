@@ -215,5 +215,5 @@ def with_next_commands(result: dict[str, Any]) -> dict[str, Any]:
     result["nextCommands"] = commands
     remaining = [command for command in commands if command not in result.get("answer", "")]
     if result.get("answer") and remaining:
-        result["answer"] += "\n다음 명령:\n" + "\n".join("• " + command for command in remaining)
+        result["answer"] += "\n\n다음 명령:\n\n" + "\n".join("- " + command for command in remaining)
     return result

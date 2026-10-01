@@ -198,7 +198,7 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
     return {
         "toolCalls": ["create_context_bookmark"],
         "data": public_checkpoint(record),
-        "answer": "진행 기록을 저장했습니다.\n" + format_resume_card(record),
+        "answer": "진행 기록을 저장했습니다.\n\n" + format_resume_card(record),
     }
 
 

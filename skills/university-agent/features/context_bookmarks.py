@@ -194,15 +194,17 @@ def format_resume_card(record: dict[str, Any]) -> str:
     """Render a card strictly from a persisted checkpoint."""
     course = record.get("courseName") or "과목 정보 없음"
     completed = record.get("completedItems") or []
-    completed_text = ", ".join(completed) if completed else "기록된 완료 항목 없음"
+    completed_text = ("\n".join("- " + item.replace("\n", "\n  ") for item in completed)
+                      if completed else "기록된 완료 항목 없음")
     blocker = record.get("blocker") or "기록 없음"
-    return "\n".join(
+    return "\n\n".join(
         [
-            f"과제 진행 기록 — {course} / {record['assignmentTitle']}",
+            f"**과제 진행 기록 — {record['assignmentTitle']}**",
+            f"과목: {course}",
+            f"**현재 진행 상태:** {record['progress']}",
+            f"**다음 작업:** {record['nextAction']}",
+            f"**막힌 부분:** {blocker}",
+            f"**완료한 항목**\n\n{completed_text}",
             f"저장 시각: {format_deadline(record['savedAt'])} (한국 시간)",
-            f"현재 상태: {record['progress']}",
-            f"완료한 항목: {completed_text}",
-            f"막힌 부분: {blocker}",
-            f"다음 행동: {record['nextAction']}",
         ]
     )

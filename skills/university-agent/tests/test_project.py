@@ -175,6 +175,48 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(db.connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(db.connection.execute('PRAGMA foreign_key_check').fetchall(), [])
 
+    def test_conversation_bookmark_requests_prompt_without_database(self):
+        for text, operation in (
+            ('지금 이 대화를 북마크로 저장해줘', 'save'),
+            ('이 대화 북마크해줘', 'save'),
+            ('채팅을 즐겨찾기에 추가해줘', 'save'),
+            ('대화 요약 저장해줘', 'save'),
+            ('bookmark this conversation', 'save'),
+            ('save this chat', 'save'),
+            ('저장된 대화 북마크 보여줘', 'load'),
+            ('이 대화 저장하고 불러와줘', 'ambiguous'),
+        ):
+            with self.subTest(text=text):
+                result = self.cli('ask', '--text', text)
+                self.assertEqual(result['toolCalls'], ['prompt_context_command'])
+                self.assertEqual(result['data'], {'operation': operation, 'performed': False})
+                self.assertFalse(self.db_path.exists())
+
+    def test_custom_bookmark_bypass_is_rejected(self):
+        args = ('bookmark-add', '--target-type', 'CUSTOM', '--target-id', 'conversation-note-test', '--note', '대화 요약')
+        def rejected():
+            process = subprocess.run([sys.executable, str(ROOT / 'scripts/run_agent.py'), *args], env=self.env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(process.returncode, 1, process.stderr)
+            return json.loads(process.stdout)
+
+        result = rejected()
+        self.assertFalse(result['data']['performed'])
+        self.assertEqual(result['error']['code'], 'INVALID_BOOKMARK')
+        self.assertFalse(self.db_path.exists())
+        self.seed()
+        self.assertFalse(rejected()['data']['performed'])
+        self.assertEqual(self.cli('bookmarks')['data'], [])
+        db = LocalDatabase(self.db_path, read_only=True)
+        self.addCleanup(db.close)
+        self.assertEqual(db.connection.execute('SELECT COUNT(*) FROM context_bookmarks').fetchone()[0], 0)
+
+    def test_regular_bookmark_listing_remains_separate(self):
+        self.seed()
+        created = self.cli('bookmark-add', '--target-type', 'ASSIGNMENT', '--target-id', 'assignment-1')['data']
+        result = self.cli('ask', '--text', '북마크 보여줘')
+        self.assertEqual(result['toolCalls'], ['get_bookmarks'])
+        self.assertEqual(result['data'][0]['id'], created['id'])
+
     def test_checkpoint_invalid_command_shapes(self):
         for text in ('과제 저장', '과제 저장 --과제ID', '과제 저장 --과제ID a --과제ID b', '과제 저장 --과제ID a extra', '과제 불러오기 --unknown x', '과제 저장 --과제ID "broken'):
             with self.subTest(text=text): self.assertIn('error', parse_context_command(text))

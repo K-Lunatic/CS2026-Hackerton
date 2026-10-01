@@ -2,6 +2,18 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from .context_commands import command_template
+
+
+def validate_bookmark_target(target_type: str) -> None:
+    if target_type == "CUSTOM":
+        raise ValueError(
+            "사용자 지정 북마크로 대화 내용을 저장할 수 없습니다. "
+            f"다음 명령을 사용자에게 안내해 주세요: {command_template('save')}"
+        )
+    if target_type not in {"ASSIGNMENT", "LECTURE", "COURSE", "NOTICE", "PROJECT"}:
+        raise ValueError("지원하지 않는 북마크 대상입니다.")
+
 
 class BookmarkStore(Protocol):
     def list_bookmarks(self, user_id: str) -> list[dict[str, Any]]: ...
@@ -14,6 +26,7 @@ def list_bookmarks(store: BookmarkStore, user_id: str) -> list[dict[str, Any]]:
 
 
 def add_bookmark(store: BookmarkStore, user_id: str, target_type: str, target_id: str, note: str) -> dict[str, Any]:
+    validate_bookmark_target(target_type)
     return store.add_bookmark(user_id, target_type, target_id, note)
 
 

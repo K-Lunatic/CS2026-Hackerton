@@ -56,11 +56,12 @@ def parse_context_command(text: str) -> dict[str, Any] | None:
 def detect_context_intent(text: str) -> str | None:
     """Recognize paraphrased save/load requests without performing them."""
     save = re.search(
-        r"(?:진행|과제|작업|중단|현재\s*상태|지금까지|하던\s*일|컨텍스트|체크포인트).{0,24}(?:저장|기록|기억|메모)|"
-        r"(?:저장|기록|기억|메모).{0,24}(?:진행|과제|작업|현재|내용|컨텍스트|체크포인트)|"
+        r"(?:진행|과제|작업|중단|현재\s*상태|지금까지|하던\s*일|컨텍스트|체크포인트|대화|채팅|요약|북마크|즐겨찾기).{0,24}(?:저장|기록|기억|메모)|"
+        r"(?:대화|채팅|요약|진행|컨텍스트).{0,24}(?:북마크|즐겨찾기).{0,8}(?:해|추가|등록|남겨)|"
+        r"(?:저장|기록|기억|메모).{0,24}(?:진행|과제|작업|현재|내용|컨텍스트|체크포인트|대화|채팅|요약|북마크|즐겨찾기)|"
         r"(?:과제|작업).{0,12}(?:중단|멈추|그만)|(?:중단|멈추|그만).{0,12}(?:과제|작업)|"
-        r"save.{0,20}(?:progress|assignment|checkpoint|context)|"
-        r"(?:progress|assignment|checkpoint|context).{0,20}save",
+        r"(?:save|bookmark).{0,30}(?:progress|assignment|checkpoint|context|conversation|chat)|"
+        r"(?:progress|assignment|checkpoint|context|conversation|chat).{0,30}(?:save|bookmark)",
         text,
         re.I,
     )
@@ -74,6 +75,7 @@ def detect_context_intent(text: str) -> str | None:
         r"(?:어제|지난번|전에).{0,12}(?:한|했던|하던|진행|과제|작업|어디|뭐|기억)|"
         r"복기|뭐였(?:지|더라)|뭐\s*했(?:지|더라)|기억나|"
         r"컨텍스트.{0,12}(?:불러|보여|확인)|(?:과제|컨텍스트).{0,16}북마크.{0,8}(?:목록|불러|보여|확인)|"
+        r"(?:대화|채팅).{0,24}(?:보여|조회|복원|불러)|"
         r"resume|load.{0,12}context|show.{0,12}(?:progress|context|checkpoint)|"
         r"where\s+was\s+i|what\s+did\s+i\s+do|what\s+next|what\s+should\s+i\s+do\s+next|"
         r"(?:context|checkpoint).{0,12}(?:show|load|resume)",

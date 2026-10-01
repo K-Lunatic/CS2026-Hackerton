@@ -97,6 +97,7 @@ class MoodleTLSProvider:
         for course in courses:
             html = self.session.get(f"/course/view.php?id={course['externalId']}")
             durations = _vod_durations(html)
+            availability = _vod_availability(html)
             for href, title in self._links(html, only_activities=True):
                 match = re.search(r"/mod/vod/view\.php\?id=(\d+)", href)
                 if not match or match.group(1) in seen:
@@ -107,7 +108,8 @@ class MoodleTLSProvider:
                 playtime = _find_playtime(viewer) or durations.get(vod_id, 0)
                 progress = _find_number(viewer, "is_progress")
                 complete = _find_number(viewer, "is_complete") == 1
-                result.append({"id": f"tls-lecture-{vod_id}", "externalId": vod_id, "courseId": course["id"], "title": title or f"TLS lecture {vod_id}", "durationSeconds": playtime, "watchedSeconds": round(playtime * progress / 100), "watchProgress": progress, "completed": complete, "source": "tls"})
+                start, end = availability.get(vod_id, (None, None))
+                result.append({"id": f"tls-lecture-{vod_id}", "externalId": vod_id, "courseId": course["id"], "title": title or f"TLS lecture {vod_id}", "durationSeconds": playtime, "watchedSeconds": round(playtime * progress / 100), "watchProgress": progress, "completed": complete, "availableFrom": start, "availableUntil": end, "source": "tls"})
         return result
 
     def get_notices(self, user_id: str) -> list[dict[str, Any]]:
@@ -192,4 +194,13 @@ def _vod_durations(html: str) -> dict[str, int]:
     result: dict[str, int] = {}
     for match in re.finditer(r"/mod/vod/view\.php\?id=(\d+).*?text-info[^>]*>\s*,?\s*(\d{1,3}):(\d{2})", html, re.I | re.S):
         result[match.group(1)] = int(match.group(2)) * 60 + int(match.group(3))
+    return result
+
+
+def _vod_availability(html: str) -> dict[str, tuple[str, str]]:
+    result: dict[str, tuple[str, str]] = {}
+    for activity in re.finditer(r'<li\b[^>]*class="[^"]*\bvod\b[^"]*"[^>]*id="module-(\d+)"[^>]*>.*?</li>', html, re.I | re.S):
+        dates = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*~\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', activity.group())
+        if dates:
+            result[activity.group(1)] = tuple(value.replace(' ', 'T') + '+09:00' for value in dates.groups())
     return result

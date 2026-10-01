@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS lectures (
   course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   duration_seconds INTEGER NOT NULL CHECK (duration_seconds >= 0),
+  available_from TEXT,
+  available_until TEXT,
   source TEXT NOT NULL DEFAULT 'tls',
   updated_at TEXT NOT NULL,
   UNIQUE (source, external_id)

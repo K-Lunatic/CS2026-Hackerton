@@ -22,9 +22,14 @@ from features.context_bookmarks import format_resume_card, get_context_bookmark,
 from features.context_commands import command_template, detect_context_intent, parse_context_command
 from features.handover import HandoverError, create_handover, format_handover, prepare_handover, is_handover_request
 from features.lectures import get_lectures
+from providers.credentials import CONFIG_PATH
 from storage.local_db import LocalDatabase
 
-USER_ID = os.environ.get("UNIVERSITY_AGENT_USER_ID", "user-hong")
+try:
+    default_user_id = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))["username"]
+except (OSError, ValueError, KeyError):
+    default_user_id = "user-hong"
+USER_ID = os.environ.get("UNIVERSITY_AGENT_USER_ID", default_user_id)
 DB_PATH = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-agent" / "university.db")).expanduser()
 DB: LocalDatabase | None = None
 
@@ -236,6 +241,9 @@ def ask(
         data = get_lectures(database(), USER_ID, unfinished=True)
         answer = "\n".join(f"{x['title']} — {x['watchProgress']}%" for x in data) or "미시청 강의가 없습니다."
         return {"toolCalls": ["get_unwatched_lectures"], "data": data, "answer": answer}
+    if re.search(r"할 일|해야 할 일|마감 목록", text):
+        data = database().get_todos(USER_ID)
+        return {"toolCalls": ["get_todos"], "data": data, "answer": "과목별 할 일을 조회했습니다."}
     if re.search(r"공지", text):
         data = database().get_notices(USER_ID)
         return {"toolCalls": ["get_notices"], "data": data, "answer": json.dumps(data, ensure_ascii=False)}
@@ -266,6 +274,7 @@ def main() -> None:
     lecture_parser = sub.add_parser("lectures")
     lecture_parser.add_argument("--unfinished", action="store_true")
     sub.add_parser("notices")
+    sub.add_parser("todos")
     sub.add_parser("resources")
     sub.add_parser("bookmarks")
     add = sub.add_parser("bookmark-add")
@@ -305,6 +314,8 @@ def main() -> None:
             "toolCalls": ["get_lectures"],
             "data": get_lectures(database(), USER_ID, unfinished=args.unfinished),
         }
+    elif args.command == "todos":
+        result = {"toolCalls": ["get_todos"], "data": database().get_todos(USER_ID)}
     elif args.command == "notices":
         result = {"toolCalls": ["get_notices"], "data": database().get_notices(USER_ID)}
     elif args.command == "resources":

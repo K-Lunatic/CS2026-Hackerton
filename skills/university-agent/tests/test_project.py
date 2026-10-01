@@ -20,7 +20,7 @@ from storage.local_db import LocalDatabase
 from providers import credentials
 from providers.forms import collect_local, FormUnavailable, redact, requested_schema, TLS_CREDENTIALS_FORM
 from providers.moodle_session import MoodleSession, LoginError, DownloadRestricted, check_download_url, _DownloadRedirectHandler
-from providers.moodle_provider import MoodleTLSProvider
+from providers.moodle_provider import MoodleTLSProvider, _plain_text
 from features.context import get_current_context
 from features.context_commands import parse_context_command
 
@@ -262,12 +262,11 @@ class ProjectTests(ProjectTestBase):
         resources = provider.get_resources('u', notices=[{'courseId': 'tls-course-1', 'title': '2주차 파일 안내', 'content': '2주차 보충자료.pdf는 다운로드 금지입니다.'}])
         self.assertEqual(resources[0]['_content'], b'%PDF-test-fixture')
         prohibited = [item for item in resources if item['downloadStatus'] == 'PROHIBITED']
-        self.assertEqual(len(prohibited), 4)
+        self.assertEqual(len(prohibited), 3)
         self.assertTrue(all('_content' not in item for item in prohibited))
         self.assertIn('다운로드 제한', prohibited[0]['downloadReason'])
         self.assertIn('과목 공지', prohibited[1]['downloadReason'])
         self.assertIn('서버가 파일 다운로드를 거부', prohibited[2]['downloadReason'])
-        self.assertIn('문서 뷰어', prohibited[3]['downloadReason'])
         self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8', '/mod/ubfile/view.php?id=9'])
 
     def test_moodle_provider_reuses_course_pages_during_one_sync(self):
@@ -320,7 +319,8 @@ class ProjectTests(ProjectTestBase):
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
         session.pages['/mod/ubfile/view.php?id=9'] = '<a href="/mod/ubfile/viewer.php?id=9">열기</a>'
         item = MoodleTLSProvider(session).get_resources('u')[0]
-        self.assertEqual(item['downloadStatus'], 'PROHIBITED')
+        self.assertEqual(item['downloadStatus'], 'NOT_DOWNLOADED')
+        self.assertIn('뷰어 페이지', item['downloadReason'])
         self.assertEqual(session.byte_requests, ['/mod/ubfile/view.php?id=9'])
         session = FakeTLSSession()
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
@@ -329,6 +329,10 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(item['downloadStatus'], 'PROHIBITED')
         self.assertIn('강의실 자료 항목', item['downloadReason'])
         self.assertEqual(session.byte_requests, [])
+
+    def test_visible_download_text_ignores_hidden_and_malformed_markup(self):
+        html = '<span style="display:none">다운로드 금지</span><script>다운로드 금지</script><p>자료 설명</p><![if gte IE 9]><p>보이는 안내</p><![endif]>'
+        self.assertEqual(_plain_text(html), '자료 설명 보이는 안내')
 
     def test_malformed_viewer_markup_keeps_download_restriction(self):
         session = FakeTLSSession()

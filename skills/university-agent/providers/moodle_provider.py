@@ -225,7 +225,7 @@ class MoodleTLSProvider:
                                    "downloadStatus": "PROHIBITED", "downloadReason": restriction})
                     continue
                 cached = (existing_resources or {}).get(resource_id)
-                if cached and cached.get("localPath") and Path(cached["localPath"]).is_file() and cached.get("remotePath") == href:
+                if cached and cached.get("localPath") and Path(cached["localPath"]).is_file() and cached.get("remotePath") == href and cached.get("mimeType") not in {"text/html", "application/xhtml+xml"}:
                     result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
                                    "courseId": course["id"], "title": title or cached.get("title", f"TLS resource {resource_id}"),
                                    "fileName": cached.get("fileName") or title or f"resource-{resource_id}",
@@ -250,12 +250,19 @@ class MoodleTLSProvider:
                 if _looks_like_viewer_page(content, response.headers.get("Content-Type", ""), response.geturl()):
                     result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
                                    "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
-                                   "fileName": title or f"resource-{resource_id}", "extension": "", "mimeType": response.headers.get("Content-Type"),
-                                   "remotePath": href, "source": "tls", "downloadStatus": "PROHIBITED",
-                                   "downloadReason": "TLS가 실제 파일 대신 문서 뷰어 페이지를 반환해 본문을 가져오지 않았습니다."})
+                                   "fileName": title or f"resource-{resource_id}", "extension": "unknown", "mimeType": response.headers.get("Content-Type"),
+                                   "remotePath": href, "source": "tls", "downloadStatus": "NOT_DOWNLOADED",
+                                   "downloadReason": "TLS가 다운로드 금지가 아닌 문서 뷰어 페이지를 반환해 원본 파일을 저장하지 못했습니다."})
                     continue
                 final_path = unquote(urlsplit(response.geturl()).path)
                 mime_type = response.headers.get_content_type()
+                if mime_type in {"text/html", "application/xhtml+xml"}:
+                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
+                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
+                                   "fileName": title or f"resource-{resource_id}", "extension": "unknown",
+                                   "mimeType": mime_type, "remotePath": href, "source": "tls",
+                                   "downloadStatus": "NOT_DOWNLOADED", "downloadReason": "TLS가 원본 파일 대신 HTML 문서 페이지를 반환해 파일로 저장하지 않았습니다."})
+                    continue
                 file_name = response.headers.get_filename() or Path(final_path).name
                 extension = Path(file_name).suffix.lower().lstrip(".")
                 if extension in {"html", "htm", "php"}:
@@ -319,15 +326,38 @@ def _looks_like_viewer_page(content: bytes, mime_type: str, response_url: str) -
 
 
 def _plain_text(html: str) -> str:
-    parser = HTMLParser(convert_charrefs=True)
-    parts: list[str] = []
-    parser.handle_data = parts.append  # type: ignore[method-assign]
-    try:
-        parser.feed(html)
-    except NotImplementedError:
-        # ponytail: TLS's malformed <![...]> needs this fallback; use a tolerant parser if script text causes false matches.
-        return " ".join(unescape(re.sub(r"<[^>]*>", " ", html)).split())
-    return " ".join("".join(parts).split())
+    # Moodle pages may contain old conditional comments that Python's parser rejects.
+    html = re.sub(r"<!\[[^>]*>", "", html, flags=re.S)
+
+    class VisibleTextParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.parts: list[str] = []
+            self.suppressed = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            values = dict(attrs)
+            classes = (values.get("class") or "").lower()
+            style = (values.get("style") or "").lower().replace(" ", "")
+            hidden = "hidden" in values or any(token in classes.split() for token in ("accesshide", "hidden", "sr-only", "d-none")) or re.search(r"(?:display:none|visibility:hidden)", style)
+            if self.suppressed or tag.lower() in {"script", "style", "noscript", "template"} or hidden:
+                if not self.suppressed:
+                    self.parts.append(" ")
+                self.suppressed += 1
+
+        def handle_endtag(self, tag: str) -> None:
+            if self.suppressed:
+                self.suppressed -= 1
+            if tag.lower() in {"p", "div", "li", "br", "tr", "h1", "h2", "h3", "h4", "h5", "h6"}:
+                self.parts.append(" ")
+
+        def handle_data(self, data: str) -> None:
+            if not self.suppressed:
+                self.parts.append(data)
+
+    parser = VisibleTextParser()
+    parser.feed(html)
+    return " ".join("".join(parser.parts).split())
 
 
 def _match_text(html: str, pattern: str) -> str:

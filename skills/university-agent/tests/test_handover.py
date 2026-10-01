@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import tempfile
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
@@ -14,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'scripts'))
 from features.handover import HandoverError, call_ai, create_handover, format_handover
-from run_agent import ask
+TEST_DB_DIR = tempfile.TemporaryDirectory()
+with patch.dict(os.environ, {'UNIVERSITY_AGENT_DB': str(Path(TEST_DB_DIR.name) / 'test.db')}):
+    from run_agent import ask
 
 SAMPLE = '10월 2일 회의: 민수는 로그인 화면 담당, 지연은 로그인 API 담당. 현우는 DB 테이블 생성 완료.\n10월 3일 작업 기록: 민수는 화면 구현 완료, 지연은 API 작업 중이며 완료 목표는 10월 4일. 화면과 API 연결 테스트는 아직 하지 않음.'
 
@@ -115,7 +118,7 @@ class FixtureTests(unittest.TestCase):
             result = ask('팀플 정리', records=SAMPLE)
         self.assertIsNone(result['data'])
         self.assertEqual(result['error']['code'], 'HANDOVER_FAILED')
-        with patch.dict(os.environ, {'TEAM_HANDOVER_API_URL': '', 'TEAM_HANDOVER_MODEL': ''}):
+        with patch.dict(os.environ, {'TEAM_HANDOVER_API_URL': '', 'TEAM_HANDOVER_MODEL': '', 'UNIVERSITY_AGENT_DB': str(Path(TEST_DB_DIR.name) / 'test.db')}):
             run = subprocess.run([sys.executable, str(ROOT / 'scripts/run_agent.py'), 'handover', '--text', SAMPLE], capture_output=True, text=True)
         self.assertEqual(run.returncode, 1)
         self.assertIsNone(json.loads(run.stdout)['data'])

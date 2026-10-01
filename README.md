@@ -39,3 +39,16 @@ python3 scripts/run_agent.py ask --text "팀플 진행 상황 정리해줘." --r
 호출 방법과 결과 구조는 [handover.md](skills/university-agent/references/handover.md)를 참고하세요. 분석 요청과 테스트용 응답은 실제 분석 결과로 취급하지 않습니다.
 
 상세 동작은 [skills/university-agent/SKILL.md](skills/university-agent/SKILL.md)에 있습니다. TLS 연동은 [provider-contract.md](skills/university-agent/references/provider-contract.md), 로컬 DB 구조는 [data-model.md](skills/university-agent/references/data-model.md)와 `skills/university-agent/database/schema.sql`을 참고하세요.
+
+## 팀플 화면 실행
+
+```bash
+python3 skills/university-agent/scripts/handover_web.py
+```
+
+[http://127.0.0.1:8765/](http://127.0.0.1:8765/)에서 자료 입력 → 결과 수정·원문 확인 →
+인수인계 생성·편집 → 복사를 진행할 수 있습니다. AI 설정 전에는 **임시 규칙 분석 (AI 아님)**으로
+동작하며, API 연결 후 같은 화면에서 실제 AI를 사용합니다. 대화에서 화면 링크를 받으려면
+`python3 skills/university-agent/scripts/run_agent.py ask --text "팀플 정리해줘" --ui`를 실행합니다.
+화면은 별도 설치 없이 Python으로 실행되며, 저장소의 DB/TLS 코드와 분리되어 있습니다.
+실행·프론트엔드 API·검증·제한 사항은 [handover.md](skills/university-agent/references/handover.md)에 있습니다.

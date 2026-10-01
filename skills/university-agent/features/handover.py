@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -11,6 +12,10 @@ from typing import Any, Callable
 
 class HandoverError(Exception):
     """A safe, user-facing failure; never includes credentials or response bodies."""
+
+
+def is_handover_request(text: str) -> bool:
+    return bool(re.search(r"팀플|인수인계|진행 상황|안 끝난 작업|역할.*넘|작업.*담당자", text))
 
 
 SYSTEM_PROMPT = '''회의록과 작업 기록을 분석하는 팀플 인수인계 도우미다.
@@ -25,8 +30,9 @@ SYSTEM_PROMPT = '''회의록과 작업 기록을 분석하는 팀플 인수인�
 각 작업/결정/자료/확인사항에는 근거가 필요하다. 담당자/기한은 근거 인용에도 포함하라.
 기록에서 확인된 다음 작업은 tasks로, AI 제안은 suggestions로 분리하라.
 외부 자료를 검색하거나 존재하지 않는 파일/링크를 만들지 마라.
-다음 JSON 객체만 반환하라 (모든 키 필수):
-{"summary":"진행 요약", "tasks":[{"title":"작업명","owner":"미정",
+프로젝트 이름은 기록에 명시된 경우에만 projectName으로 추출하고 없으면 미정으로 둬라.
+다음 JSON 객체만 반환하라 (projectName 외 모든 키 필수):
+{"projectName":"미정", "summary":"진행 요약", "tasks":[{"title":"작업명","owner":"미정",
 "deadline":"미정","deadlineKind":"미정","status":"확인 필요","evidence":[]}],
 "decisions":[{"text":"결정","evidence":[]}],
 "resources":[{"text":"자료 위치/링크","evidence":[]}],
@@ -143,7 +149,10 @@ def create_handover(text: str, *, project_name: str = '', team: str = '',
     except (ValueError, KeyError, TypeError, IndexError):
         raise HandoverError('AI 결과의 구조 또는 원문 근거 검증에 실패했습니다. 다시 시도하세요.') from None
     tasks = data['tasks']
-    data.update(projectName=project_name or '미정', analysisSource=('supplied-analysis' if analysis_json is not None else 'injected-provider' if ai_call else 'remote-ai'), records=records)
+    inferred_project = data.get('projectName', '미정')
+    if not isinstance(inferred_project, str) or (inferred_project != '미정' and inferred_project not in text):
+        inferred_project = '미정'
+    data.update(projectName=project_name or inferred_project, analysisSource=('supplied-analysis' if analysis_json is not None else 'injected-provider' if ai_call else 'remote-ai'), records=records)
     data['completed'] = [t for t in tasks if t['status'] == '완료']
     data['inProgress'] = [t for t in tasks if t['status'] == '진행 중']
     data['pending'] = [t for t in tasks if t['status'] in {'미완료', '확인 필요'}]

@@ -293,6 +293,20 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(session.requests.count('/course/view.php?id=1'), 1)
         self.assertEqual(session.requests.count('/mod/assign/view.php?id=2'), 2)
 
+    def test_moodle_activity_parsing_is_reused_but_details_stay_fresh(self):
+        session = FakeTLSSession()
+        provider = MoodleTLSProvider(session)
+        with patch.object(provider, '_links', wraps=provider._links) as links:
+            self.assertEqual(provider.get_assignments('u')[0]['submissionStatus'], 'SUBMITTED')
+            provider.get_lectures('u')
+            provider.get_notices('u')
+            session.pages['/mod/assign/view.php?id=2'] = '<p>종료 일시: 2026-10-05 23:59</p><p>제출 안 함</p>'
+            self.assertEqual(provider.get_assignments('u')[0]['submissionStatus'], 'NOT_SUBMITTED')
+            activity_calls = [call for call in links.call_args_list if call.kwargs.get('only_activities')]
+            self.assertEqual(len(activity_calls), 1)
+        session.pages['/course/view.php?id=1'] = ''
+        self.assertEqual(MoodleTLSProvider(session).get_assignments('u'), [])
+
     def test_moodle_provider_reuses_existing_local_file(self):
         session = FakeTLSSession()
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/resource/view.php?id=5">테스트 자료</a></li>'

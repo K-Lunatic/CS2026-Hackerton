@@ -17,29 +17,39 @@ def normalize(value: str) -> str:
     return re.sub(r"[^\w+#]", "", value)
 
 
-def matches(query: str, *texts: str) -> bool:
+def _query_terms(query: str) -> list[str]:
     # Punctuation-only fragments (for example the hyphen in
     # `연습과제 - 배열`) are separators, not search terms.
-    terms = [term for term in (normalize(part) for part in query.split()) if term]
-    haystack = [normalize(text) for text in texts]
-    return bool(terms) and all(term and any(term in text for text in haystack) for term in terms)
+    return [term for term in (normalize(part) for part in query.split()) if term]
+
+
+def _matches_terms(terms: list[str], *normalized_texts: str) -> bool:
+    return bool(terms) and all(any(term in text for text in normalized_texts) for term in terms)
+
+
+def matches(query: str, *texts: str) -> bool:
+    return _matches_terms(_query_terms(query), *(normalize(text) for text in texts))
 
 
 def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, str], *, prefer_exact_title: bool = False) -> list[dict[str, Any]]:
     courses = {course["id"]: course["name"] for course in provider.get_courses(user_id)}
+    terms = {key: _query_terms(selectors[key]) for key in ("query", "course", "title") if key in selectors}
+    normalized_courses = {key: normalize(name or "기타 과제") for key, name in courses.items()} if terms else {}
+    other_course = normalize("기타 과제")
     found = []
     for original in provider.get_assignments(user_id):
         if "source" in selectors and original.get("source") != selectors["source"]:
             continue
         item = dict(original, courseName=courses.get(original.get("courseId"), ""))
-        course_label = item["courseName"] or "기타 과제"
         if "assignmentId" in selectors and item["id"] != selectors["assignmentId"]:
             continue
-        if "query" in selectors and not matches(selectors["query"], course_label, item["title"]):
+        course_label = normalized_courses.get(item.get("courseId"), other_course)
+        title = normalize(item["title"]) if "query" in terms or "title" in terms else ""
+        if "query" in terms and not _matches_terms(terms["query"], course_label, title):
             continue
-        if "course" in selectors and not matches(selectors["course"], course_label):
+        if "course" in terms and not _matches_terms(terms["course"], course_label):
             continue
-        if "title" in selectors and not matches(selectors["title"], item["title"]):
+        if "title" in terms and not _matches_terms(terms["title"], title):
             continue
         if "dueAt" in selectors:
             due = deadline(item.get("dueAt"))
@@ -51,12 +61,14 @@ def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, s
     # keyword matches (for example "보고서" versus "보고서 초안"). Keep
     # duplicate exact titles ambiguous so course/deadline selection still works.
     if prefer_exact_title and "query" in selectors:
-        exact = [item for item in found if normalize(item["title"]) == normalize(selectors["query"])]
+        expected = normalize(selectors["query"])
+        exact = [item for item in found if normalize(item["title"]) == expected]
         if exact:
             found = exact
     for selector, field in (("course", "courseName"), ("title", "title")):
         if selector in selectors:
-            exact = [item for item in found if normalize(item[field] or ("기타 과제" if field == "courseName" else "")) == normalize(selectors[selector])]
+            expected = normalize(selectors[selector])
+            exact = [item for item in found if normalize(item[field] or ("기타 과제" if field == "courseName" else "")) == expected]
             if exact:
                 found = exact
     return sorted(found, key=lambda item: (deadline_key(item), item["courseName"], item["title"]))
@@ -65,6 +77,7 @@ def find_assignments(provider: TLSProvider, user_id: str, selectors: dict[str, s
 def find_similar_tls_assignments(provider: TLSProvider, user_id: str, query: str) -> list[dict[str, Any]]:
     """Show every plausible TLS candidate, including matches in its description."""
     items = find_assignments(provider, user_id, {"source": "tls"})
+    all_items = items
     # An explicit exercise number overrides broad clues from prior problems.
     # Keep Ex06 atomic instead of matching every exercise via "Ex".
     exercises = re.findall(r"\bex\s*0*(\d+)\b", query, flags=re.I)
@@ -83,7 +96,9 @@ def find_similar_tls_assignments(provider: TLSProvider, user_id: str, query: str
     query = re.sub(r"\.(?:java|pdf|pptx?|docx?)\b", " ", query, flags=re.I).strip()
     if not query:
         return items
-    exact_ids = {item["id"] for item in find_assignments(provider, user_id, {"source": "tls", "query": query})}
+    query_terms = _query_terms(query)
+    exact_ids = {item["id"] for item in all_items if _matches_terms(
+        query_terms, normalize(item["courseName"] or "기타 과제"), normalize(item["title"]))}
     expanded = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", query)
     terms = [normalize(term) for term in re.findall(r"[A-Za-z]+\d*(?:[+#]+)?|[가-힣]+|\d+", expanded)]
     terms = [term for term in terms if len(term) >= 2]
@@ -146,11 +161,6 @@ def selection_guidance(items: list[dict[str, Any]], operation: str = "save") -> 
                    if available else None)
         candidates.append(dict(courseName=item["courseName"] or "기타 과제", title=item["title"],
                                dueAt=item.get("dueAt"), submissionStatus=status, command=command))
-    if not items:
-        intro = ("저장된 TLS 과제에서 후보를 찾지 못했어요. 과목명이나 기억나는 단어를 하나 더 알려주세요. "
-                 "직접 정한 이름으로 저장하려면 ‘새 이름: 내 과제’처럼 말해 주세요. 아직 저장하지 않았어요."
-                 if operation == "save" else
-                 "해당 이름의 과제를 찾지 못했어요. 다른 과목명·키워드를 알려주시거나 `list`로 저장 목록을 확인해 주세요.")
     if not items:
         intro = ("관련 과제를 TLS에서 찾지 못했습니다. TLS에 표시된 제목이 다른가요, "
                  "아니면 학교 과제 목록에 없는 과제인가요? 과목명이나 기억나는 단어를 하나 더 알려주세요. "

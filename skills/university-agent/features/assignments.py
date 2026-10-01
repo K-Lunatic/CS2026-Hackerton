@@ -5,23 +5,37 @@ from datetime import datetime, timedelta
 import re
 
 from providers.tls_provider import TLSProvider
-from features.deadlines import SEOUL, deadline, deadline_key, format_deadline
+from features.deadlines import SEOUL, deadline, format_deadline
 
 
 def get_assignments(provider: TLSProvider, user_id: str, *, unsubmitted: bool = False, upcoming: bool = False, this_week: bool = False, overdue: bool = False, now: datetime | None = None) -> list[dict[str, Any]]:
     now = (now or datetime.now(SEOUL)).astimezone(SEOUL)
-    result = [item.copy() for item in provider.get_assignments(user_id)]
-    if unsubmitted or upcoming or this_week or overdue:
-        result = [item for item in result if item["submissionStatus"] == "NOT_SUBMITTED"]
-    if upcoming:
-        result = [item for item in result if (due := deadline(item.get("dueAt"))) is not None and due >= now]
-    if overdue:
-        result = [item for item in result if (due := deadline(item.get("dueAt"))) is not None and due < now]
+    return filter_assignments(provider.get_assignments(user_id), unsubmitted=unsubmitted,
+                              upcoming=upcoming, this_week=this_week, overdue=overdue, now=now)
+
+
+def filter_assignments(items: list[dict[str, Any]], *, unsubmitted: bool = False, upcoming: bool = False, this_week: bool = False, overdue: bool = False, now: datetime | None = None) -> list[dict[str, Any]]:
+    """Filter one request's snapshot, preserving stable order and detached results."""
+    now = (now or datetime.now(SEOUL)).astimezone(SEOUL)
+    pending_only = unsubmitted or upcoming or this_week or overdue
     if this_week:
         start = now.date() - timedelta(days=now.weekday())
         end = start + timedelta(days=7)
-        result = [item for item in result if (due := deadline(item.get("dueAt"))) is not None and start <= due.date() < end]
-    return sorted(result, key=deadline_key)
+    undated_key = datetime.max.replace(tzinfo=SEOUL)
+    result = []
+    for item in items:
+        if pending_only and item["submissionStatus"] != "NOT_SUBMITTED":
+            continue
+        due = deadline(item.get("dueAt"))
+        if upcoming and (due is None or due < now):
+            continue
+        if overdue and (due is None or due >= now):
+            continue
+        if this_week and (due is None or not start <= due.date() < end):
+            continue
+        result.append((due or undated_key, item))
+    result.sort(key=lambda entry: entry[0])
+    return [item.copy() for _, item in result]
 
 
 def assignment_answer(provider: TLSProvider, user_id: str, text: str, *, now: datetime | None = None) -> dict[str, Any]:
@@ -29,7 +43,8 @@ def assignment_answer(provider: TLSProvider, user_id: str, text: str, *, now: da
     weekly = bool(re.search(r"이번\s*주", text))
     upcoming = bool(re.search(r"앞으로|예정|다가오는", text))
     overdue = bool(re.search(r"기한\s*지난|마감\s*지난|밀린|연체", text))
-    data = get_assignments(provider, user_id, unsubmitted=True, upcoming=upcoming, this_week=weekly, overdue=overdue, now=now)
+    all_items = provider.get_assignments(user_id)
+    data = filter_assignments(all_items, unsubmitted=True, upcoming=upcoming, this_week=weekly, overdue=overdue, now=now)
     courses = {item["id"]: item["name"] for item in provider.get_courses(user_id)}
     label = "미제출 과제"
     if weekly:
@@ -46,7 +61,6 @@ def assignment_answer(provider: TLSProvider, user_id: str, text: str, *, now: da
         due = deadline(item.get("dueAt"))
         state = "기한 지남" if due is not None and due < now else "미제출"
         lines.append(f"{courses.get(item.get('courseId'), '기타 과제')}: {item['title']} — {format_deadline(item.get('dueAt'))} · {state}")
-    all_items = provider.get_assignments(user_id)
     unknown = sum(item['submissionStatus'] == 'UNKNOWN' for item in all_items)
     if unknown:
         lines.append(f"제출 상태 확인 필요: {unknown}개 (미제출 수에 포함하지 않음)")

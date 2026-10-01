@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | TLS 동기화 | `users`, `courses`, `enrollments`, `assignments`, `lectures`, `notices` | TLS 담당자 |
 | 사용자별 학업 상태 | `assignment_submissions`, `lecture_progress` | TLS 담당자 + 기능 담당자 소비 |
-| 서비스 기능 | `bookmarks`, `projects`, `project_members`, `project_tasks`, `handovers`, `handover_items` | 기능 담당자 |
+| 서비스 기능 | `bookmarks`, `context_bookmarks`, `projects`, `project_members`, `project_tasks`, `handovers`, `handover_items` | 기능 담당자 |
 | 조회 조합 | `StudentContext` | 저장하지 않고 조회 시 생성 |
 
 ## 핵심 결정
@@ -29,6 +29,7 @@
 4. 외부 TLS에 없는 앱 데이터는 TLS 테이블에 섞지 않는다.
 5. `StudentContext`는 중복 캐시 테이블로 만들지 않는다. 과제·강의·북마크·프로젝트 조회를 조합한다.
 6. 이 DB는 의도적으로 기기별 단일 저장소다. 기기 간 공유와 충돌 해결은 제공하지 않는다.
+7. 과제 Context Bookmark는 사용자가 보낸 정형 명령에서만 읽거나 쓴다. 저장은 진행 이력을 append-only로 남긴다.
 
 ## 기능팀이 받는 형태
 
@@ -54,6 +55,7 @@ TLS 담당자는 DB를 직접 노출하지 않고 `TLSProvider`가 아래처럼 
 - 강의: 전체, 미시청, 진행률
 - 공지: 과목별 최신 공지
 - 북마크: 사용자별 대상 북마크
+- 과제 컨텍스트 북마크: 사용자별 과제 진행 체크포인트와 복귀 카드
 - 프로젝트: 멤버, 업무, 상태
 - 인수인계: 완료·미완료·파일·환경·다음 액션 항목
 

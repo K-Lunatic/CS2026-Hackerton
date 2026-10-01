@@ -1,4 +1,4 @@
 interface:
   display_name: "University Agent"
   short_description: "Query and manage university workload from mock TLS data"
-  default_prompt: "Use $university-agent to check my assignments, lectures, bookmarks, or project handover."
+  default_prompt: "Use $university-agent to check assignments and lectures, save or resume an assignment context bookmark, or manage bookmarks and project handovers."

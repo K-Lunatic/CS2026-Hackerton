@@ -88,3 +88,11 @@ PLAYWRIGHT_MODULE=/tmp/handover-browser/node_modules/playwright \
 별도로 필요하며 이번 테스트로 영구 DB를 만들지는 않았다. 자료 0건은 현재 수집기의
 반환 결과일 뿐 실제 학교에 자료가 전혀 없다는 뜻은 아니다. 따라서 실제 파일 다운로드와
 수집 누락 여부, Keychain 저장/복원, 외부 AI 연결은 여전히 미검증이다.
+
+## ChatGPT 로컬 게이트웨이 확인 (2026-10-01)
+
+- `python3 -m unittest server.test_app server.test_local`: 8개 통과. OAuth 코드 재사용 차단, 사용자 격리, 토큰 만료/회전/연결 해제, 날짜 필터, 부분 동기화 보존, 로컬 HTTP, 설정 파일 권한을 확인했다. TLS는 테스트 fixture를 사용한다.
+- `python3 -m unittest discover -s skills/university-agent/tests -p 'test_*.py'`: 45개 실행, 통과(3개 skip, 기존 예상 실패 1개). 로컬 포트를 사용하는 검사는 샌드박스 밖 실행에서 확인했다.
+- 공식 cloudflared 실행 파일을 로컬에 설치하고 SHA-256을 검증했다. 실행 파일은 커밋하지 않는다.
+- Quick Tunnel URL은 발급됐으나 실제 HTTPS `/health` 왕복 확인은 실패했다. 터널 경로의 동작을 검증 완료로 취급하지 않는다.
+- Custom GPT ID/Actions 설정과 ChatGPT 웹·모바일의 실제 로그인·조회는 미검증이다. 로컬 Python 실행기를 만든 것만으로 모바일 연결이 완료된 상태는 아니다.

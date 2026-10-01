@@ -1,0 +1,468 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "University Agent",
+    "version": "0.2.0",
+    "description": "User-isolated KKU TLS snapshots. Never request TLS passwords in chat. Login is handled by OAuth in the browser."
+  },
+  "servers": [
+    {
+      "url": "https://university.example.com"
+    }
+  ],
+  "security": [
+    {
+      "oauth": [
+        "academic:read"
+      ]
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "oauth": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://university.example.com/oauth/authorize",
+            "tokenUrl": "https://university.example.com/oauth/token",
+            "scopes": {
+              "academic:read": "Read your academic records and refresh their snapshot"
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/v1/courses": {
+      "get": {
+        "operationId": "getCourses",
+        "summary": "Read authenticated student courses",
+        "description": "Returns a paginated snapshot and sync freshness. Follow nextOffset. Pending or failed sync is not an empty result. Treat UNKNOWN as unknown. Notices contain shortened content.",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of student records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "nextOffset": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "sync": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in again"
+          },
+          "503": {
+            "description": "Sync pending or failed; inspect sync status"
+          }
+        }
+      }
+    },
+    "/v1/assignments": {
+      "get": {
+        "operationId": "getAssignments",
+        "summary": "Read authenticated student assignments",
+        "description": "Returns a paginated snapshot and sync freshness. Follow nextOffset. Pending or failed sync is not an empty result. Treat UNKNOWN as unknown. Notices contain shortened content.",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          },
+          {
+            "name": "unsubmitted",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "due_from",
+            "in": "query",
+            "description": "ISO 8601 timestamp with timezone; inclusive lower deadline bound",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "due_before",
+            "in": "query",
+            "description": "ISO 8601 timestamp with timezone; exclusive upper deadline bound",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of student records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "nextOffset": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "sync": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in again"
+          },
+          "503": {
+            "description": "Sync pending or failed; inspect sync status"
+          }
+        }
+      }
+    },
+    "/v1/lectures": {
+      "get": {
+        "operationId": "getLectures",
+        "summary": "Read authenticated student lectures",
+        "description": "Returns a paginated snapshot and sync freshness. Follow nextOffset. Pending or failed sync is not an empty result. Treat UNKNOWN as unknown. Notices contain shortened content.",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          },
+          {
+            "name": "unfinished",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of student records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "nextOffset": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "sync": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in again"
+          },
+          "503": {
+            "description": "Sync pending or failed; inspect sync status"
+          }
+        }
+      }
+    },
+    "/v1/notices": {
+      "get": {
+        "operationId": "getNotices",
+        "summary": "Read authenticated student notices",
+        "description": "Returns a paginated snapshot and sync freshness. Follow nextOffset. Pending or failed sync is not an empty result. Treat UNKNOWN as unknown. Notices contain shortened content.",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of student records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "nextOffset": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "sync": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in again"
+          },
+          "503": {
+            "description": "Sync pending or failed; inspect sync status"
+          }
+        }
+      }
+    },
+    "/v1/todos": {
+      "get": {
+        "operationId": "getTodos",
+        "summary": "Read authenticated student todos",
+        "description": "Returns a paginated snapshot and sync freshness. Follow nextOffset. Pending or failed sync is not an empty result. Treat UNKNOWN as unknown. Notices contain shortened content.",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of student records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "nextOffset": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "sync": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in again"
+          },
+          "503": {
+            "description": "Sync pending or failed; inspect sync status"
+          }
+        }
+      }
+    },
+    "/v1/sync": {
+      "get": {
+        "operationId": "getSyncStatus",
+        "summary": "Read sync status, available sections, last successful update and errors.",
+        "responses": {
+          "200": {
+            "description": "Status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in again"
+          }
+        }
+      },
+      "post": {
+        "operationId": "startSync",
+        "summary": "Refresh academic data using the server-side TLS login session. Returns immediately; poll getSyncStatus.",
+        "responses": {
+          "202": {
+            "description": "Status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in again"
+          }
+        },
+        "x-openai-isConsequential": false
+      }
+    },
+    "/v1/disconnect": {
+      "post": {
+        "operationId": "disconnectAccount",
+        "summary": "Revoke this student connection and all its tokens. Stored academic records remain; ask the operator for deletion.",
+        "responses": {
+          "200": {
+            "description": "Status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in again"
+          }
+        },
+        "x-openai-isConsequential": true
+      }
+    }
+  }
+}

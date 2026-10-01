@@ -59,8 +59,11 @@ class MoodleSession:
         }
         if data is not None:
             headers.update({"Content-Type": "application/x-www-form-urlencoded", "Origin": self.base_url, "Referer": referer or url})
-        response = self.opener.open(Request(url, data=data, headers=headers, method="POST" if data is not None else "GET"))
-        return self._decode(response), response
+        response = self.opener.open(Request(url, data=data, headers=headers, method="POST" if data is not None else "GET"), timeout=30)
+        html = self._decode(response)
+        if self.logged_in and ("/login" in urlsplit(response.geturl()).path or re.search(r'name=["\']username["\']', html, re.I)):
+            raise LoginError("TLS session expired; sign in again")
+        return html, response
 
     def login(self, username: str, password: str) -> None:
         login_path = "/login/index.php"
@@ -88,5 +91,7 @@ class MoodleSession:
         if not self.logged_in:
             raise LoginError("Call login() before get_bytes()")
         url = urljoin(f"{self.base_url}/", path.lstrip("/"))
-        response = self.opener.open(Request(url, headers={"User-Agent": "UniversityAgent/0.1", "Accept-Encoding": "gzip, deflate"}))
+        response = self.opener.open(Request(url, headers={"User-Agent": "UniversityAgent/0.1", "Accept-Encoding": "gzip, deflate"}), timeout=30)
+        if "/login" in urlsplit(response.geturl()).path:
+            raise LoginError("TLS session expired; sign in again")
         return self._decode_bytes(response.read(), response), response

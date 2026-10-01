@@ -65,3 +65,7 @@ TLS 담당자는 DB를 직접 노출하지 않고 `TLSProvider`가 아래처럼 
 - 인수인계: 완료·미완료·파일·환경·다음 액션 항목
 
 성적, 알림 발송, 벡터 검색, 장기 메모리는 이 스키마에 넣지 않는다.
+
+## ChatGPT 서버 모드
+
+`server/`는 이 Mac에서 실행하며 스키마 변경 없이 TLS 계정마다 별도의 SQLite 파일을 사용합니다. 저장소의 `.university-agent/chatgpt/data/<sha256(TLS 아이디)>.db`에 저장합니다. 별도 호스팅·지속 볼륨이 필요하지 않습니다. ChatGPT 요청의 Bearer 토큰이 사용자를 결정하며, 요청에서 user ID나 DB 경로를 받지 않습니다. 로컬 Mac DB는 자동 업로드하거나 합치지 않습니다. 비밀번호·OAuth 토큰·TLS 쿠키는 학사 DB에 저장하지 않습니다.

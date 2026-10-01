@@ -206,6 +206,24 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(provider.get_notices('u')[0]['content'], '실제 공지 내용')
         self.assertEqual(provider.get_resources('u')[0]['_content'], b'%PDF-test-fixture')
 
+    def test_moodle_requests_have_timeout(self):
+        session = MoodleSession()
+        session.logged_in = True
+        with patch.object(session.opener, 'open', side_effect=TimeoutError) as request:
+            for fetch in (session.get, session.get_bytes):
+                with self.assertRaises(TimeoutError):
+                    fetch('/course/view.php?id=1')
+                self.assertEqual(request.call_args.kwargs['timeout'], 30)
+
+    def test_expired_session_does_not_return_login_page_as_empty_records(self):
+        session = MoodleSession()
+        session.logged_in = True
+        response = SimpleNamespace(geturl=lambda: 'https://fixture.invalid/login/index.php')
+        with patch.object(session.opener, 'open', return_value=response), patch.object(session, '_decode', return_value='<input name="username">'):
+            for fetch in (session.get, session.get_bytes):
+                with self.assertRaises(LoginError):
+                    fetch('/course/view.php?id=1')
+
     def test_moodle_login_failures_do_not_fetch_data(self):
         session = MoodleSession()
         with self.assertRaises(LoginError): session.get('/my/')

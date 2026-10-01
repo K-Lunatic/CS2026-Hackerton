@@ -5,7 +5,7 @@ description: ChatGPT/Codex용 로컬 대학생활 Skill. 과목, 공지, 과제,
 
 # University Agent
 
-Use the bundled standard-library runner for every data lookup or mutation. Do not invent a response from local data when the runner can return the result.
+For local Codex, use the bundled standard-library runner for every data lookup or mutation. For ChatGPT web/mobile, use the Mac-hosted OAuth Actions gateway through an HTTPS tunnel described in [server/README.md](../../server/README.md); never ask a mobile user to run Python. Do not invent a response from local data when the runner can return the result.
 
 ## Team boundary
 
@@ -13,7 +13,7 @@ Use the bundled standard-library runner for every data lookup or mutation. Do no
 - Feature owners: add or edit one module under `features/` and consume `TLSProvider` or a feature store; never call TLS endpoints directly from a feature.
 - The runner is composition only. Keep feature logic out of `scripts/run_agent.py`.
 - The SQLite file is private to the current chat device. It is not synchronized across devices.
-- This plugin requires local Codex execution on the Mac holding the DB and Keychain; ChatGPT web/mobile cannot access those device-local files. Do not claim that Keychain is technically inaccessible to an AI process with unrestricted local command execution.
+- The local plugin requires Codex execution on the Mac holding the DB and Keychain. ChatGPT web/mobile uses the Mac-hosted HTTPS Actions gateway via a tunnel, with one server database per TLS account; it does not access the Mac files. Server passwords are received only through the browser login form and are not persisted. The gateway currently exposes courses, assignments, lectures, notices, todos, sync status/refresh, and connection revocation. Local bookmarks, checkpoints, handovers, manual assignment edits, and file downloads are not yet exposed by Actions. Do not claim these local-only operations work remotely. Do not claim that Keychain is technically inaccessible to an AI process with unrestricted local command execution.
 
 Read [references/provider-contract.md](references/provider-contract.md) and [references/data-model.md](references/data-model.md) before changing the data shape. The executable SQLite draft is `database/schema.sql`.
 For any future user input, follow [references/form-pattern.md](references/form-pattern.md). Secret fields must use the secure form contract and never be returned to the calling model.
@@ -77,4 +77,4 @@ The runner returns JSON containing `toolCalls`, `data`, and, for `ask`, an `answ
 - This project targets ChatGPT/Codex. Team-progress analysis is performed by the current caller through the prepare/validate flow; no new model-provider integration is planned.
 - Never expose provider secrets in output. Keep the TLS adapter behind the contract in [references/provider-contract.md](references/provider-contract.md).
 
-This skill remains local and dependency-free. Do not add a remote API server, database server, MCP server, or AI SDK unless the user explicitly asks to expand beyond an installable Skill.
+The local runner remains dependency-free. The user has requested local execution without a separately deployed server. The ChatGPT Actions gateway in `server/` runs on the Mac with stdlib Python; cloudflared provides the HTTPS tunnel. Do not require a hosting account, Docker, or a remote database. It reuses TLS providers and SQLite and requires no OpenAI API key or model SDK. Run the repository launcher or `python3 -m server.local` from the repository root. The owner must configure the Custom GPT once; mobile users only use OAuth browser login. Never claim the gateway is connected before the GPT ID, Actions settings and actual ChatGPT round trip are verified.

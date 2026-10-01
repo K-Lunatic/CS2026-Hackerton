@@ -1,6 +1,9 @@
 # University Agent
 
-Codex에서 사용할 수 있는 기기 로컬 대학생활 관리 플러그인입니다. 별도 서버·기기 간 동기화 없이 현재 기기의 SQLite DB를 사용합니다. npm이나 DB 서버는 필요 없습니다.
+대학생활 관리 기능을 두 방식으로 제공합니다.
+
+- **ChatGPT 웹·모바일:** 이 Mac에서 실행하는 로컬 게이트웨이에 HTTPS 터널로 연결합니다. 별도 호스팅 서버·도메인은 필요 없습니다. Mac에서 [University Agent.command](University%20Agent.command)를 더블클릭하고 Custom GPT Actions를 설정합니다. 휴대폰 사용자는 GPT 로그인 화면을 사용하며 Python을 실행하지 않습니다. [로컬 연결 안내](server/README.md)를 참고하세요. 실제 GPT 연결은 GPT ID와 Actions 설정이 필요합니다.
+- **로컬 Codex:** 기존 플러그인과 현재 기기의 SQLite·macOS Keychain을 사용합니다. 아래 설치 안내는 이 모드에만 해당합니다.
 
 ## 로컬 플러그인 설치·테스트
 
@@ -12,7 +15,7 @@ codex plugin add university-agent@kku-university-agent-local
 python3 skills/university-agent/scripts/sync_tls.py
 ```
 
-TLS 로그인은 첫 동기화 때 로컬 터미널에서 진행합니다. 자격 증명이 Keychain에 이미 있으면 재사용합니다. 이 플러그인은 **Codex가 해당 Mac의 로컬 파일·Keychain에 접근할 수 있는 환경**에서만 동작합니다. ChatGPT 웹·모바일에는 로컬 DB와 Keychain이 연결되지 않으며, 공개 Plugins Directory에 게시된 상태가 아닙니다.
+TLS 로그인은 첫 동기화 때 로컬 터미널에서 진행합니다. 자격 증명이 Keychain에 이미 있으면 재사용합니다. 이 플러그인은 **Codex가 해당 Mac의 로컬 파일·Keychain에 접근할 수 있는 환경**에서만 동작합니다. ChatGPT 웹·모바일에서는 별도의 서버/Actions 연결을 사용하며 로컬 DB와 Keychain에 직접 접근하지 않습니다. 로컬 플러그인은 공개 Plugins Directory에 게시된 상태가 아닙니다.
 
 팀원은 `dev` 브랜치를 직접 등록할 수도 있습니다.
 
@@ -81,7 +84,7 @@ python3 skills/university-agent/scripts/handover_web.py
 실행·프론트엔드 API·검증·제한 사항은 [handover.md](skills/university-agent/references/handover.md)에 있습니다.
 저장된 TLS 계정이 없으면 `sync_tls.py`가 로컬 터미널에서 아이디와 숨김 비밀번호 입력 양식을 띄웁니다. 로그인 성공 후 아이디는 `~/.university-agent/tls-account.json`(권한 600), 비밀번호는 macOS Keychain에 저장합니다. 스킬 명령은 비밀번호를 환경변수·SQLite·로그·JSON 출력으로 받거나 반환하지 않습니다. 다만 로컬 명령 실행 권한이 있는 AI 실행 환경을 Keychain 비밀값과 완전히 격리하는 장치는 아직 없으므로, 모델이 기술적으로 읽을 수 없다고 보장하지 않습니다. 이 프로젝트의 모델 범위는 ChatGPT/Codex로 고정하며 새 모델 제공자 연동은 추가하지 않습니다.
 
-향후 입력 폼은 [form-pattern.md](skills/university-agent/references/form-pattern.md)의 공통 계약을 사용합니다. 현재는 Skill 단독 배포 조건에 맞춰 로컬 숨김 입력을 사용하며, ChatGPT 네이티브 폼을 붙이더라도 같은 필드·비밀값 규칙을 유지합니다.
+향후 입력 폼은 [form-pattern.md](skills/university-agent/references/form-pattern.md)의 공통 계약을 사용합니다. 로컬 모드는 숨김 터미널 입력을, ChatGPT 서버 모드는 OAuth 브라우저 로그인 화면을 사용합니다. 서버의 로그인 경로는 Action 스키마에 포함하지 않습니다.
 
 상세 동작은 [skills/university-agent/SKILL.md](skills/university-agent/SKILL.md)에 있습니다. TLS 담당자는 [provider-contract.md](skills/university-agent/references/provider-contract.md)와 `providers/moodle_provider.py`를 기준으로 연동하고, 나머지 팀원은 `features/` 아래에서 기능을 추가합니다. 로컬 DB는 [data-model.md](skills/university-agent/references/data-model.md)와 `database/schema.sql`에 있습니다.
 

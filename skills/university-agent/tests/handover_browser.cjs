@@ -25,7 +25,11 @@ const fs = require('node:fs/promises');
     await page.waitForFunction(() => document.querySelector('#chat-answer').textContent.includes('붙여넣어주세요'));
     await page.click('#analyze'); await visible('#input-error');
     assert.match(await page.locator('#input-error').innerText(), /붙여넣어주세요/);
-    await page.click('#sample'); const originalInput = await page.inputValue('#records');
+    await page.click('#sample');
+    // Regression: several dated records in one paragraph must keep their owners/statuses.
+    const lines = (await page.inputValue('#records')).split('\n');
+    await page.fill('#records', lines[0] + '\n' + lines.slice(1).join(' '));
+    const originalInput = await page.inputValue('#records');
     await page.selectOption('#analysis-mode', 'ai');
     await page.click('#analyze');
     await page.waitForFunction(() => document.querySelector('#input-error').textContent.includes('AI 설정 필요'));

@@ -2,7 +2,7 @@
 
 The runner reads the device-local database only; it does not invent sample TLS data. The TLS owner supplies data; feature owners only consume this contract. With no server or cross-device sync layer, `sync_tls.py` logs into KKU TLS and imports normalized data into the current device's local SQLite DB. The database shape is documented in [data-model.md](data-model.md) and implemented in `database/schema.sql`.
 
-`providers/moodle_session.py` handles the Moodle login form, hidden fields such as `logintoken`, redirects, and the in-memory `MoodleSession` cookie. `providers/credentials.py` keeps the username in local config and the password in macOS Keychain. It is intentionally separate from record parsers. Run `scripts/sync_tls.py` for the first and later syncs.
+`providers/moodle_session.py` handles the Moodle login form, hidden fields such as `logintoken`, redirects, and the in-memory `MoodleSession` cookie. `providers/credentials.py` keeps the username locally and protects the password with macOS Keychain or Windows DPAPI. It is intentionally separate from record parsers. Run `scripts/sync_tls.py` for the first and later syncs.
 
 ```python
 class TLSProvider(Protocol):

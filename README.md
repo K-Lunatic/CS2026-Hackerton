@@ -58,3 +58,5 @@ python3 skills/university-agent/scripts/handover_web.py
 향후 입력 폼은 [form-pattern.md](skills/university-agent/references/form-pattern.md)의 공통 계약을 사용합니다. 현재는 Skill 단독 배포 조건에 맞춰 로컬 숨김 입력을 사용하며, ChatGPT 네이티브 폼을 붙이더라도 같은 필드·비밀값 규칙을 유지합니다.
 
 상세 동작은 [skills/university-agent/SKILL.md](skills/university-agent/SKILL.md)에 있습니다. TLS 담당자는 [provider-contract.md](skills/university-agent/references/provider-contract.md)와 `providers/moodle_provider.py`를 기준으로 연동하고, 나머지 팀원은 `features/` 아래에서 기능을 추가합니다. 로컬 DB는 [data-model.md](skills/university-agent/references/data-model.md)와 `database/schema.sql`에 있습니다.
+
+프로젝트 전체 테스트 실행 방법과 통과·미해결·미검증 항목은 [project-tests.md](skills/university-agent/references/project-tests.md)에 정리되어 있습니다.

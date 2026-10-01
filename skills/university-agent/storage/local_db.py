@@ -28,7 +28,7 @@ class LocalDatabase:
         self.connection.close()
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
-        row = self.connection.execute("SELECT id, name, department FROM users WHERE id=?", (user_id,)).fetchone()
+        row = self.connection.execute("SELECT id, name, department, updated_at AS lastSyncedAt FROM users WHERE id=?", (user_id,)).fetchone()
         return dict(row, department=row["department"] or None) if row else None
 
     def upsert_tls_snapshot(self, user_id: str, courses: list[dict[str, Any]], assignments: list[dict[str, Any]], lectures: list[dict[str, Any]], user_name: str, department: str | None, now: str | None = None, notices: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None) -> None:
@@ -134,7 +134,7 @@ class LocalDatabase:
     def get_todos(self, user_id: str) -> list[dict[str, Any]]:
         courses = {course["id"]: {"courseId": course["id"], "courseName": course["name"], "items": []} for course in self.get_courses(user_id)}
         for item in self.get_assignments(user_id):
-            if item["submissionStatus"] != "SUBMITTED":
+            if item["submissionStatus"] in {"NOT_SUBMITTED", "UNKNOWN"}:
                 course = courses.get(item["courseId"])
                 if course is None:
                     course = courses.setdefault("manual-other", {"courseId": None, "courseName": "기타 과제", "items": []})

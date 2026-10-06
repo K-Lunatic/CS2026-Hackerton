@@ -3,12 +3,19 @@ from __future__ import annotations
 
 import sqlite3
 import re
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 SCHEMA = Path(__file__).resolve().parents[1] / "database" / "schema.sql"
+
+
+def permission_source_key(resource, course):
+    return json.dumps([resource.get(k) for k in ('courseId', 'title', 'fileName', 'remotePath',
+        'downloadStatus', 'downloadReason', 'source')] + [course.get('professor'), course.get('semester')],
+        ensure_ascii=False, separators=(',', ':'))
 
 
 class LocalDatabase:
@@ -195,12 +202,49 @@ class LocalDatabase:
         rows = self.connection.execute("SELECT n.id, n.course_id AS courseId, n.title, n.content, n.published_at AS publishedAt, n.source FROM notices n JOIN enrollments e ON e.course_id=n.course_id AND e.user_id=? ORDER BY n.published_at DESC", (user_id,))
         return [dict(row) for row in rows]
 
-    def get_resources(self, user_id: str) -> list[dict[str, Any]]:
+    def get_resources(self, user_id: str, *, include_permissions=True) -> list[dict[str, Any]]:
         columns = {row[1] for row in self.connection.execute("PRAGMA table_info(resources)")}
         status = "r.download_status" if "download_status" in columns else "CASE WHEN r.local_path IS NOT NULL THEN 'DOWNLOADED' ELSE 'NOT_DOWNLOADED' END"
         reason = "r.download_reason" if "download_reason" in columns else "NULL"
         rows = self.connection.execute(f"SELECT r.id, r.external_id AS externalId, r.course_id AS courseId, r.title, r.file_name AS fileName, r.extension, r.mime_type AS mimeType, r.remote_path AS remotePath, r.local_path AS localPath, r.downloaded_at AS downloadedAt, {status} AS downloadStatus, {reason} AS downloadReason, r.source FROM resources r JOIN enrollments e ON e.course_id=r.course_id AND e.user_id=? ORDER BY r.title", (user_id,))
-        return [dict(row) for row in rows]
+        resources = [dict(row) for row in rows]
+        if include_permissions and self.connection.execute("SELECT 1 FROM sqlite_master WHERE name='permitted_resources'").fetchone():
+            approved = {row['resource_id']: row for row in self.connection.execute(
+                'SELECT * FROM permitted_resources WHERE user_id=? AND revoked_at IS NULL', (user_id,))}
+            if approved:
+                courses = {c['id']: c for c in self.get_courses(user_id)}
+                for item in resources:
+                    row = approved.get(item['id'])
+                    if row and row['source_key'] == permission_source_key(item, courses[item['courseId']]):
+                        saved = json.loads(row['resource_json'])
+                        item.update({k: saved[k] for k in ('fileName', 'extension', 'mimeType', 'localPath', 'downloadedAt')})
+                        item.update(restrictionStatus=item['downloadStatus'], restrictionReason=item['downloadReason'],
+                            downloadStatus='DOWNLOADED', downloadReason=None, permissionGrantedAt=row['granted_at'])
+        return resources
+
+    def save_permitted_resource(self, user_id, original, saved, permission):
+        from providers.moodle_provider import validate_permission
+        validate_permission(permission, user_id, original['id'])
+        current = next((r for r in self.get_resources(user_id, include_permissions=False) if r['id'] == original['id']), None)
+        course = next((c for c in self.get_courses(user_id) if c['id'] == original['courseId']), None)
+        if (not current or not course or original.get('downloadStatus') != 'PROHIBITED' or
+            permission_source_key(current, course) != permission_source_key(original, course) or
+            (course.get('professor') and course['professor'].strip() != permission['instructor'].strip()) or
+            saved.get('id') != original['id'] or saved.get('downloadStatus') != 'DOWNLOADED'):
+            raise ValueError('자료 상태가 달라져 저장하지 않았어요. 선택한 자료를 다시 확인해 주세요.')
+        with self.connection:
+            self.connection.execute('INSERT INTO permitted_resources VALUES (?,?,?,?,?,?,NULL) '
+                'ON CONFLICT(user_id,resource_id) DO UPDATE SET source_key=excluded.source_key, '
+                'resource_json=excluded.resource_json, permission_json=excluded.permission_json, '
+                'granted_at=excluded.granted_at, revoked_at=NULL',
+                (user_id, original['id'], permission_source_key(original, course),
+                 json.dumps(saved, ensure_ascii=False), json.dumps(permission, ensure_ascii=False),
+                 datetime.now(timezone.utc).isoformat()))
+
+    def revoke_resource_permission(self, user_id, resource_id):
+        with self.connection:
+            self.connection.execute('UPDATE permitted_resources SET revoked_at=? WHERE user_id=? AND resource_id=?',
+                (datetime.now(timezone.utc).isoformat(), user_id, resource_id))
 
     def list_bookmarks(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute("SELECT id, user_id AS userId, target_type AS targetType, target_id AS targetId, note, created_at AS createdAt FROM bookmarks WHERE user_id=? ORDER BY created_at", (user_id,))

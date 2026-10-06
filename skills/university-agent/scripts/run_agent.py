@@ -254,12 +254,12 @@ def _ask(
 
     learning = study_intent(text)
     if learning:
-        if not conversation:
+        if learning not in ('save_context_note', 'list_context_notes') and not conversation:
             return {"toolCalls": ["study"], "needsConversation": True,
                     "answer": "학습 대화를 구분할 세션 ID가 필요합니다. 호출한 AI가 이 대화에서만 유지할 ID를 만들어 다시 호출하세요."}
         event = event_from_text(text, database().get_courses(USER_ID))
         try:
-            response = StudySession(DB_PATH.parent / "study-sessions.db", USER_ID, conversation,
+            response = StudySession(DB_PATH.parent / "study-sessions.db", USER_ID, conversation or 'context-notes',
                                     database(), DB_PATH.parent / "files").call(event)
         except ValueError as exc:
             response = {"status": "error", "answer": str(exc)}
@@ -365,6 +365,9 @@ def main() -> None:
     study_input = study_parser.add_mutually_exclusive_group(required=True)
     study_input.add_argument("--event-json", help="학습 이벤트 JSON")
     study_input.add_argument("--event-file", type=Path, help="문제 생성·채점 이벤트 JSON 파일")
+    notes_parser = sub.add_parser("study-notes", help="과목별 학습·시험 메모 조회")
+    notes_parser.add_argument("--course", default="", help="과목명 또는 일부")
+    notes_parser.add_argument("--lesson", default="", help="주차·차시·단원 일부")
     args = parser.parse_args()
 
     if args.command == "context":
@@ -437,6 +440,12 @@ def main() -> None:
             files_root=DB_PATH.parent / "files", course_query=args.course,
             resource_query=args.resource, max_chars=args.max_chars,
         )
+    elif args.command == "study-notes":
+        selection = {"courseName": args.course} if args.course else {}
+        if args.lesson:
+            selection["lessonKey"] = args.lesson
+        result = StudySession(DB_PATH.parent / "study-sessions.db", USER_ID, 'context-notes',
+            database(), DB_PATH.parent / "files").call({'action': 'list_context_notes', 'selection': selection})
     elif args.command == "bookmarks":
         result = {"toolCalls": ["get_bookmarks"], "data": list_bookmarks(database(), USER_ID)}
     elif args.command == "bookmark-add":

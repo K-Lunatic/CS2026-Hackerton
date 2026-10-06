@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 from features import material_cache
+from features.guidance import resource_unavailable_reason
 
 try:
     from pypdf import PdfReader
@@ -228,7 +229,7 @@ def original_files(courses, resources, *, files_root, course_query='', resource_
     for item in selected:
         entry = {'id': item['id'], 'title': item['title'], 'fileName': item['fileName']}
         if item.get('downloadStatus') == 'PROHIBITED':
-            entry['error'] = item.get('downloadReason') or '다운로드 금지 자료예요.'
+            entry['error'] = resource_unavailable_reason(item)
         else:
             try:
                 path = Path(item.get('localPath') or '').resolve(strict=True)
@@ -312,7 +313,7 @@ def study_materials(
     errors: dict[str, str] = {}
     for item in selected:
         if item.get("downloadStatus") == "PROHIBITED":
-            errors[item["id"]] = item.get("downloadReason") or "TLS에 다운로드 금지 표시가 있어 파일을 가져오지 않았고 분석에서 제외했습니다."
+            errors[item["id"]] = resource_unavailable_reason(item)
             continue
         try:
             path = Path(item.get("localPath") or "").resolve(strict=True)

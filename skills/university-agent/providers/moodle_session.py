@@ -32,14 +32,31 @@ def check_download_url(url: str) -> None:
     # is checked by the Moodle adapter; forcedownload=0 also only means inline display.
 
 
+def check_download_origin(url, origin):
+    if not origin:
+        return
+    try:
+        parts = urlsplit(url)
+        allowed = (parts.scheme == 'https' and parts.hostname == origin and
+                   parts.port in (None, 443) and not parts.username and not parts.password)
+    except ValueError:
+        allowed = False
+    if not allowed:
+        raise DownloadRestricted('학교 자료 주소가 달라져 가져오기를 멈췄어요.')
+
+
 class _DownloadRedirectHandler(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         try:
             check_download_url(newurl)
+            check_download_origin(newurl, getattr(req, 'allowed_origin', None))
         except DownloadRestricted:
             fp.close()
             raise
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            redirected.allowed_origin = getattr(req, 'allowed_origin', None)
+        return redirected
 
 
 class _HiddenInputs(HTMLParser):
@@ -89,8 +106,9 @@ class MoodleSession:
     def _decode(cls, response: Any) -> str:
         return cls._decode_bytes(response.read(), response).decode("utf-8", errors="replace")
 
-    def _request(self, path: str, *, data: bytes | None = None, referer: str | None = None) -> tuple[str, Any]:
+    def _request(self, path: str, *, data: bytes | None = None, referer: str | None = None, allowed_origin=None) -> tuple[str, Any]:
         url = urljoin(f"{self.base_url}/", path.lstrip("/"))
+        check_download_origin(url, allowed_origin)
         headers = {
             "User-Agent": "UniversityAgent/0.1",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -98,8 +116,11 @@ class MoodleSession:
         }
         if data is not None:
             headers.update({"Content-Type": "application/x-www-form-urlencoded", "Origin": self.base_url, "Referer": referer or url})
-        response = self.opener.open(Request(url, data=data, headers=headers, method="POST" if data is not None else "GET"), timeout=30)
+        request = Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
+        request.allowed_origin = allowed_origin
+        response = self.opener.open(request, timeout=30)
         try:
+            check_download_origin(response.geturl(), allowed_origin)
             content_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower().strip()
             # File redirects are not HTML notices. Do not transfer an entire
             # cached PDF merely to look for a download prohibition in a page.
@@ -129,28 +150,37 @@ class MoodleSession:
         self.logged_in = True
 
     def get(self, path: str) -> str:
+        return self.get_page(path)[0]
+
+    def get_page(self, path: str, *, allowed_origin=None) -> tuple[str, str]:
         if not self.logged_in:
             raise LoginError("Call login() before get()")
-        html, _ = self._request(path)
-        return html
+        html, response = self._request(path, allowed_origin=allowed_origin)
+        return html, response.geturl()
 
-    def get_bytes(self, path: str, *, conditional=None) -> tuple[bytes | None, Any]:
+    def get_bytes(self, path: str, *, conditional=None, allowed_origin=None) -> tuple[bytes | None, Any]:
         if not self.logged_in:
             raise LoginError("Call login() before get_bytes()")
         url = urljoin(f"{self.base_url}/", path.lstrip("/"))
         check_download_url(url)
+        check_download_origin(url, allowed_origin)
         try:
-            response = self.opener.open(Request(url, headers={"User-Agent": "UniversityAgent/0.1", "Accept-Encoding": "gzip, deflate", **(conditional or {})}), timeout=30)
+            request = Request(url, headers={"User-Agent": "UniversityAgent/0.1", "Accept-Encoding": "gzip, deflate", **(conditional or {})})
+            request.allowed_origin = allowed_origin
+            response = self.opener.open(request, timeout=30)
         except HTTPError as error:
             if error.code != 304:
+                error.close()
                 raise
             try:
                 check_download_url(error.geturl())
+                check_download_origin(error.geturl(), allowed_origin)
                 return None, error
             finally:
                 error.close()
         try:
             check_download_url(response.geturl())
+            check_download_origin(response.geturl(), allowed_origin)
             if "/login" in urlsplit(response.geturl()).path:
                 raise LoginError("TLS session expired; sign in again")
             return self._decode_bytes(response.read(), response), response

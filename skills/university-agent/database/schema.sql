@@ -124,6 +124,18 @@ CREATE TABLE IF NOT EXISTS bookmarks (
   created_at TEXT NOT NULL
 );
 
+-- A permitted local copy is user-specific; never change TLS's restriction flag.
+CREATE TABLE IF NOT EXISTS permitted_resources (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+  source_key TEXT NOT NULL,
+  resource_json TEXT NOT NULL,
+  permission_json TEXT NOT NULL,
+  granted_at TEXT NOT NULL,
+  revoked_at TEXT,
+  PRIMARY KEY (user_id, resource_id)
+);
+
 CREATE TABLE IF NOT EXISTS context_bookmarks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,

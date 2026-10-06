@@ -26,6 +26,7 @@ from providers.moodle_provider import MoodleTLSProvider
 from providers.moodle_session import LoginError, MoodleSession
 from providers.credentials import CredentialInputRequired, resolve, save
 from storage.local_db import LocalDatabase
+from features.guidance import resource_unavailable_reason
 
 
 def _cached_resources(db_path: Path, user_id: str, file_root: Path) -> dict[str, dict[str, object]]:
@@ -38,12 +39,14 @@ def _cached_resources(db_path: Path, user_id: str, file_root: Path) -> dict[str,
         root = file_root.resolve()
         cached = {}
         counts = {}
-        records = database.get_resources(user_id)
+        records = database.get_resources(user_id, include_permissions=False)
         for item in records:
             value = item.get('localPath')
             if value:
                 counts[str(Path(value).resolve())] = counts.get(str(Path(value).resolve()), 0) + 1
         for item in records:
+            if item.get('downloadStatus') == 'PROHIBITED':
+                continue
             path_value = item.get("localPath")
             if not path_value:
                 continue
@@ -168,6 +171,7 @@ def main() -> None:
         save(username, password)
         print("연결됐어요. 이제 필요한 내용만 차근차근 가져올게요.", flush=True)
         provider = MoodleTLSProvider(session)
+        provider.progress = lambda message: print(message, flush=True)
         _progress(1, 5, "수강 과목을 확인하는 중이에요…")
         stage_started = monotonic()
         courses = provider.get_courses(user_id)
@@ -196,20 +200,22 @@ def main() -> None:
         reused = sum(item.get('_reused', False) for item in resources)
         print(f"자료 {len(resources)}개를 확인했어요. 기존 파일 {reused}개는 다시 받지 않았어요. · {monotonic() - stage_started:.1f}초", flush=True)
     except SocketTimeout as error:
-        raise SystemExit("TLS 서버 응답이 30초 동안 없어 중단했습니다. 잠시 후 다시 실행해 주세요.") from error
-    except (LoginError, URLError) as error:
-        raise SystemExit(str(error)) from error
+        raise SystemExit("학교의 응답이 늦어 잠시 멈췄어요. 이미 저장한 내용은 그대로 남아 있어요. 잠시 후 다시 시도해 주세요.") from error
+    except LoginError as error:
+        raise SystemExit('학교에 연결하지 못했어요. 아이디와 비밀번호를 확인하고 다시 연결해 주세요.') from error
+    except URLError as error:
+        raise SystemExit('학교와 연결이 끊겨 잠시 멈췄어요. 이미 저장한 내용은 그대로 남아 있어요. 잠시 후 다시 시도해 주세요.') from error
     prohibited = 0
     course_names = {course["id"]: course["name"] for course in courses}
     for item in resources:
         if item.get("downloadStatus") == "PROHIBITED":
             prohibited += 1
-            print(f"다운로드 제한으로 제외: {course_names.get(item['courseId'], '과목')} / {item['title']}", flush=True)
+            print(f"{course_names.get(item['courseId'], '과목')} · {item['title']}는 내려받기가 금지되어 이번에는 제외했어요.", flush=True)
             continue
         if item.get("downloadStatus") == "DOWNLOADED" and item.get("localPath"):
             continue
         if "_content" not in item:
-            print(f"원본 파일을 확인하지 못해 건너뜀: {course_names.get(item['courseId'], '과목')} / {item['title']} · {item.get('downloadReason', '파일을 저장하지 않았습니다.')}", flush=True)
+            print(f"{course_names.get(item['courseId'], '과목')} · {item['title']} · {resource_unavailable_reason(item)}", flush=True)
             continue
         store_resource(file_root, item)
     persist(db_path, user_id, username, courses, assignments=assignments, lectures=lectures, notices=notices, resources=resources)

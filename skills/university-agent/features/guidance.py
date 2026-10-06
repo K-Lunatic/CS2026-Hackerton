@@ -6,6 +6,19 @@ import re
 from features.deadlines import format_deadline
 
 
+def resource_unavailable_reason(item):
+    reason = str(item.get('downloadReason') or '')
+    if '뷰어' in reason or 'HTML' in reason:
+        return '자료를 보는 화면만 열려 원본 파일은 받지 못했어요.'
+    if reason.startswith('TLS 서버가'):
+        return '학교에서 이 자료의 내려받기를 막아 두어 제외했어요.'
+    if item.get('downloadStatus') == 'PROHIBITED':
+        return '다운로드 금지 자료라 이번에는 읽지 않고 제외했어요.'
+    if '목록만' in reason:
+        return '이번에는 자료 목록만 확인했어요. 원본은 아직 받지 않았어요.'
+    return '원본 파일은 아직 받지 못했어요.'
+
+
 def academic_list_answer(provider, user_id, kind, items):
     """Readable summaries of metadata; never display IDs or local file paths."""
     courses = {course['id']: course['name'] for course in provider.get_courses(user_id)}
@@ -29,7 +42,7 @@ def academic_list_answer(provider, user_id, kind, items):
             status = item.get('downloadStatus')
             line += ' — ' + {'DOWNLOADED': '내려받음', 'NOT_DOWNLOADED': '아직 내려받지 않음', 'PROHIBITED': '본문 이용 제한'}.get(status, '본문 확인 필요')
             if item.get('downloadReason'):
-                line += f" · {item['downloadReason']}"
+                line += ' · ' + resource_unavailable_reason(item)
         lines.append(line)
     if not items:
         lines.append(f'현재 기록에는 {label}가 없어요. 최신 정보가 필요하면 학교 정보 새로고침을 요청해 주세요.')
@@ -46,7 +59,7 @@ def usage_guide(text: str = "") -> dict:
         examples = ["아직 안 본 강의 알려줘", "지금 내 상태 어때?"]
         intro = "덜 본 강의와 시청률, 학교에 표시된 시청 기한을 확인할 수 있어요."
     elif re.search(r"공부|복습|시험|퀴즈|문제|수업\s*자료", text):
-        examples = ["자료구조 공부 좀 해야겠다", "이 자료로 객관식 5문제 만들어줘", "핵심 개념부터 정리해줘"]
+        examples = ["자료구조 주요 내용 학습시켜줘", "이 자료로 객관식 5문제 만들어줘", "시험 정보 저장해줘"]
         intro = "읽을 수 있는 수업자료를 바탕으로 핵심 개념을 정리하거나 연습문제를 만들 수 있어요."
     else:
         examples = ["오늘 뭐 해야 해?", "과제 진행 상황 저장해줘", "수업자료로 복습하고 싶어"]

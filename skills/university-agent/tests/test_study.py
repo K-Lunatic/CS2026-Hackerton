@@ -1,6 +1,7 @@
 """Offline study-flow checks. Generated text is an explicit fixture, never a real AI result."""
 from pathlib import Path
 import json
+import sqlite3
 import unittest
 
 from test_project import ProjectTestBase, snapshot, upsert
@@ -46,6 +47,9 @@ class StudyFlowTests(ProjectTestBase):
         self.assertEqual(event_from_text('운영체제 시험 준비해야 하는데', [])['settings']['mode'], 'concepts')
         self.assertEqual(event_from_text('객관식 문제 만들어줘', [])['settings']['types'], ['mcq'] * 10)
         self.assertEqual(study_intent('자료구조 객관식 5문제 만들어줘'), 'request')
+        self.assertEqual(study_intent('자료구조 주요 내용 학습시켜줘'), 'request')
+        self.assertEqual(study_intent('중간고사는 손코딩일까?'), None)
+        self.assertEqual(study_intent('중간고사는 손코딩이라고 하셨어'), 'save_context_note')
         self.assertIsNone(study_intent('수업자료 목록 보여줘'))
         s = self.session()
         offer = s.call({'action': 'offer', 'selection': {'courseId': 'course-1'}})
@@ -76,6 +80,47 @@ class StudyFlowTests(ProjectTestBase):
         self.cli('ask', '--text', '과제 알려줘', '--conversation', 'unrelated-study')
         with self.assertRaises(ValueError):
             self.session('unrelated-study').call({'action': 'accept', 'replyTo': old_offer['offerId']})
+
+    def test_exam_context_note_is_detected_saved_separately_and_reused(self):
+        text = '자료구조 중간고사는 AI 이슈 때문에 손코딩을 시킨다고 하셨어. 간단하게 작성할 수 있고 50분 주신다고 하셨어.'
+        self.assertEqual(study_intent(text), 'save_context_note')
+        parsed = event_from_text(text, [{'id': 'course-1', 'name': '자료구조'}])
+        self.assertEqual(parsed['action'], 'save_context_note')
+        self.assertEqual(parsed['note']['lessonKey'], None)
+        self.assertEqual(parsed['selection']['courseId'], 'course-1')
+        session = self.session('context-note')
+        saved = session.call(parsed)
+        self.assertEqual(saved['status'], 'context_saved')
+        self.assertIn('정보를 저장했어요', saved['answer'])
+        self.assertEqual(saved['note']['tags'], ['hand_coding', 'time_limit_50m', 'short_answer'])
+        db = sqlite3.connect(self.db_path.parent / 'study-sessions.db')
+        rows = db.execute('SELECT course_id,lesson_key,exam_type,note_text FROM study_context_notes').fetchall()
+        self.assertEqual(rows, [('course-1', None, 'midterm', text)])
+        db.close()
+        listed = session.call({'action': 'list_context_notes', 'selection': {'courseId': 'course-1'}})
+        self.assertEqual(listed['status'], 'context_notes')
+        self.assertEqual(listed['notes'][0]['note'], text)
+        prepared = self.session('uses-context').call({'action': 'request', 'selection': {'courseId': 'course-1'}})
+        self.assertEqual(prepared['hostOnly']['studyContext'][0]['tags'], ['hand_coding', 'time_limit_50m', 'short_answer'])
+        self.assertEqual(prepared['hostOnly']['studyContext'][0]['note'], text)
+
+    def test_context_note_can_be_limited_to_a_lesson(self):
+        session = self.session('lesson-note')
+        saved = session.call({'action': 'save_context_note', 'selection': {'courseId': 'course-1'},
+            'note': {'text': '3주차는 연결 리스트 삽입 과정을 중심으로 복습한다.', 'lessonKey': '3주차', 'examType': 'course'}})
+        self.assertEqual(saved['status'], 'context_saved')
+        matching = self.session('lesson-match').call({'action': 'request', 'selection': {
+            'courseId': 'course-1', 'resourceName': '3주차 탐색'}})
+        self.assertEqual(len(matching['hostOnly']['studyContext']), 1)
+        other = self.session('lesson-other').call({'action': 'request', 'selection': {
+            'courseId': 'course-1', 'resourceName': '1주차'}})
+        self.assertEqual(other['status'], 'selecting')
+
+    def test_context_note_requires_a_real_course_and_does_not_need_conversation(self):
+        self.assertEqual(event_from_text('손코딩 시험 방식 저장해줘', [])["action"], 'save_context_note')
+        result = self.cli('ask', '--text', '자료구조 중간고사는 손코딩이고 50분이라고 하셨어')
+        self.assertEqual(result['status'], 'context_saved')
+        self.assertNotIn('study_sessions', result.get('data', {}))
 
     def test_new_exams_force_web_even_if_chat_requested(self):
         from features.study import settings
@@ -135,7 +180,23 @@ class StudyFlowTests(ProjectTestBase):
         upsert(db, 'fixture-user', data)
         db.close()
         result = self.session().call({'action': 'request', 'selection': {'courseId': 'course-1'}})
-        self.assertIn('문서 뷰어 페이지', result['failures'][0]['reason'])
+        self.assertIn('자료를 보는 화면', result['failures'][0]['reason'])
+        self.assertNotIn('다운로드 금지', result['failures'][0]['reason'])
+        self.assertEqual(result['totalCandidates'], 0)
+
+    def test_revoked_source_cannot_resume_from_in_progress_chunks(self):
+        session = self.session('withdrawn')
+        prepared = session.call({'action': 'request', 'selection': {'courseId': 'course-1'}})
+        self.assertTrue(prepared['needsExtraction'])
+        db = LocalDatabase(self.db_path)
+        db.connection.execute("UPDATE resources SET download_status='PROHIBITED'")
+        db.connection.commit()
+        db.close()
+        for event in ({'action': 'status'}, {'action': 'extract', 'requestId': prepared['requestId'], 'data': {}}):
+            with self.subTest(event=event['action']), self.assertRaisesRegex(ValueError, '자료 이용 상태'):
+                session.call(event)
+        session.call({'action': 'cancel'})
+        result = session.call({'action': 'request', 'selection': {'courseId': 'course-1'}})
         self.assertEqual(result['totalCandidates'], 0)
 
     def test_insufficient_evidence_never_fills_the_requested_count(self):

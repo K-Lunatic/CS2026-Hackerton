@@ -40,6 +40,96 @@ class FilePipelineTests(ProjectTestBase):
                           'quote': source['text'][:30]}]
         return q
 
+    def test_reports_only_guide_assembly_and_changes_reuse_file_analysis(self):
+        p = self.request()
+        for _ in range(4):
+            p = self.extract_questions(self.session('pipeline'), p, [self.candidate(p)])
+        for index, text in enumerate(('서술형을 많이 냈어요.', '코드 결과 예측이 많았어요.')):
+            ref = {'kind': 'everytime_review', 'courseId': 'course-1', 'professor': '테스트 교수',
+                   'semester': '2025-2', 'source': 'https://everytime.kr/lecture/view/1',
+                   'location': '후기 7', 'text': text}
+            with patch('features.study_materials._read_sections', side_effect=AssertionError('cached sources only')):
+                result = self.session(f'reports-{index}').call({'action': 'request',
+                    'selection': {'courseId': 'course-1', 'allFiles': True, 'examReferences': [ref]},
+                    'settings': {'count': 2}})
+            self.assertEqual(result['reusedFiles'], 4)
+            self.assertEqual(result['hostOnly']['examReferences'][0]['text'], text)
+            self.assertNotIn('SOURCE', result['hostOnly'])
+
+    def test_transcript_is_chunked_as_source_and_reference_use_is_preserved(self):
+        ref = {'kind': 'instructor_transcript', 'courseId': 'course-1', 'source': '교수 강의 녹음 전사문',
+               'location': '00:12:00~00:18:00', 'text': '정렬된 배열을 강조합니다. ' * 1000}
+        session = self.session('transcript')
+        p = session.call({'action': 'request', 'selection': {'courseId': 'course-1',
+            'resourceIds': ['r0'], 'examReferences': [ref]}, 'settings': {'count': 3}})
+        self.assertEqual(p['progress']['totalFiles'], 2)
+        p = self.extract_questions(session, p, [self.candidate(p)])
+        while p.get('needsExtraction'):
+            source = p['hostOnly']['SOURCE'][0]
+            self.assertTrue(source['resourceId'].startswith('attachment-'))
+            self.assertEqual(source['location'], ref['location'])
+            self.assertLessEqual(sum(len(s['text']) for s in p['hostOnly']['SOURCE']), CHUNK_CHARS)
+            p = self.extract_questions(self.session('transcript'), p, [self.candidate(p)])
+        reference = p['hostOnly']['examReferences'][0]
+        self.assertNotIn('text', reference)
+        choices = [q['id'] for q in p['hostOnly']['candidates']]
+        with self.assertRaises(ValueError):
+            session.call({'action': 'assemble', 'candidateIds': choices, 'referenceUse': [
+                {'referenceId': 'unknown', 'candidateIds': choices, 'reason': '알 수 없는 출처'}]})
+        result = session.call({'action': 'assemble', 'candidateIds': choices, 'referenceUse': [
+            {'referenceId': reference['id'], 'candidateIds': choices[1:], 'reason': '교수가 강조한 정렬 조건을 더 연습하도록 선택'}]})
+        self.assertEqual(result['referenceUse'][0]['questionIds'], ['q2', 'q3'])
+        with sqlite3.connect(session.path) as db:
+            state = json.loads(db.execute('SELECT state FROM study_sessions WHERE conversation=?', ('transcript',)).fetchone()[0])
+            self.assertNotIn('examReferences', state['selection'])
+            self.assertLess(len(json.dumps(state)), 50000)
+            self.assertNotIn('text', state['examReferences'][0])
+        session.call({'action': 'cancel'})
+        with sqlite3.connect(session.path) as db:
+            saved = json.loads(db.execute('SELECT state FROM study_exams WHERE exam_id=?', (result['examId'],)).fetchone()[0])
+            self.assertEqual(saved['referenceUse'], result['referenceUse'])
+
+    def test_transcript_only_supported_but_reports_cannot_replace_sources(self):
+        ref = {'kind': 'instructor_transcript', 'courseId': 'course-1', 'source': '교수 필사본',
+               'location': '필사 줄 1', 'text': '이진 탐색은 정렬된 배열에서 탐색한다.'}
+        p = self.session('transcript-only').call({'action': 'request', 'selection': {
+            'courseId': 'course-1', 'resourceIds': [], 'examReferences': [ref, dict(ref)]}, 'settings': {'count': 1}})
+        self.assertEqual(p['progress']['totalFiles'], 1)
+        self.assertEqual(p['hostOnly']['SOURCE'][0]['text'], ref['text'])
+        self.assertEqual(p['hostOnly']['sourceKind'], 'instructor_transcript')
+        question = self.candidate(p)
+        self.assertEqual(self.extract_questions(self.session('transcript-only'), p, [question])['totalCandidates'], 1)
+        with patch('features.study_pipeline.load_chunks', side_effect=AssertionError('reuse transcript analysis')):
+            reused = self.session('same-transcript').call({'action': 'request', 'selection': {
+                'courseId': 'course-1', 'resourceIds': [], 'examReferences': [dict(ref)]}, 'settings': {'count': 1}})
+        self.assertEqual(reused['reusedFiles'], 1)
+        changed = self.session('changed-transcript').call({'action': 'request', 'selection': {
+            'courseId': 'course-1', 'resourceIds': [], 'examReferences': [{**ref, 'text': '새로 확인한 교수 강조 내용'}]}, 'settings': {'count': 1}})
+        self.assertEqual(changed['hostOnly']['SOURCE'][0]['text'], '새로 확인한 교수 강조 내용')
+        with self.assertRaises(ValueError):
+            self.session('reports-only').call({'action': 'request', 'selection': {
+                'courseId': 'course-1', 'resourceIds': [], 'examReferences': [{**ref, 'kind': 'student_report'}]}})
+
+    def test_reference_scope_types_and_testimony_cannot_supply_an_answer(self):
+        from features.study import exam_references
+        course = {'id': 'course-1', 'professor': '김교수'}
+        ref = {'kind': 'student_report', 'courseId': 'course-1', 'professor': '김교수',
+               'source': '사용자의 수강 경험', 'location': '이 대화', 'text': '서술형 위주였어요.'}
+        self.assertEqual(exam_references([], course), [])
+        for changed in ({'courseId': 'other'}, {'professor': '다른 교수'}, {'kind': 'paper'},
+                        {'text': 'x' * 2001}, {'source': ''}, {'password': 'never-accepted'}):
+            with self.assertRaises(ValueError):
+                exam_references([{**ref, **changed}], course)
+        session = self.session('unsupported-quote')
+        prepared = session.call({'action': 'request', 'selection': {'courseId': 'course-1',
+            'resourceIds': ['r0'], 'examReferences': [ref]}, 'settings': {'count': 1}})
+        question = self.candidate(prepared)
+        question['evidence'] = [{'resourceId': exam_references([ref], course)[0]['id'],
+                                'location': ref['location'], 'quote': ref['text']}]
+        with self.assertRaises(ValueError):
+            self.extract_questions(session, prepared, [question])
+        self.assertEqual(self.session('unsupported-quote').call({'action': 'status'})['requestId'], prepared['requestId'])
+
     def test_all_files_must_finish_resume_and_private_question_bank(self):
         prepared = self.request()
         for index in range(4):

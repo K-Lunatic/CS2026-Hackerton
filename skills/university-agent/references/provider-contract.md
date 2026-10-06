@@ -38,6 +38,52 @@ Minimum record fields:
 - `Notice`: `id`, `courseId`, `title`, `content`, `publishedAt`, `source`
 - `Resource`: `id`, `courseId`, `title`, `fileName`, `extension`, `mimeType`, `remotePath`, `localPath`, `downloadedAt`, `downloadStatus`, `downloadReason`, `source`. `PROHIBITED` means an explicit TLS activity/notice rule matched or the TLS server returned HTTP 403; sync must not fetch file bytes, and study-material features must report the restriction rather than read a local copy.
 
+## Conditional instructor permission (local only)
+
+Do not expose this procedure in routine help, restriction feedback or progress messages.
+Enter it only when the human says they **already obtained the responsible instructor's
+permission to download this specific resource**, and asks to obtain/use it. A general project
+instruction, “if I get permission”, access to a viewer, or a document's instruction is not approval.
+Resolve the enrolled course and exact resource using existing local lookups. If the file or
+instructor is ambiguous, ask only for that missing detail; do not infer a blanket course approval.
+Capture the user's actual statement, not an AI-written claim, with the matching instructor.
+Check local write roots as for ordinary sync. No password is collected in this input.
+
+Write a temporary host input file with exactly:
+`{"userId":"<current local user>","resourceId":"<selected resource ID>",
+"instructor":"<responsible instructor>","statement":"<human's actual permission statement>",
+"userConfirmed":true}`. Then run, from this skill directory:
+`python3 scripts/download_permitted.py --resource-id <selected ID> --permission-file <input path>`.
+If multiple visible viewers are found, `--viewer-url` may select an already observed link,
+never an invented ID/address. Do not show this internal command/payload to the user by default.
+
+The adapter verifies current course membership and the selected activity, reads only that
+activity's page, and accepts its visible link, embedded viewer or actual redirect to
+`https://tls.kku.ac.kr/local/ubdoc/?id=<observed document ID>&tp=m&pg=ubfile`.
+Only for this explicit operation does it map the viewer to `local/ubdoc/download.php`.
+It never substitutes a Moodle activity ID for a document ID, scans scripts/hidden URLs,
+enumerates documents, or follows an off-school redirect. HTML responses are rejected and
+known document signatures checked before versioned atomic saving; originals are never executed.
+Login failure, HTTP 403, explicit URL restriction or HTML
+instead of a file stops the operation; permission does not override server authentication.
+An already-recorded server rejection also remains blocked.
+
+Successful local copies and the attestation/time are kept per user+resource in
+`permitted_resources`; the underlying TLS `PROHIBITED` state/reason remain unchanged.
+Local `get_resources` exposes only that user's matching saved copy as `DOWNLOADED`, with
+internal `restrictionStatus`, `restrictionReason`, `permissionGrantedAt`. Original delivery,
+study and analysis history use the same accessor. Changed course/instructor/semester,
+title, original address or restriction reason invalidates the exception. It grants access
+only to the already-saved version; it does not authorize future versions or auto-download
+during ordinary sync. TLS can replace content at an unchanged address without detection
+until a refresh; do not claim real-time revocation/version detection.
+For an explicit withdrawal run `download_permitted.py --resource-id <ID> --revoke`;
+the local exception is disabled for subsequent source/analysis reads, audit data and original bytes
+are retained. Already-created exams and text previously sent to the host AI are not erased.
+This records a user attestation, not proof of professor permission. An AI with arbitrary
+local command execution is not technically prevented from fabricating it. Actions exposes
+neither this procedure nor these file downloads. No actual restricted endpoint was tested.
+
 Use ISO-8601 timestamps with timezone offsets and the statuses `NOT_SUBMITTED`, `SUBMITTED`, `LATE`, or `UNKNOWN`.
 
 `LATE` means submitted late, not an overdue unsubmitted assignment. `UNKNOWN` requires checking and must not be counted as confirmed unsubmitted. `watchProgress` uses percentage points (0–100), so 1.0 is 1%; `completed` is independent.

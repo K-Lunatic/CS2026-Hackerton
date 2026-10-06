@@ -1,6 +1,7 @@
 """Grounded study state machine. Host AI generates and grades; code checks provenance/state."""
 from __future__ import annotations
 import json
+import hashlib
 import os
 import re
 import secrets
@@ -21,11 +22,19 @@ PROMPT = '''역할: 제공된 수업자료로 연습문제를 만들고 채점�
 - 객관식은 중복 없는 선택지와 하나의 정답을 만든다. 단답형은 의미가 같은 표현을 허용하고, 서술형·코딩은 평가 기준별로 판단한다.
 - 코딩 자료는 예제 기반 오류 수정이나 실행 결과 예측 문제를 우선한다. 코드를 실행하지 않는다.
 - 각 문제에는 핵심 개념, 해설, 평가 기준, 실제 자료의 위치와 짧은 원문 근거를 포함한다.
+- 사용자가 남긴 학습·시험 메모는 출제 형식, 난이도, 시간 배분과 설명 방식만 조절하는 참고다.
+  메모를 공식 공지나 원문 근거로 취급하지 말고, 메모에 없는 사실을 보충하지 않는다.
 - 새 문제 유형을 만들 때는 표시 이름과 답변 형식(choice/text/code)을 함께 정한다.'''
 
 
 def study_intent(text):
-    if re.search(r'(문제|퀴즈).*(만들|내줘|출제|풀)|핵심\s*개념.*정리', text):
+    exam_context = re.search(r'(?:중간고사|기말고사|시험|손코딩|시험\s*(?:시간|방식|정보)|출제\s*(?:방식|경향)|(?:주요|핵심)\s*(?:내용|포인트))', text)
+    note_cue = re.search(r'(?:하셨|말씀|알려|들었|이래|라고|저장|기억|참고)', text)
+    if exam_context and note_cue:
+        return 'save_context_note'
+    if re.search(r'(?:저장한|기록한|등록한).*(?:시험|출제|학습).*(?:정보|내용|메모).*(?:보여|확인|알려)|시험\s*정보.*(?:보여|확인|목록)', text):
+        return 'list_context_notes'
+    if re.search(r'(문제|퀴즈).*(만들|내줘|출제|풀)|핵심\s*개념.*정리|주요\s*(?:내용|포인트).*정리|학습.*시켜', text):
         return 'request'
     if re.search(r'공부|시험\s*준비|복습|이해했는지', text):
         return 'request'
@@ -41,6 +50,18 @@ def event_from_text(text, courses):
     scope = re.search(r'\d{1,2}\s*주차|제?\d{1,2}\s*(?:장|단원)', text)
     if scope:
         selection['resourceName'] = re.sub(r'\s+', '', scope.group())
+    if intent == 'save_context_note':
+        exam_type = 'midterm' if '중간고사' in text else 'final' if '기말고사' in text else 'exam'
+        lesson = re.search(r'(\d{1,2})\s*(주차|차시|장|단원)', text)
+        event['note'] = {'text': text, 'examType': exam_type,
+                         'lessonKey': f'{lesson.group(1)}{lesson.group(2)}' if lesson else None}
+        if selection:
+            event['selection'] = selection
+        return event
+    if intent == 'list_context_notes':
+        if selection:
+            event['selection'] = selection
+        return event
     if re.search(r'(?:전체|모든)\s*(?:수업)?\s*(?:자료|파일)', text):
         selection['allFiles'] = True
     if selection:
@@ -117,6 +138,50 @@ def required_text(obj, key):
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f'{key}: 비어 있지 않은 문자열이 필요합니다.')
     return value
+
+
+def _note_tags(text):
+    tags = []
+    if re.search(r'손\s*코딩|손으로\s*(?:작성|코드)', text):
+        tags.append('hand_coding')
+    minutes = re.search(r'(\d{1,3})\s*분', text)
+    if minutes:
+        tags.append(f'time_limit_{minutes.group(1)}m')
+    if re.search(r'간단하게|간단한|짧게', text):
+        tags.append('short_answer')
+    return tags
+
+
+def exam_references(raw, course):
+    """Explicit, course-bound reports and actual transcripts; never collect external data."""
+    if not isinstance(raw, list) or len(raw) > 20:
+        raise ValueError('출제 참고 자료는 20개 이하의 목록이어야 합니다.')
+    result, seen, report_chars, transcript_chars = [], set(), 0, 0
+    fields = {'kind', 'courseId', 'professor', 'semester', 'source', 'location', 'text'}
+    for item in raw:
+        if not isinstance(item, dict) or set(item) - fields or item.get('kind') not in ('everytime_review', 'student_report', 'instructor_transcript'):
+            raise ValueError('강의평·사용자 경험담·실제 교수 전사문만 참고할 수 있습니다.')
+        if item.get('courseId') != course['id']:
+            raise ValueError('참고 자료의 과목이 선택한 과목과 다릅니다.')
+        if any(not isinstance(item.get(k, ''), str) or len(item.get(k, '')) > 500 for k in fields - {'text'}):
+            raise ValueError('참고 자료의 출처·위치·교수·학기를 확인하세요.')
+        if course.get('professor') and item.get('professor') and normalize(course['professor']) != normalize(item['professor']):
+            raise ValueError('다른 교수의 후기를 이 과목의 출제 경향으로 사용할 수 없습니다.')
+        for k in ('source', 'location', 'text'):
+            required_text(item, k)
+        transcript = item['kind'] == 'instructor_transcript'
+        if len(item['text']) > (100000 if transcript else 2000):
+            raise ValueError('후기는 2000자, 전사문은 부분별 10만 자 이내로 전달하세요.')
+        identifier = 'ref-' + material_cache.key(item)[:16]
+        if identifier in seen:
+            continue
+        seen.add(identifier)
+        transcript_chars += len(item['text']) if transcript else 0
+        report_chars += 0 if transcript else len(item['text'])
+        result.append({**item, 'id': identifier})
+    if report_chars > 8000 or transcript_chars > 1000000:
+        raise ValueError('후기는 총 8000자, 전사문은 총 100만 자 이내로 범위를 나눠 주세요.')
+    return result
 
 
 def validate_generated(data, state):
@@ -229,6 +294,98 @@ class StudySession:
         self.provider, self.files_root = provider, Path(files_root)
         self.exam_id = exam_id
 
+    @staticmethod
+    def _ensure_context_notes(db):
+        db.execute('CREATE TABLE IF NOT EXISTS study_context_notes ('
+                   'user TEXT NOT NULL, note_id TEXT NOT NULL, course_id TEXT NOT NULL, '
+                   'lesson_key TEXT, exam_type TEXT NOT NULL, note_text TEXT NOT NULL, '
+                   'tags_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, '
+                   'PRIMARY KEY(user, note_id))')
+        db.execute('CREATE INDEX IF NOT EXISTS study_context_notes_lookup '
+                   'ON study_context_notes(user, course_id, lesson_key, exam_type, updated_at DESC)')
+
+    def _resolve_note_course(self, selection):
+        courses = self.provider.get_courses(self.user)
+        course_id = selection.get('courseId') if isinstance(selection, dict) else None
+        course_name = selection.get('courseName', '') if isinstance(selection, dict) else ''
+        if course_id:
+            matches = [c for c in courses if c['id'] == course_id]
+        elif isinstance(course_name, str) and course_name.strip():
+            needle = normalize(course_name)
+            matches = [c for c in courses if needle in normalize(c['name'])]
+        else:
+            matches = []
+        return courses, matches
+
+    def context_notes(self, db, course_id=None, lesson_key=None):
+        query = 'SELECT note_id,course_id,lesson_key,exam_type,note_text,tags_json,created_at,updated_at FROM study_context_notes WHERE user=?'
+        params = [self.user]
+        if course_id:
+            query += ' AND course_id=?'; params.append(course_id)
+        query += ' ORDER BY updated_at DESC'
+        notes = []
+        for row in db.execute(query, params):
+            if lesson_key and row['lesson_key'] and normalize(row['lesson_key']) not in normalize(lesson_key):
+                continue
+            item = dict(row)
+            item['tags'] = json.loads(item.pop('tags_json'))
+            notes.append(item)
+        return notes
+
+    @staticmethod
+    def _public_context_note(note, courses):
+        course = next((c for c in courses if c['id'] == note['course_id']), None)
+        return {'id': note['note_id'], 'courseName': course['name'] if course else '과목',
+                'lessonKey': note['lesson_key'], 'examType': note['exam_type'],
+                'note': note['note_text'], 'tags': note['tags'], 'savedAt': note['updated_at']}
+
+    def context_note_event(self, db, event):
+        self._ensure_context_notes(db)
+        selection = event.get('selection') or {}
+        courses, matches = self._resolve_note_course(selection)
+        if event.get('action') == 'list_context_notes' and not selection.get('courseId') and not selection.get('courseName'):
+            notes = self.context_notes(db)
+            return {'status': 'context_notes', 'notes': [self._public_context_note(n, courses) for n in notes],
+                    'answer': f"저장된 학습·시험 메모가 {len(notes)}개 있어요." if notes else '저장된 학습·시험 메모가 없어요.'}
+        if len(matches) != 1:
+            return {'status': 'selecting', 'courses': [{'id': c['id'], 'name': c['name']} for c in (matches or courses)],
+                    'answer': '어느 과목에 남길까요? 과목명을 함께 알려주세요.' if courses else '저장된 과목이 없어요. TLS 새로고침 후 다시 알려주세요.'}
+        course = matches[0]
+        if event.get('action') == 'list_context_notes':
+            notes = self.context_notes(db, course['id'], selection.get('lessonKey') or selection.get('resourceName'))
+            return {'status': 'context_notes', 'notes': [self._public_context_note(n, courses) for n in notes],
+                    'answer': f"{course['name']}에 저장된 학습·시험 메모가 {len(notes)}개 있어요." if notes else f"{course['name']}에는 저장된 학습·시험 메모가 없어요."}
+        raw = event.get('note')
+        if not isinstance(raw, dict):
+            raise ValueError('저장할 시험 정보를 확인하지 못했어요.')
+        text = required_text(raw, 'text').strip()
+        if len(text) > 4000:
+            raise ValueError('시험 정보 메모는 4000자 이내로 저장할 수 있어요.')
+        lesson_key = raw.get('lessonKey') or selection.get('lessonKey') or selection.get('resourceName')
+        exam_type = raw.get('examType') or 'course'
+        if not isinstance(lesson_key, (str, type(None))) or (isinstance(lesson_key, str) and len(lesson_key) > 100):
+            raise ValueError('차시나 주차 이름을 확인해 주세요.')
+        if not isinstance(exam_type, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,30}', exam_type):
+            raise ValueError('시험 종류를 확인해 주세요.')
+        tags = _note_tags(text)
+        fingerprint = hashlib.sha256(json.dumps([self.user, course['id'], lesson_key, exam_type, text], ensure_ascii=False).encode()).hexdigest()[:20]
+        now = datetime.now(timezone.utc).isoformat()
+        note_id = 'note-' + fingerprint
+        if not db.execute('SELECT 1 FROM study_context_notes WHERE user=? AND note_id=?', (self.user, note_id)).fetchone():
+            db.execute('INSERT INTO study_context_notes VALUES (?,?,?,?,?,?,?,?,?)',
+                       (self.user, note_id, course['id'], lesson_key, exam_type, text,
+                        json.dumps(tags, ensure_ascii=False), now, now))
+        return {'status': 'context_saved', 'note': {'courseName': course['name'], 'lessonKey': lesson_key,
+                'examType': exam_type, 'tags': tags, 'savedAt': now},
+                'answer': f"{course['name']}의 {exam_type} 정보를 저장했어요. 다음 개념 설명과 문제를 준비할 때 참고할게요."}
+
+    def _focus_notes(self, course_id, lesson_key=None):
+        if not getattr(self, '_notes_db', None):
+            return []
+        notes = self.context_notes(self._notes_db, course_id, lesson_key)
+        return [{'id': n['note_id'], 'lessonKey': n['lesson_key'], 'examType': n['exam_type'],
+                 'note': n['note_text'], 'tags': n['tags']} for n in notes[:20]]
+
     def archive_exam(self, db, state, conversation=None):
         if not state.get('examId') or not state.get('questions'):
             return
@@ -263,13 +420,18 @@ class StudySession:
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600); os.close(fd)
         os.chmod(self.path, 0o600)
         with sqlite3.connect(self.path) as db:
+            db.row_factory = sqlite3.Row
             db.execute('CREATE TABLE IF NOT EXISTS study_sessions (user TEXT, conversation TEXT, state TEXT, PRIMARY KEY(user, conversation))')
             db.execute('CREATE TABLE IF NOT EXISTS study_exams (user TEXT, exam_id TEXT, conversation TEXT, created_at TEXT, title TEXT, question_count INTEGER, phase TEXT, score REAL, state TEXT, PRIMARY KEY(user,exam_id))')
             db.execute('CREATE INDEX IF NOT EXISTS study_exam_history ON study_exams(user,created_at DESC,exam_id)')
             db.execute('CREATE INDEX IF NOT EXISTS study_exam_conversations ON study_exams(user,conversation)')
             db.execute('CREATE TABLE IF NOT EXISTS study_pipelines (user TEXT, exam_id TEXT, state TEXT, PRIMARY KEY(user,exam_id))')
-            read_only = self.exam_id is not None or event.get('action') in ('catalog', 'unit', 'candidate', 'web_status', 'exam_review')
+            self._ensure_context_notes(db)
+            read_only = self.exam_id is not None or event.get('action') in ('list_context_notes', 'catalog', 'unit', 'candidate', 'web_status', 'exam_review')
             db.execute('BEGIN' if read_only else 'BEGIN IMMEDIATE')
+            if event.get('action') in ('save_context_note', 'list_context_notes'):
+                return self.context_note_event(db, event)
+            self._notes_db = db
             if self.exam_id or event.get('action') == 'exam_review':
                 if event.get('action') not in ('web_status', 'status', 'exam_review'):
                     raise ValueError('지난 시험지는 읽기 전용이에요.')
@@ -300,6 +462,19 @@ class StudySession:
 
     def transition(self, state, event):
         action = event.get('action')
+        if (action in ('status', 'accept', 'generate', 'extract', 'catalog', 'unit', 'candidate', 'assemble') and
+            state['phase'] in ('prepared', 'offered', 'extracting', 'assembling')):
+            pipeline = state.get('pipeline', {})
+            ids = {s['resourceId'] for s in state.get('sources', [])}
+            ids.update(u['resourceId'] for u in pipeline.get('units', []))
+            ids.update(s['resourceId'] for chunk in pipeline.get('chunks', []) for s in chunk)
+            ids = {rid for rid in ids if not rid.startswith('attachment-')}
+            if ids:
+                allowed = {r['id'] for r in self.provider.get_resources(self.user)
+                    if r.get('downloadStatus') != 'PROHIBITED' and r.get('localPath') and
+                    r['courseId'] == state['selection'].get('courseId')}
+                if not ids <= allowed:
+                    raise ValueError('자료 이용 상태가 달라져 이어서 읽지 않았어요. 사용할 자료를 다시 골라 주세요.')
         if action in ('extract', 'catalog', 'unit', 'candidate', 'assemble') or (action == 'status' and state['phase'] in ('extracting', 'assembling')):
             if 'pipeline' not in state:
                 raise ValueError('먼저 파일별 분석을 시작하세요.')
@@ -397,6 +572,9 @@ class StudySession:
                 raise ValueError('현재 사용자의 과목이 아닙니다.')
             if selection.get('resourceIds'):
                 raise ValueError('직접 첨부 자료와 학교 자료를 한 세션에 섞을 수 없습니다.')
+            course = next((c for c in self.provider.get_courses(self.user) if c['id'] == course_id), {'id': course_id})
+            state['focusNotes'] = self._focus_notes(course_id, selection.get('resourceName'))
+            state['examReferences'] = exam_references(selection.get('examReferences', []), course)
             if state['settings']['mode'] == 'quiz' and state['settings']['delivery'] == 'web':
                 selection['courseId'] = course_id
                 return study_pipeline.start(self, state, [material['id']], material)
@@ -415,6 +593,8 @@ class StudySession:
                       '저장된 과목이 없어요. TLS 새로고침을 요청하거나 공부할 파일을 첨부해 주세요.')
             return {'status': 'selecting', 'courses': [{'id': c['id'], 'name': c['name']} for c in (matches or courses)], 'answer': answer}
         course = matches[0]; selection['courseId'] = course['id']
+        state['focusNotes'] = self._focus_notes(course['id'], selection.get('resourceName'))
+        state['examReferences'] = exam_references(selection.get('examReferences', []), course)
         resources = self.provider.get_resources(self.user)
         selected = selection.get('resourceIds')
         resource_name = selection.get('resourceName', '')
@@ -429,7 +609,8 @@ class StudySession:
             raise ValueError('자료 ID 목록 형식 오류')
         if selected is None:
             choices = [{'id': r['id'], 'title': r['title'], 'downloadStatus': r.get('downloadStatus')} for r in resources if r['courseId'] == course['id']]
-            if len(choices) != 1 and selection.get('allFiles') is not True:
+            has_transcript = any(r['kind'] == 'instructor_transcript' for r in state['examReferences'])
+            if len(choices) != 1 and selection.get('allFiles') is not True and not (not choices and has_transcript):
                 return {'status': 'selecting', 'materials': choices[:10], 'totalMaterials': len(choices),
                         'answer': ('사용할 자료나 주차·단원을 골라주세요.' if choices else
                                    '이 과목에 저장된 수업자료가 없어요. TLS 새로고침을 요청하거나 공부할 파일을 첨부해 주세요.')}
@@ -442,7 +623,7 @@ class StudySession:
             raise ValueError('위치 범위는 선택한 자료 ID에 지정하세요.')
         if state['settings']['mode'] == 'quiz' and state['settings']['delivery'] == 'web':
             available = {r['id'] for r in resources if r['courseId'] == course['id']}
-            if not selected or len(set(selected)) != len(selected) or not set(selected) <= available:
+            if (not selected and not any(r['kind'] == 'instructor_transcript' for r in state['examReferences'])) or len(set(selected)) != len(selected) or not set(selected) <= available:
                 raise ValueError('선택 과목의 자료를 중복 없이 지정하세요.')
             return study_pipeline.start(self, state, selected)
         result = study_materials(courses, resources, files_root=self.files_root, course_id=course['id'], resource_ids=selected, locations=locations, include_ids=True)
@@ -479,7 +660,9 @@ class StudySession:
                 'answer': '읽은 자료 범위에서 준비합니다: ' + ', '.join(dict.fromkeys(s['name'] for s in sources)),
                 'failures': failures, 'truncated': truncated,
                 'sourceLocations': [{'resourceId': s['resourceId'], 'name': s['name'], 'location': s['location']} for s in sources],
-                'hostOnly': {'instruction': PROMPT, 'courseName': next((c['name'] for c in self.provider.get_courses(self.user) if c['id'] == state['selection'].get('courseId')), state['selection'].get('attachmentTitle', '첨부 자료')), 'settings': state['settings'], 'schema': contract, 'SOURCE': sources}}
+                'hostOnly': {'instruction': PROMPT + '\nstudyContext의 메모는 사용자 제공 참고 정보다. 자료 본문 인용과 분리해 사용하고, 메모 자체를 정답 근거로 인용하지 않는다.',
+                             'courseName': next((c['name'] for c in self.provider.get_courses(self.user) if c['id'] == state['selection'].get('courseId')), state['selection'].get('attachmentTitle', '첨부 자료')),
+                             'settings': state['settings'], 'studyContext': state.get('focusNotes', []), 'schema': contract, 'SOURCE': sources}}
 
     def web_event(self, state, event):
         if state.get('settings', {}).get('delivery') != 'web' or not state.get('questions'):
@@ -513,6 +696,7 @@ class StudySession:
         if state['phase'] == 'finished':
             result['summary'] = summary(state)
             result['feedback'] = [{**h, 'answer': q['answer'], 'explanation': q['explanation']} for h in state['history'] for q in state['questions'] if h['questionId'] == q['id']]
+            result['referenceUse'] = state.get('referenceUse', [])
         return result
 
     def pending_evaluation(self, state):

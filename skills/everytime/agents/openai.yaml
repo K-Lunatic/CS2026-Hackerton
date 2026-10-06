@@ -1,0 +1,5 @@
+interface:
+  display_name: "에브리타임"
+  short_description: "직접 로그인·2차 인증 후 에타 정보를 안전하게 확인"
+  brand_color: "#F25F5C"
+  default_prompt: "Use $everytime to open the Everytime login form, wait for the user's 2FA completion, and review selected campus information read-only."

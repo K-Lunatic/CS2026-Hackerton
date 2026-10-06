@@ -18,7 +18,7 @@ const MARK = {
   incorrect: 'M49 6 C38 22 24 40 9 55',
 };
 const GLYPH = {correct: '○', partial: '△', incorrect: '／'};
-let exam, drafts = {}, revision = 0, timer, saving = Promise.resolve(), submitting = false, dirty = false;
+let exam, drafts = {}, revision = 0, timer, saving = Promise.resolve(), submitting = false, dirty = false, editVersion = 0;
 function node(tag, text, className) {
   const el = document.createElement(tag);
   if (text !== undefined) el.textContent = text;
@@ -40,17 +40,20 @@ function chosen(q) {
 }
 function progress() {
   const count = exam.questions.filter(answered).length;
+  if (exam.readOnly) { $('progress').textContent = '지난 시험과 당시 답안을 보고 있어요'; return; }
   $('progress').textContent = exam.status === 'question' ? exam.questions.length + '문항 중 ' + count + '문항에 답했어요'
     : exam.status === 'grading' ? '채점을 기다리고 있어요' : '채점이 끝났어요';
 }
 function saveDraft() {
+  if (exam.readOnly) return Promise.resolve();
   const draft = {...drafts};
+  const version = editVersion;
   saving = saving.catch(() => {}).then(async () => {
     $('saved').textContent = '답안을 저장하고 있어요…';
     const result = await api('/api/draft', {examId: exam.examId, answers: draft, revision});
     revision = result.revision;
-    dirty = false;
-    $('saved').textContent = '답안 저장 완료';
+    dirty = editVersion !== version;
+    $('saved').textContent = dirty ? '새로 쓴 답안도 저장하고 있어요…' : '답안 저장 완료';
     error('');
   });
   // A failed save blocks this submission; the next edit may retry the connection.
@@ -58,8 +61,9 @@ function saveDraft() {
   return saving;
 }
 function setDraft(q, value) {
-  if (submitting || exam.status !== 'question') return;
+  if (submitting || exam.readOnly || exam.status !== 'question') return;
   drafts[q.id] = value;
+  editVersion++;
   $('row-' + q.id).replaceWith(omrRow(q, exam.questions.indexOf(q)));
   progress(); resetConfirm(); clearTimeout(timer);
   dirty = true; $('saved').textContent = '답안 변경됨';
@@ -75,7 +79,7 @@ function mark(outcome, order) {
 }
 function define(list, term, text, className) { list.append(node('dt', term), node('dd', text, className)); }
 function options(q, feedback) {
-  const answering = exam.status === 'question', list = node('ol', undefined, 'options' + (answering ? '' : ' graded'));
+  const answering = exam.status === 'question' && !exam.readOnly, list = node('ol', undefined, 'options' + (answering ? '' : ' graded'));
   q.options.forEach((option, n) => {
     const row = node(answering ? 'label' : 'div', undefined, 'option');
     if (answering) {
@@ -134,17 +138,17 @@ function questionItem(q, index, feedback) {
   body.append(text);
   if (q.code) { const pre = node('pre', q.code); if (q.language) pre.dataset.language = q.language; body.append(pre); }
   if (q.responseFormat === 'choice') body.append(options(q, feedback));
-  else if (exam.status === 'question') body.append(answerInput(q, index));
+  else if (exam.status === 'question' && !exam.readOnly) body.append(answerInput(q, index));
   if (feedback) body.append(result(q, feedback));
-  else if (exam.status !== 'question') {
+  else if (exam.status !== 'question' || exam.readOnly) {
     if (q.responseFormat !== 'choice') { const list = node('dl'); define(list, '내 답', answered(q) ? drafts[q.id] : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : ''); body.append(list); }
-    body.append(node('p', '채점을 기다리고 있어요.', 'pending'));
+    body.append(node('p', exam.readOnly ? '당시 저장된 답안이에요.' : '채점을 기다리고 있어요.', 'pending'));
   }
   item.append(num, body);
   return item;
 }
 function omrRow(q, index, feedback) {
-  const row = node('li', undefined, 'omr-row'), link = node('a', String(index + 1), 'omr-num'), answering = exam.status === 'question';
+  const row = node('li', undefined, 'omr-row'), link = node('a', String(index + 1), 'omr-num'), answering = exam.status === 'question' && !exam.readOnly;
   row.id = 'row-' + q.id;
   link.href = '#q-' + index; link.id = 'jump-' + index; link.setAttribute('aria-label', (index + 1) + '번 문항으로 이동');
   row.append(link);
@@ -175,10 +179,10 @@ function render(data) {
   $('title').textContent = data.title; document.title = data.title + ' 연습 시험';
   $('total').textContent = '수업자료에서 만든 연습 시험 ' + data.questions.length + '문항, ' + data.totalPoints + '점 만점이에요. 실제 학교 시험이나 예상 기출이 아니에요.';
   $('phase').textContent = {question: '시험 진행 중', grading: '채점 기다리는 중', finished: '채점 완료'}[data.status] || data.status;
-  $('exam').classList.toggle('answering', data.status === 'question');
+  $('exam').classList.toggle('answering', data.status === 'question' && !data.readOnly);
   $('questions').replaceChildren(...data.questions.map((q, i) => questionItem(q, i, feedback[q.id])));
   $('nav').replaceChildren(...data.questions.map((q, i) => omrRow(q, i, feedback[q.id])));
-  $('submit-area').hidden = data.status !== 'question';
+  $('submit-area').hidden = data.status !== 'question' || data.readOnly;
   if (data.status !== 'question') $('saved').textContent = '';
   resetConfirm(); progress();
   $('notice').hidden = data.status === 'question';
@@ -201,13 +205,20 @@ function render(data) {
     });
     $('review-list').replaceChildren(...items); $('review').hidden = !items.length;
   }
+  if (data.readOnly) {
+    $('phase').textContent = '지난 시험 돌아보기';
+    if (!finished) {
+      $('notice').hidden = false;
+      $('notice').textContent = '보관한 시험지예요. 당시 답안은 수정하거나 다시 제출할 수 없어요. 채점이 진행 중이라면 완료 후 이 화면을 새로고침해 주세요.';
+    }
+  }
 }
 function resetConfirm() {
   $('confirm-text').hidden = true; $('cancel').hidden = true;
   $('submit').textContent = '답안 제출하기'; delete $('submit').dataset.armed;
 }
 async function submit() {
-  if (submitting) return;
+  if (submitting || exam.readOnly) return;
   // First press explains what cannot be undone; the second press submits.
   if (!$('submit').dataset.armed) {
     const blank = exam.questions.map((q, i) => answered(q) ? '' : (i + 1) + '번').filter(Boolean);
@@ -233,12 +244,19 @@ window.addEventListener('beforeunload', event => {
 });
 (async () => {
   try { render(await api('/api/exam')); } catch (e) { $('title').textContent = '시험지를 열지 못했어요'; $('submit-area').hidden = true; error(e.message); return; }
-  setInterval(async () => {
+  if (exam.readOnly || exam.status === 'finished') return;
+  const poll = async () => {
+    if (exam.status === 'finished') return;
+    if (document.hidden) { setTimeout(poll, 3000); return; }
+    let stopped = false;
     try {
       const data = await api('/api/exam');
-      if (data.examId !== exam.examId) { error('새 시험지가 만들어졌어요. 대화에서 새 시험 링크를 열어주세요.'); $('submit').disabled = true; return; }
+      if (data.examId !== exam.examId) { error('새 시험지가 만들어졌어요. 대화에서 새 시험 링크를 열어주세요.'); $('submit').disabled = true; stopped = true; return; }
       // Answers are locked once the status changes, so a full redraw cannot lose typing.
       if (data.status !== exam.status && !submitting) render(data);
+      stopped = exam.status === 'finished';
     } catch (e) { error(e.message); }
-  }, 3000);
+    finally { if (!stopped) setTimeout(poll, 3000); }
+  };
+  setTimeout(poll, 3000);
 })();

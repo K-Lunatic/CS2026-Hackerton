@@ -5,6 +5,8 @@ import gzip
 import re
 import ssl
 import zlib
+from copy import copy
+from urllib.error import HTTPError
 from http.cookiejar import CookieJar
 from html.parser import HTMLParser
 from typing import Any
@@ -61,6 +63,19 @@ class MoodleSession:
         self.opener = build_opener(HTTPCookieProcessor(self.cookies), _DownloadRedirectHandler(), HTTPSHandler(context=ssl.create_default_context()))
         self.logged_in = False
 
+    def fork(self):
+        """Independent cookie jar/opener per read worker; login remains single-threaded."""
+        child = MoodleSession(self.base_url)
+        for cookie in self.cookies:
+            child.cookies.set_cookie(copy(cookie))
+        child.logged_in = self.logged_in
+        return child
+
+    def revalidate(self, path, cached):
+        headers = {name: cached[key] for name, key in
+                   (('If-None-Match', 'etag'), ('If-Modified-Since', 'lastModified')) if cached.get(key)}
+        return self.get_bytes(path, conditional=headers)
+
     @staticmethod
     def _decode_bytes(payload: bytes, response: Any) -> bytes:
         encoding = response.headers.get("Content-Encoding", "").lower()
@@ -84,7 +99,15 @@ class MoodleSession:
         if data is not None:
             headers.update({"Content-Type": "application/x-www-form-urlencoded", "Origin": self.base_url, "Referer": referer or url})
         response = self.opener.open(Request(url, data=data, headers=headers, method="POST" if data is not None else "GET"), timeout=30)
-        html = self._decode(response)
+        try:
+            content_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower().strip()
+            # File redirects are not HTML notices. Do not transfer an entire
+            # cached PDF merely to look for a download prohibition in a page.
+            binary_file = content_type.startswith(('application/pdf', 'application/octet-stream',
+                'application/msword', 'application/vnd.', 'application/x-hwp', 'image/', 'video/', 'audio/'))
+            html = '' if data is None and binary_file else self._decode(response)
+        finally:
+            response.close()
         if self.logged_in and ("/login" in urlsplit(response.geturl()).path or re.search(r'name=["\']username["\']', html, re.I)):
             raise LoginError("TLS session expired; sign in again")
         return html, response
@@ -111,12 +134,21 @@ class MoodleSession:
         html, _ = self._request(path)
         return html
 
-    def get_bytes(self, path: str) -> tuple[bytes, Any]:
+    def get_bytes(self, path: str, *, conditional=None) -> tuple[bytes | None, Any]:
         if not self.logged_in:
             raise LoginError("Call login() before get_bytes()")
         url = urljoin(f"{self.base_url}/", path.lstrip("/"))
         check_download_url(url)
-        response = self.opener.open(Request(url, headers={"User-Agent": "UniversityAgent/0.1", "Accept-Encoding": "gzip, deflate"}), timeout=30)
+        try:
+            response = self.opener.open(Request(url, headers={"User-Agent": "UniversityAgent/0.1", "Accept-Encoding": "gzip, deflate", **(conditional or {})}), timeout=30)
+        except HTTPError as error:
+            if error.code != 304:
+                raise
+            try:
+                check_download_url(error.geturl())
+                return None, error
+            finally:
+                error.close()
         try:
             check_download_url(response.geturl())
             if "/login" in urlsplit(response.geturl()).path:

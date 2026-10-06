@@ -21,12 +21,13 @@ if str(ROOT) not in sys.path:
 
 from features.assignments import assignment_answer, get_assignments
 from features.assignment_selection import find_assignments, search_save_targets, selection_guidance, public_checkpoint, normalize
-from features.study_materials import study_materials
+from features.study_materials import study_materials, original_files
 from features.bookmarks import add_bookmark, bookmark_answer, delete_bookmark, list_bookmarks, validate_bookmark_target
 from features.context import format_current_context, get_current_context
 from features.context_bookmarks import format_resume_card, get_context_bookmark, list_unfinished_context_bookmarks, save_context_bookmark
 from features.context_commands import command_template, detect_context_intent, parse_context_command, with_next_commands
 from features.study import StudySession, study_intent, event_from_text
+from features import analysis_records
 from features.lectures import get_lectures
 from features.guidance import academic_list_answer, guidance_request, is_status_request, usage_guide
 from features.deadlines import format_deadline
@@ -331,6 +332,18 @@ def main() -> None:
     sub.add_parser("notices")
     sub.add_parser("todos")
     sub.add_parser("resources")
+    originals = sub.add_parser('resource-file', help='강의 원본 파일 제공')
+    originals.add_argument('--course', default='')
+    originals.add_argument('--resource', default='')
+    originals.add_argument('--id', default='')
+    analysis = sub.add_parser('analysis-history', help='자료별 분석 기록 조회')
+    analysis.add_argument('--id', default='', help='분석 기록 ID: 지정하면 상세 조회')
+    analysis.add_argument('--resource-id', default='')
+    analysis.add_argument('--offset', type=int, default=0)
+    analysis.add_argument('--limit', type=int, default=20)
+    past_exams = sub.add_parser('exam-history', help='보관된 시험 목록')
+    past_exams.add_argument('--offset', type=int, default=0)
+    past_exams.add_argument('--limit', type=int, default=20)
     study_parser = sub.add_parser("study-materials", help="다운로드한 과목 자료를 학습 자료 생성용으로 읽기")
     study_parser.add_argument("--course", default="", help="과목명 또는 일부")
     study_parser.add_argument("--resource", default="", help="자료 제목 또는 파일명 일부")
@@ -402,6 +415,19 @@ def main() -> None:
         result = {"toolCalls": ["get_notices"], "data": database().get_notices(USER_ID)}
     elif args.command == "resources":
         result = {"toolCalls": ["get_resources"], "data": database().get_resources(USER_ID)}
+    elif args.command == 'analysis-history':
+        result = {'toolCalls': ['get_analysis_records'], 'data': analysis_records.read(
+            DB_PATH.parent, USER_ID, database().get_resources(USER_ID), args.id,
+            args.resource_id, args.offset, args.limit)}
+    elif args.command == 'resource-file':
+        store = database()
+        result = original_files(store.get_courses(USER_ID), store.get_resources(USER_ID),
+            files_root=DB_PATH.parent / 'files', course_query=args.course,
+            resource_query=args.resource, resource_id=args.id)
+    elif args.command == 'exam-history':
+        store = database()
+        result = StudySession(DB_PATH.parent / 'study-sessions.db', USER_ID, 'history', store,
+            DB_PATH.parent / 'files').call({'action': 'exam_history', 'offset': args.offset, 'limit': args.limit})
     elif args.command == "study-materials":
         if not 1000 <= args.max_chars <= 80000:
             parser.error("--max-chars는 1000~80000 사이여야 합니다.")

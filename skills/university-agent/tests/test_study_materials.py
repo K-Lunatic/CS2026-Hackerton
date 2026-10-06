@@ -9,10 +9,36 @@ from unittest.mock import patch
 
 from test_project import ProjectTestBase, snapshot, upsert
 from storage.local_db import LocalDatabase
-from features.study_materials import _docx_sections, _hwpx_sections, _pdf_sections, _text_sections, study_materials, attached_material
+from features.study_materials import _docx_sections, _hwpx_sections, _pdf_sections, _text_sections, study_materials, attached_material, original_files
 
 
 class StudyMaterialsTests(ProjectTestBase):
+    def test_attachment_format_invalidates_analysis_from_old_text_decoder(self):
+        from features.study_pipeline import analysis_key
+        path = self.files / 'lecture.txt'
+        path.write_bytes('한글 본문'.encode('cp949'))
+        material = attached_material(str(path), cache_root=self.files.parent / 'cache')
+        self.assertEqual(material['extension'], 'txt')
+        self.assertEqual(material['sections'][0]['text'], '한글 본문')
+        state = {'settings': {'choices': 4, 'difficulty': '보통', 'types': ['auto']},
+                 'selection': {'courseId': 'user-attachment'}}
+        legacy = {k: v for k, v in material.items() if k != 'extension'}
+        self.assertNotEqual(analysis_key(state, material), analysis_key(state, legacy))
+
+    def test_original_files_are_real_paths_and_prohibited_or_escaped_paths_are_not_exposed(self):
+        cli_result = self.cli('resource-file', '--course', '자료구조', '--resource', '3주차')
+        self.assertEqual(cli_result['data']['files'][0]['path'], str(self.pptx.resolve()))
+        courses = [{'id': 'course-1', 'name': '자료구조'}]
+        item = {'id': 'r1', 'courseId': 'course-1', 'title': '자료', 'fileName': self.pptx.name,
+                'localPath': str(self.pptx), 'downloadStatus': 'DOWNLOADED'}
+        result = original_files(courses, [item], files_root=self.files, course_query='자료구조')
+        self.assertEqual(result['data']['files'][0]['path'], str(self.pptx.resolve()))
+        prohibited = original_files(courses, [{**item, 'downloadStatus': 'PROHIBITED', 'downloadReason': '다운로드 금지'}], files_root=self.files)
+        self.assertNotIn('path', prohibited['data']['files'][0])
+        escaped = original_files(courses, [{**item, 'localPath': str(self.db_path)}], files_root=self.files)
+        self.assertNotIn('path', escaped['data']['files'][0])
+        self.assertEqual(original_files(courses, [item], files_root=self.files, resource_id='other-user-resource')['data']['files'], [])
+
     def test_windows_pdf_fallback_uses_pdftotext_pages(self):
         path = Path(self.temp.name) / 'lecture.pdf'
         path.write_bytes(b'%PDF-fixture')
@@ -26,6 +52,8 @@ class StudyMaterialsTests(ProjectTestBase):
         with patch('features.study_materials.PdfReader', side_effect=ValueError('bad font')), patch('features.study_materials.shutil.which', side_effect=lambda name: 'pdftotext' if name == 'pdftotext' else None), patch('features.study_materials.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='복구된 본문\f')):
             self.assertEqual(attached_material(str(pdf))['sections'][0]['text'], '복구된 본문')
         with patch('features.study_materials.PdfReader', None), patch('features.study_materials.shutil.which', return_value=None):
+            self.assertEqual(attached_material(str(pdf))['sections'][0]['text'], '복구된 본문')
+            pdf.write_bytes(self._pdf_with_text('Changed PDF'))
             with self.assertRaisesRegex(ValueError, 'pip install pypdf'):
                 attached_material(str(pdf))
 

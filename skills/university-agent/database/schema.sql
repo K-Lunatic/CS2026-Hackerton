@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS assignments (
   course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   description TEXT,
-  due_at TEXT NOT NULL,
+  due_at TEXT,
   source TEXT NOT NULL DEFAULT 'tls',
   updated_at TEXT NOT NULL,
   UNIQUE (source, external_id)

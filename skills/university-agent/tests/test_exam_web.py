@@ -95,6 +95,11 @@ class ExamWebTests(ProjectTestBase):
         self.assertEqual(len(finished['feedback']), 6)
         self.assertIn('answer', finished['feedback'][0])
         with self.assertRaises(ValueError): s.call({'action': 'web_submit', 'examId': draft['examId'], 'revision': 1, 'answers': answers})
+        s.call({'action': 'cancel'})
+        archived = s.call({'action': 'exam_review', 'examId': public['examId']})
+        self.assertTrue(archived['readOnly'])
+        self.assertEqual(archived['summary']['score'], finished['summary']['score'])
+        self.assertEqual(archived['feedback'], finished['feedback'])
 
     def test_web_blank_answers_and_invalid_grading_are_atomic(self):
         s = self.make_exam(); public = s.call({'action': 'web_status'})
@@ -113,6 +118,40 @@ class ExamWebTests(ProjectTestBase):
         grades[-1]['criteria'][0]['met'] = False
         result = s.call({'action': 'grade_batch', 'gradeId': pending['gradeId'], 'grades': grades})
         self.assertEqual(result['summary']['score'], 0)
+
+    def test_previous_exam_retains_answers_after_new_request_and_is_read_only(self):
+        from features.study import StudySession
+        s = self.make_exam()
+        original = s.call({'action': 'web_status'})
+        s.call({'action': 'draft', 'examId': original['examId'], 'revision': 0, 'answers': {'q1': '1'}})
+        s.call({'action': 'request', 'selection': {'courseId': 'course-1'}, 'settings': {'count': 6, 'choices': 3}})
+        s.call({'action': 'assemble', 'candidateIds': [f'c{i}' for i in range(1, 7)]})
+        history = s.call({'action': 'exam_history'})
+        self.assertEqual(len(history['exams']), 2)
+        self.assertEqual(len(self.cli('exam-history')['exams']), 2)
+        self.assertTrue(all('answer' not in entry and 'questions' not in entry for entry in history['exams']))
+        viewer = StudySession(s.path, s.user, 'another-chat', s.provider, s.files_root, exam_id=original['examId'])
+        review = viewer.call({'action': 'web_status'})
+        self.assertTrue(review['readOnly'])
+        self.assertEqual(review['drafts']['q1'], '1')
+        self.assertEqual(review['questions'], original['questions'])
+        self.assertNotIn('rubric', json.dumps(review))
+        with self.assertRaises(ValueError):
+            viewer.call({'action': 'draft', 'examId': original['examId'], 'revision': 1, 'answers': {}})
+        other = StudySession(s.path, 'another-user', 'another-chat', s.provider, s.files_root, exam_id=original['examId'])
+        with self.assertRaises(ValueError):
+            other.call({'action': 'web_status'})
+        server, url = create_exam_server(viewer)
+        worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        base, token = url.split('#')
+        headers = {'X-Exam-Token': token, 'Content-Type': 'application/json'}
+        with urlopen(Request(base + 'api/exam', headers=headers), timeout=3) as response:
+            self.assertTrue(json.loads(response.read())['readOnly'])
+        with self.assertRaises(HTTPError) as exc:
+            urlopen(Request(base + 'api/draft', headers=headers,
+                data=json.dumps({'examId': original['examId'], 'revision': 1, 'answers': {}}).encode()), timeout=3)
+        self.assertEqual(exc.exception.code, 409)
 
     def test_http_only_accepts_exam_answers_and_loopback_token(self):
         session = self.make_exam()
@@ -223,7 +262,8 @@ class ExamWebTests(ProjectTestBase):
         old = s.call({'action': 'web_status'})
         prepared = s.call({'action': 'request', 'selection': {'courseId': 'course-1'},
                            'settings': {'count': 1, 'delivery': 'web'}})
-        self.extract_questions(s, prepared, [q])
+        self.assertTrue(prepared['needsAssembly'])
+        self.assertEqual(prepared['reusedFiles'], 1)
         s.call({'action': 'assemble', 'candidateIds': ['c1']})
         with self.assertRaisesRegex(ValueError, '시험지가 바뀌었어요'):
             s.call({'action': 'web_submit', 'examId': old['examId'], 'revision': 0, 'answers': {'q1': '오래된 답'}})

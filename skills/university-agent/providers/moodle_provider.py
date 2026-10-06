@@ -5,9 +5,10 @@ import re
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlsplit
 from urllib.error import HTTPError
+from concurrent.futures import ThreadPoolExecutor
 
 from providers.moodle_session import MoodleSession, DownloadRestricted, check_download_url
 
@@ -99,6 +100,26 @@ class MoodleTLSProvider:
         self._course_pages: dict[str, str] = {}
         self._activity_links: dict[str, list[tuple[str, str]]] = {}
 
+    def _parallel_courses(self, method, user, **kwargs):
+        courses = self.get_courses(user)
+        if len(courses) < 2 or not hasattr(self.session, 'fork'):
+            return None
+        # ponytail: at most four independent read sessions, not an unbounded request fan-out.
+        def collect(course):
+            provider = MoodleTLSProvider(self.session.fork())
+            provider._courses = [course]
+            provider._course_pages = self._course_pages.copy()
+            provider._activity_links = self._activity_links.copy()
+            items = getattr(provider, method)(user, **kwargs)
+            return items, provider._course_pages, provider._activity_links
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            result = []
+            for items, pages, links in pool.map(collect, courses):
+                self._course_pages.update(pages)
+                self._activity_links.update(links)
+                result.extend(items)
+            return result
+
     @staticmethod
     def _links(html: str, *, only_activities: bool = False) -> list[tuple[str, str]]:
         parser = _LinkParser(only_activities=only_activities)
@@ -134,6 +155,9 @@ class MoodleTLSProvider:
         return self._activity_links[external_id]
 
     def get_assignments(self, user_id: str) -> list[dict[str, Any]]:
+        parallel = self._parallel_courses('get_assignments', user_id)
+        if parallel is not None:
+            return parallel
         courses = self.get_courses(user_id)
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -146,13 +170,14 @@ class MoodleTLSProvider:
                 detail = self.session.get(f"/mod/assign/view.php?id={match.group(1)}")
                 text = _plain_text(detail)
                 due = _find_datetime(text, ("종료 일시", "마감일", "Due date"))
-                if not due:
-                    continue
                 status = "SUBMITTED" if "제출 완료" in text else "NOT_SUBMITTED" if re.search(r"제출 (?:안 함|하지 않음|되지 않음)", text) else "UNKNOWN"
                 result.append({"id": f"tls-assignment-{match.group(1)}", "externalId": match.group(1), "courseId": course["id"], "title": title or f"TLS assignment {match.group(1)}", "dueAt": due, "submissionStatus": status, "source": "tls"})
         return result
 
     def get_lectures(self, user_id: str) -> list[dict[str, Any]]:
+        parallel = self._parallel_courses('get_lectures', user_id)
+        if parallel is not None:
+            return parallel
         courses = self.get_courses(user_id)
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -175,6 +200,9 @@ class MoodleTLSProvider:
         return result
 
     def get_notices(self, user_id: str) -> list[dict[str, Any]]:
+        parallel = self._parallel_courses('get_notices', user_id)
+        if parallel is not None:
+            return parallel
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         for course in self.get_courses(user_id):
@@ -197,7 +225,14 @@ class MoodleTLSProvider:
         return result
 
     def get_resources(self, user_id: str, notices: list[dict[str, Any]] | None = None,
-                      existing_resources: Mapping[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+                      existing_resources: Mapping[str, dict[str, Any]] | None = None,
+                      progress: Callable[[str], None] | None = None,
+                      download_new_files: bool = True,
+                      save_file: Callable[[dict], dict] | None = None) -> list[dict[str, Any]]:
+        parallel = self._parallel_courses('get_resources', user_id, notices=notices,
+            existing_resources=existing_resources, progress=progress, download_new_files=download_new_files, save_file=save_file)
+        if parallel is not None:
+            return parallel
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         notices_by_course: dict[str, list[dict[str, Any]]] = {}
@@ -214,6 +249,8 @@ class MoodleTLSProvider:
                     continue
                 seen.add(match.group(1))
                 resource_id = match.group(1)
+                if progress:
+                    progress(f"{course['name']} · 자료 {len(result) + 1} 확인 중이에요…")
                 restriction = _download_restriction(activity["text"], title, notices_by_course.get(course["id"], []))
                 if not restriction:
                     try:
@@ -223,6 +260,11 @@ class MoodleTLSProvider:
                             restriction = _download_restriction(page_text, title, notices_by_course.get(course["id"], []))
                     except DownloadRestricted as error:
                         restriction = str(error)
+                    except HTTPError as error:
+                        if error.code != 403:
+                            raise
+                        error.close()
+                        restriction = 'TLS 서버가 파일 다운로드를 거부했습니다. 파일 내용을 가져오지 않았습니다.'
                 if restriction:
                     result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
                                    "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
@@ -231,17 +273,29 @@ class MoodleTLSProvider:
                                    "downloadStatus": "PROHIBITED", "downloadReason": restriction})
                     continue
                 cached = (existing_resources or {}).get(resource_id)
-                if cached and cached.get("localPath") and Path(cached["localPath"]).is_file() and cached.get("remotePath") == href and cached.get("mimeType") not in {"text/html", "application/xhtml+xml"}:
-                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
+                reusable = bool(cached and cached.get("localPath") and Path(cached["localPath"]).is_file() and cached.get("remotePath") == href and cached.get("mimeType") not in {"text/html", "application/xhtml+xml"})
+                if reusable:
+                    reused = {"id": f"tls-resource-{resource_id}", "externalId": resource_id,
                                    "courseId": course["id"], "title": title or cached.get("title", f"TLS resource {resource_id}"),
                                    "fileName": cached.get("fileName") or title or f"resource-{resource_id}",
                                    "extension": cached.get("extension", "unknown"), "mimeType": cached.get("mimeType"),
                                    "remotePath": href, "localPath": cached["localPath"],
                                    "downloadedAt": cached.get("downloadedAt"), "source": "tls",
-                                   "downloadStatus": "DOWNLOADED"})
+                                   "downloadStatus": "DOWNLOADED", '_reused': True}
+                    if not download_new_files or not hasattr(self.session, 'revalidate'):
+                        result.append(reused)
+                        continue
+                if not download_new_files:
+                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
+                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
+                                   "fileName": title or f"resource-{resource_id}",
+                                   "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
+                                   "mimeType": None, "remotePath": href, "source": "tls",
+                                   "downloadStatus": "NOT_DOWNLOADED",
+                                   "downloadReason": "이번에는 목록만 확인했어요. 파일이 필요하면 전체 새로고침을 요청해 주세요."})
                     continue
                 try:
-                    content, response = self.session.get_bytes(href)
+                    content, response = self.session.revalidate(href, cached) if reusable else self.session.get_bytes(href)
                 except (HTTPError, DownloadRestricted) as error:
                     if isinstance(error, HTTPError):
                         if error.code != 403:
@@ -252,6 +306,9 @@ class MoodleTLSProvider:
                                    "fileName": title or f"resource-{resource_id}", "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
                                    "mimeType": None, "remotePath": href, "source": "tls",
                                    "downloadStatus": "PROHIBITED", "downloadReason": str(error) if isinstance(error, DownloadRestricted) else "TLS 서버가 파일 다운로드를 거부했습니다. 파일 내용을 가져오지 않았습니다."})
+                    continue
+                if content is None and reusable:
+                    result.append(reused)
                     continue
                 if _looks_like_viewer_page(content, response.headers.get("Content-Type", ""), response.geturl()):
                     result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
@@ -293,7 +350,9 @@ class MoodleTLSProvider:
                 file_name = file_name or f"resource-{match.group(1)}.{extension}"
                 if not Path(file_name).suffix:
                     file_name = f"{file_name}.{extension}"
-                result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id, "courseId": course["id"], "title": title or file_name, "fileName": file_name, "extension": extension, "mimeType": mime_type, "remotePath": href, "source": "tls", "downloadStatus": "NOT_DOWNLOADED", "_content": content})
+                item = {"id": f"tls-resource-{resource_id}", "externalId": resource_id, "courseId": course["id"], "title": title or file_name, "fileName": file_name, "extension": extension, "mimeType": mime_type, "remotePath": href, "source": "tls", "downloadStatus": "NOT_DOWNLOADED", "_content": content,
+                        '_validators': {'etag': response.headers.get('ETag'), 'lastModified': response.headers.get('Last-Modified')}}
+                result.append(save_file(item) if save_file else item)
         return result
 
 
@@ -303,10 +362,15 @@ def _download_restriction(activity_text: str, title: str, notices: list[dict[str
         r"(?:금지|불가|제한)\s*(?:된|되어)?\s*(?:다운로드|저장)",
         r"(?:do\s+not\s+download|download(?:ing)?\s+(?:is\s+)?(?:prohibited|disabled|not\s+allowed|not\s+downloadable))",
     )
-    exceptions = r"(?:다운로드|저장).{0,8}(?<!불)(?:가능|허용|할\s*수\s*있)|(?:금지|제한)(?:가|는|을)?\s*(?:아니|해제|하지\s*않)"
-
     def restricted(text: str) -> bool:
-        return not re.search(exceptions, text, re.I) and any(re.search(pattern, text, re.I) for pattern in patterns)
+        clauses = re.split(r'[\n;,。.!?]+|\s+(?:하지만|그러나|다만)\s+', text)
+        for clause in clauses:
+            for pattern in patterns:
+                for match in re.finditer(pattern, clause, re.I):
+                    # Negation must describe this prohibition, not another allowed file.
+                    if not re.match(r'\s*[（(]?\s*(?:가|는|을|를)?\s*(?:아니|아닙|아닌|아님|해제|하지\s*않)', clause[match.end():]):
+                        return True
+        return False
 
     if restricted(activity_text):
         return "강의실 자료 항목에 다운로드 제한이 표시되어 파일을 가져오지 않았습니다."

@@ -56,6 +56,12 @@ def usage_guide(text: str = "") -> dict:
 
 
 def guidance_request(text: str) -> dict | None:
+    if re.search(r'(?:지난|이전|예전|과거|풀었던).{0,20}(?:시험|문제)', text) and re.search(r'확인|기록|내역|보여|열어|다시\s*봐|돌아보기', text):
+        return {'toolCalls': [], 'needsExamHistory': True, 'nextCommands': ['python3 scripts/run_agent.py exam-history'],
+                'answer': '풀었던 시험지를 찾아볼게요. 저장된 문제와 당시 답안·채점을 다시 볼 수 있어요.'}
+    if re.search(r'원본.{0,20}(?:파일|자료)|(?:파일|자료).{0,20}(?:원본|다운로드|보내줘|제공)', text):
+        return {'toolCalls': [], 'needsOriginalFile': True, 'nextCommands': [],
+                'answer': '요약본이 아닌 강의 원본 파일로 드릴게요. 대화에서 확인된 과목과 자료를 찾고, 여러 파일이면 골라드릴게요.'}
     if re.search(r"새로\s*고침|동기화|(?:TLS|학교|계정).{0,12}(?:연결|로그인)|(?:최신|다시).{0,8}(?:TLS|학사|제출|시청).{0,12}(?:확인|조회)", text, re.I):
         return {"toolCalls": [], "needsSync": True, "data": {"intent": "sync", "performed": False},
                 "nextCommands": ["python3 scripts/sync_tls.py --connect"],

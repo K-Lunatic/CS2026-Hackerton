@@ -5,10 +5,12 @@ import os
 import re
 import secrets
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from features.study_materials import study_materials, attached_material
 from features.assignment_selection import normalize
 from features import study_pipeline
+from features import material_cache, analysis_records
 
 PROMPT = '''역할: 제공된 수업자료로 연습문제를 만들고 채점한다.
 
@@ -220,11 +222,38 @@ class StudySession:
     SQLite transactions prevent concurrent answers overwriting one another.
     This file is separate from academic/checkpoint storage; no existing table is changed.
     """
-    def __init__(self, path, user, conversation, provider, files_root):
+    def __init__(self, path, user, conversation, provider, files_root, exam_id=None):
         if not user or not conversation or len(conversation) > 200:
             raise ValueError('인증된 사용자와 대화별 세션 키가 필요합니다.')
         self.path, self.user, self.conversation = Path(path), user, conversation
         self.provider, self.files_root = provider, Path(files_root)
+        self.exam_id = exam_id
+
+    def archive_exam(self, db, state, conversation=None):
+        if not state.get('examId') or not state.get('questions'):
+            return
+        saved = {k: v for k, v in state.items() if k != 'pipeline'}
+        title = ' / '.join(dict.fromkeys(s['name'] for s in state.get('sources', [])))
+        score = sum(h.get('score', 0) for h in state.get('history', [])) if state['phase'] == 'finished' else None
+        db.execute('INSERT INTO study_exams VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user,exam_id) DO UPDATE SET phase=excluded.phase,score=excluded.score,state=excluded.state WHERE study_exams.state != excluded.state',
+            (self.user, state['examId'], conversation or self.conversation, datetime.now(timezone.utc).isoformat(),
+             title, len(state['questions']), state['phase'], score, json.dumps(saved, ensure_ascii=False, separators=(',', ':'))))
+
+    def detach_pipeline(self, db, state):
+        if state.get('questions') and 'pipeline' in state:
+            db.execute('INSERT OR REPLACE INTO study_pipelines VALUES (?,?,?)',
+                (self.user, state['examId'], json.dumps(state.pop('pipeline'), ensure_ascii=False, separators=(',', ':'))))
+            state['analysisRef'] = state['examId']
+
+    def exam_history(self, db, event):
+        offset, limit = event.get('offset', 0), event.get('limit', 20)
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError('시험 목록은 offset >= 0, limit 1~20으로 조회하세요.')
+        rows = db.execute('SELECT exam_id,created_at,title,question_count,phase,score FROM study_exams WHERE user=? ORDER BY created_at DESC,exam_id LIMIT ? OFFSET ?',
+                          (self.user, limit + 1, offset)).fetchall()
+        return {'status': 'history', 'exams': [dict(zip(('examId', 'createdAt', 'title', 'questionCount', 'status', 'score'), row)) for row in rows[:limit]],
+                'nextOffset': offset + limit if len(rows) > limit else None,
+                'answer': '저장해 둔 시험지를 골라 다시 볼 수 있어요.'}
 
     def call(self, event):
         if not isinstance(event, dict):
@@ -235,11 +264,38 @@ class StudySession:
         os.chmod(self.path, 0o600)
         with sqlite3.connect(self.path) as db:
             db.execute('CREATE TABLE IF NOT EXISTS study_sessions (user TEXT, conversation TEXT, state TEXT, PRIMARY KEY(user, conversation))')
-            db.execute('BEGIN IMMEDIATE')
+            db.execute('CREATE TABLE IF NOT EXISTS study_exams (user TEXT, exam_id TEXT, conversation TEXT, created_at TEXT, title TEXT, question_count INTEGER, phase TEXT, score REAL, state TEXT, PRIMARY KEY(user,exam_id))')
+            db.execute('CREATE INDEX IF NOT EXISTS study_exam_history ON study_exams(user,created_at DESC,exam_id)')
+            db.execute('CREATE INDEX IF NOT EXISTS study_exam_conversations ON study_exams(user,conversation)')
+            db.execute('CREATE TABLE IF NOT EXISTS study_pipelines (user TEXT, exam_id TEXT, state TEXT, PRIMARY KEY(user,exam_id))')
+            read_only = self.exam_id is not None or event.get('action') in ('catalog', 'unit', 'candidate', 'web_status', 'exam_review')
+            db.execute('BEGIN' if read_only else 'BEGIN IMMEDIATE')
+            if self.exam_id or event.get('action') == 'exam_review':
+                if event.get('action') not in ('web_status', 'status', 'exam_review'):
+                    raise ValueError('지난 시험지는 읽기 전용이에요.')
+                exam = self.exam_id or event.get('examId')
+                saved = db.execute('SELECT state FROM study_exams WHERE user=? AND exam_id=?', (self.user, exam)).fetchone()
+                if not saved:
+                    raise ValueError('현재 사용자의 저장된 시험지가 아닙니다.')
+                return {**self.web_event(json.loads(saved[0]), {'action': 'web_status'}), 'readOnly': True}
+            if event.get('action') == 'exam_history':
+                # Keep pre-upgrade exams too; never expose another local user's sessions.
+                for old_conversation, old_state in db.execute('SELECT s.conversation,s.state FROM study_sessions s WHERE s.user=? AND NOT EXISTS (SELECT 1 FROM study_exams e WHERE e.user=s.user AND e.conversation=s.conversation)', (self.user,)).fetchall():
+                    self.archive_exam(db, json.loads(old_state), old_conversation)
+                return self.exam_history(db, event)
             row = db.execute('SELECT state FROM study_sessions WHERE user=? AND conversation=?', (self.user, self.conversation)).fetchone()
             state = json.loads(row[0]) if row else {'phase': 'idle'}
+            if not read_only:
+                self.detach_pipeline(db, state)
+                if event.get('action') in ('request', 'offer', 'cancel', 'observe'):
+                    self.archive_exam(db, state)
             result = self.transition(state, event)
-            db.execute('INSERT OR REPLACE INTO study_sessions VALUES (?,?,?)', (self.user, self.conversation, json.dumps(state, ensure_ascii=False)))
+            if not read_only:
+                self.detach_pipeline(db, state)
+                self.archive_exam(db, state)
+                encoded = json.dumps(state, ensure_ascii=False, separators=(',', ':'))
+                if not row or row[0] != encoded:
+                    db.execute('INSERT OR REPLACE INTO study_sessions VALUES (?,?,?)', (self.user, self.conversation, encoded))
             return result
 
     def transition(self, state, event):
@@ -289,6 +345,15 @@ class StudySession:
                     state.update(phase='finished', shortageReason=event['data']['shortageReason'])
                     return {'status': 'insufficient', 'answer': '읽은 자료로 근거 있는 개념을 정리할 수 없습니다. 다른 자료를 선택해주세요.', 'reason': event['data']['shortageReason']}
                 state.update(phase='offered', concepts=items, offerId=secrets.token_hex(12))
+                for rid in dict.fromkeys(s['resourceId'] for s in state['sources']):
+                    sources = [s for s in state['sources'] if s['resourceId'] == rid]
+                    concepts = [{**c, 'evidence': [e for e in c['evidence'] if e['resourceId'] == rid]}
+                                for c in items if any(e['resourceId'] == rid for e in c['evidence'])]
+                    if concepts:
+                        analysis_records.save(self.files_root.parent, self.user, sources,
+                            state['settings'], 'concepts', {'concepts': concepts}, operation_id=state['requestId'])
+                material_cache.put(self.files_root.parent / 'cache', 'concepts', self.user,
+                    material_cache.key(['concepts-v1', state['sources']]), items)
                 return {'status': 'concepts', 'concepts': items, 'offerId': state['offerId'],
                         'answer': '필수 개념을 훑어봤어요. 이 자료로 문제를 풀어볼까요?',
                         'nextCommands': ['문제 10개 풀기', '문제 20개 풀기', '개념 다시 설명해줘']}
@@ -323,7 +388,8 @@ class StudySession:
                 return {'status': 'selecting', 'answer': '첨부 파일을 열 수 없어요. 파일을 다시 첨부하거나 다른 수업자료를 골라 주세요.'}
             try:
                 material = attached_material(str(attachment), title=selection.get('attachmentTitle', ''),
-                    max_chars=10_000_000 if state['settings']['delivery'] == 'web' else 30000)
+                    max_chars=10_000_000 if state['settings']['delivery'] == 'web' else 30000,
+                    cache_root=self.files_root.parent / 'cache')
             except ValueError as exc:
                 return {'status': 'selecting', 'answer': str(exc) + ' 다른 파일을 첨부하거나 수업자료를 선택해주세요.'}
             course_id = selection.get('courseId', 'user-attachment')
@@ -392,12 +458,23 @@ class StudySession:
         state.update(phase='prepared', sources=sources, requestId=secrets.token_hex(12))
         return self.generation_request(state, failures, data['truncated'])
 
-    def generation_request(self, state, failures, truncated):
+    def generation_request(self, state, failures, truncated, *, schema_only=False):
         state.update(failures=failures, truncated=truncated)
         sources = state['sources']
+        if state['settings']['mode'] == 'concepts' and state['selection'].get('rebuildAnalysis') is not True:
+            cached = material_cache.get(self.files_root.parent / 'cache', 'concepts', self.user,
+                material_cache.key(['concepts-v1', sources]))
+            if cached:
+                state.update(phase='offered', concepts=cached, offerId=secrets.token_hex(12))
+                return {'status': 'concepts', 'concepts': cached, 'offerId': state['offerId'], 'reusedAnalysis': True,
+                        'failures': failures, 'truncated': truncated,
+                        'answer': '이 자료에서 정리해 둔 핵심 개념을 바로 가져왔어요.',
+                        'nextCommands': ['문제 10개 풀기', '문제 20개 풀기', '개념 다시 설명해줘']}
         contract = {'questions': [{'id': 'q1', 'type': '설정된 유형 식별자', 'typeLabel': '새 유형의 표시 이름', 'responseFormat': 'choice|text|code', 'points': 10, 'code': '코딩 문항의 예제 코드', 'language': 'java 등', 'keywords': ['핵심 용어'], 'question': '질문', 'options': ['선택지 (choice만)'], 'answer': '정답 선택지 원문 또는 모범답안', 'acceptedAnswers': ['단답 허용 표현'], 'explanation': '해설', 'rubric': ['주요 키워드와 의미적 충족 조건'], 'concept': '핵심 개념', 'hint': '정답을 누설하지 않는 힌트', 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}], 'shortageReason': '문항 부족 시 사유'}
         if state['settings']['mode'] == 'concepts':
             contract = {'concepts': [{'concept': '개념', 'explanation': '설명', 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}]}
+        if schema_only:
+            return contract
         return {'status': 'prepared', 'requestId': state['requestId'], 'needsGeneration': True,
                 'answer': '읽은 자료 범위에서 준비합니다: ' + ', '.join(dict.fromkeys(s['name'] for s in sources)),
                 'failures': failures, 'truncated': truncated,

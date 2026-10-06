@@ -40,6 +40,8 @@ class StudyFlowTests(ProjectTestBase):
         return q
 
     def test_intent_offer_direct_request_and_unrelated_short_reply(self):
+        self.assertTrue(self.cli('ask', '--text', '지난 시험 문제 보여줘', '--conversation', 'history-request')['needsExamHistory'])
+        self.assertTrue(self.cli('ask', '--text', '강의 원본 파일 보내줘')['needsOriginalFile'])
         self.assertEqual(study_intent('운영체제 시험 준비해야 하는데'), 'request')
         self.assertEqual(event_from_text('운영체제 시험 준비해야 하는데', [])['settings']['mode'], 'concepts')
         self.assertEqual(event_from_text('객관식 문제 만들어줘', [])['settings']['types'], ['mcq'] * 10)
@@ -169,6 +171,9 @@ class StudyFlowTests(ProjectTestBase):
             'concept': '자원 관리', 'explanation': '자료 설명', 'evidence': [{'resourceId': source['resourceId'],
             'location': source['location'], 'quote': '운영체제는 자원을 관리한다.'}]}]}})
         self.assertEqual(generated['status'], 'concepts')
+        reused = self.session('new-chat').call({'action': 'request', 'selection': {'attachmentPath': str(attachment)}, 'settings': {'mode': 'concepts'}})
+        self.assertTrue(reused['reusedAnalysis'])
+        self.assertEqual(reused['concepts'], generated['concepts'])
         self.assertEqual(s.call({'action': 'cancel'})['status'], 'idle')
         self.assertFalse(s.call({'action': 'offer'})['offered'])
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,7 @@ class LocalDatabase:
         self.read_only = read_only
         if not read_only:
             path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True) if read_only else sqlite3.connect(path)
+        self.connection = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True) if read_only else sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         if not read_only:
@@ -31,6 +32,33 @@ class LocalDatabase:
             if "download_reason" not in resource_columns:
                 self.connection.execute("ALTER TABLE resources ADD COLUMN download_reason TEXT")
             self.connection.commit()
+            columns = self.connection.execute('PRAGMA table_info(assignments)').fetchall()
+            if any(row[1] == 'due_at' and row[3] for row in columns):
+                self._allow_undated_assignments()
+
+    def _allow_undated_assignments(self):
+        """SQLite needs a table copy to remove NOT NULL; preserve rows and dependents."""
+        db = self.connection
+        sql = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='assignments'").fetchone()[0]
+        create = re.sub(r'CREATE TABLE\s+(?:IF NOT EXISTS\s+)?assignments\b', 'CREATE TABLE assignments_nullable', sql, count=1, flags=re.I)
+        create = re.sub(r'(\bdue_at\s+TEXT)\s+NOT\s+NULL', r'\1', create, flags=re.I)
+        if create == sql or 'assignments_nullable' not in create:
+            raise RuntimeError('과제 마감일 저장 형식을 안전하게 변경하지 못했습니다.')
+        extras = db.execute("SELECT sql FROM sqlite_master WHERE tbl_name='assignments' AND type IN ('index','trigger') AND sql IS NOT NULL").fetchall()
+        db.execute('PRAGMA foreign_keys=OFF')
+        try:
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                db.execute(create)
+                db.execute('INSERT INTO assignments_nullable SELECT * FROM assignments')
+                db.execute('DROP TABLE assignments')
+                db.execute('ALTER TABLE assignments_nullable RENAME TO assignments')
+                for row in extras:
+                    db.execute(row[0])
+                if db.execute('PRAGMA foreign_key_check').fetchone():
+                    raise RuntimeError('과제 저장 형식 변경 시 참조 오류가 있어 변경을 취소했습니다.')
+        finally:
+            db.execute('PRAGMA foreign_keys=ON')
 
     def close(self) -> None:
         self.connection.close()
@@ -171,7 +199,7 @@ class LocalDatabase:
         columns = {row[1] for row in self.connection.execute("PRAGMA table_info(resources)")}
         status = "r.download_status" if "download_status" in columns else "CASE WHEN r.local_path IS NOT NULL THEN 'DOWNLOADED' ELSE 'NOT_DOWNLOADED' END"
         reason = "r.download_reason" if "download_reason" in columns else "NULL"
-        rows = self.connection.execute(f"SELECT r.id, r.course_id AS courseId, r.title, r.file_name AS fileName, r.extension, r.mime_type AS mimeType, r.remote_path AS remotePath, r.local_path AS localPath, r.downloaded_at AS downloadedAt, {status} AS downloadStatus, {reason} AS downloadReason, r.source FROM resources r JOIN enrollments e ON e.course_id=r.course_id AND e.user_id=? ORDER BY r.title", (user_id,))
+        rows = self.connection.execute(f"SELECT r.id, r.external_id AS externalId, r.course_id AS courseId, r.title, r.file_name AS fileName, r.extension, r.mime_type AS mimeType, r.remote_path AS remotePath, r.local_path AS localPath, r.downloaded_at AS downloadedAt, {status} AS downloadStatus, {reason} AS downloadReason, r.source FROM resources r JOIN enrollments e ON e.course_id=r.course_id AND e.user_id=? ORDER BY r.title", (user_id,))
         return [dict(row) for row in rows]
 
     def list_bookmarks(self, user_id: str) -> list[dict[str, Any]]:

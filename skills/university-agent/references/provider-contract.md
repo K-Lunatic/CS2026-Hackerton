@@ -4,6 +4,24 @@ The runner reads the device-local database only; it does not invent sample TLS d
 
 `providers/moodle_session.py` handles the Moodle login form, hidden fields such as `logintoken`, redirects, and the in-memory `MoodleSession` cookie. `providers/credentials.py` keeps the username locally and protects the password with macOS Keychain or Windows DPAPI. It is intentionally separate from record parsers. Run `scripts/sync_tls.py` for the first and later syncs.
 
+For a faster status/list refresh, run `scripts/sync_tls.py --metadata-only`.
+This still checks visible download prohibitions and retains valid cached files,
+but leaves new files as `NOT_DOWNLOADED` with an explicit reason. It does not
+prepare new file contents for study. Run normal sync when those files are needed.
+Each stage reports elapsed time and resource checks report progress.
+Independent per-course reads use up to four worker sessions, each with its own cookie jar/opener.
+The local sync commits completed assignment/lecture/notice stages before fetching more data.
+A later failure does not undo earlier stages; the run still reports failure, not full completion.
+New originals are saved immediately through `save_file`, not retained as a whole batch of bytes.
+They live under `files/<courseId>/<resourceId>/<content SHA-256>/<original filename>`;
+different activities and changed versions never overwrite one another. Invalid filesystem characters
+are sanitized only for the physical path; the source `fileName` remains unchanged.
+Legacy shared paths are not trusted for reuse and are fetched again on a full refresh; old files are kept.
+Full refresh revalidates cached originals with ETag/Last-Modified in an adjacent `.http.json` sidecar.
+An HTTP 304 reuses bytes. Without validators, a full refresh fetches the file again to detect replacements.
+Metadata-only refresh intentionally does not check file content freshness.
+`Assignment.dueAt` may be null: missing dates do not remove assignments from collection.
+
 ```python
 class TLSProvider(Protocol):
     def get_user(self, user_id: str) -> dict | None: ...

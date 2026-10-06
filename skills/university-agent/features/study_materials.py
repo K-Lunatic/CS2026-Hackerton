@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import re
 import shutil
 import subprocess
@@ -13,6 +12,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 from typing import Any
+from features import material_cache
 
 try:
     from pypdf import PdfReader
@@ -110,9 +110,15 @@ def _legacy_office_sections(path: Path) -> list[dict[str, str]]:
 
 def _text_sections(path: Path) -> list[dict[str, str]]:
     raw = path.read_bytes()
-    if b"\x00" in raw[:4096]:
+    if b"\x00" in raw[:4096] and not raw.startswith((b'\xff\xfe', b'\xfe\xff')):
         raise RuntimeError("텍스트 파일이 아닙니다.")
-    return [{"location": "문서 본문", "text": raw.decode("utf-8-sig", errors="replace").strip()}]
+    for encoding in (('utf-16',) if raw.startswith((b'\xff\xfe', b'\xfe\xff')) else ('utf-8-sig', 'cp949')):
+        try:
+            text = raw.decode(encoding)
+            return [{'location': f'줄 {i}', 'text': line} for i, line in enumerate(text.splitlines(), 1) if line.strip()]
+        except UnicodeError:
+            pass
+    raise RuntimeError('텍스트 인코딩을 확인하지 못했어요. UTF-8로 저장한 파일을 골라주세요.')
 
 
 def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path) -> dict[str, list[dict[str, str]]]:
@@ -187,24 +193,65 @@ def _ppt_sections(path: Path) -> list[dict[str, str]]:
     raise RuntimeError("구형 PPT를 읽을 변환 도구가 없습니다. PPTX 또는 PDF로 변환해 다시 동기화해 주세요.")
 
 
-def attached_material(path_text: str, *, title: str = "", max_chars: int = 30000) -> dict[str, Any]:
+def _read_sections(path: Path, extension: str, cache_root: Path):
+    text_formats = {'txt', 'md', 'py', 'js', 'java', 'c', 'cpp', 'html', 'css', 'csv', 'json', 'xml', 'yaml', 'yml'}
+    identifier = material_cache.key(['text-v2' if extension in text_formats else 'text-v1', extension, material_cache.fingerprint(cache_root, path)])
+    cached = material_cache.get(cache_root, 'text', '', identifier)
+    if cached is not None:
+        return cached
+    if extension == 'pdf':
+        script = Path(__file__).resolve().parents[1] / 'scripts' / 'extract_pdf.swift'
+        sections = _pdf_sections([path], script, cache_root / 'swift-modules').get(str(path), [])
+    elif extension in ('txt', 'md'):
+        sections = _text_sections(path)
+    elif extension in ('pptx', 'ppt', 'docx', 'hwpx'):
+        sections = {'pptx': _pptx_sections, 'ppt': _ppt_sections, 'docx': _docx_sections, 'hwpx': _hwpx_sections}[extension](path)
+    elif extension in ('doc', 'hwp'):
+        sections = _legacy_office_sections(path)
+    elif extension in ('py', 'js', 'java', 'c', 'cpp', 'html', 'css', 'csv', 'json', 'xml', 'yaml', 'yml'):
+        sections = _text_sections(path)
+    else:
+        raise ValueError('지원하지 않는 파일 형식입니다.')
+    if sections and sum(len(section['text']) for section in sections) <= 10_000_000:
+        material_cache.put(cache_root, 'text', '', identifier, sections)
+    return sections
+
+
+def original_files(courses, resources, *, files_root, course_query='', resource_query='', resource_id=''):
+    """Return authorized original paths, not extracted text or regenerated documents."""
+    courses = [c for c in courses if not course_query or _normalize(course_query) in _normalize(c['name'])]
+    allowed = {c['id'] for c in courses}
+    selected = [r for r in resources if r['courseId'] in allowed
+                and (not resource_id or r['id'] == resource_id)
+                and (not resource_query or _normalize(resource_query) in _normalize(r['title'] + ' ' + r['fileName']))]
+    result = []
+    for item in selected:
+        entry = {'id': item['id'], 'title': item['title'], 'fileName': item['fileName']}
+        if item.get('downloadStatus') == 'PROHIBITED':
+            entry['error'] = item.get('downloadReason') or '다운로드 금지 자료예요.'
+        else:
+            try:
+                path = Path(item.get('localPath') or '').resolve(strict=True)
+                path.relative_to(Path(files_root).resolve())
+                if not path.is_file():
+                    raise ValueError
+                entry.update(path=str(path), sizeBytes=path.stat().st_size)
+            except (OSError, ValueError):
+                entry['error'] = '원본 파일이 아직 없어요. 전체 자료 새로고침이 필요해요.'
+        result.append(entry)
+    return {'data': {'files': result}, 'answer': '요청한 강의 원본 파일이에요.' if result else '일치하는 자료가 없어요.'}
+
+
+def attached_material(path_text: str, *, title: str = "", max_chars: int = 30000, cache_root: Path | None = None) -> dict[str, Any]:
     """Read a file explicitly supplied by the current user, without claiming TLS ownership."""
     path = Path(path_text).expanduser().resolve(strict=True)
     if not path.is_file() or path.stat().st_size > 10_000_000:
         raise ValueError("첨부 파일은 10MB 이하의 일반 파일이어야 합니다.")
     extension = path.suffix.lower()
     try:
-        if extension == ".pdf":
-            script = Path(__file__).resolve().parents[1] / "scripts" / "extract_pdf.swift"
-            sections = _pdf_sections([path], script, Path(tempfile.gettempdir()) / "turtleneck-swift-cache").get(str(path), [])
-        elif extension == ".pptx":
-            sections = _pptx_sections(path)
-        elif extension == ".ppt":
-            sections = _ppt_sections(path)
-        elif extension in (".txt", ".md"):
-            sections = [{"location": f"줄 {number}", "text": line} for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1) if line.strip()]
-        else:
+        if extension not in ('.pdf', '.pptx', '.ppt', '.txt', '.md'):
             raise ValueError("PDF, PPTX, TXT, MD 파일만 첨부할 수 있습니다.")
+        sections = _read_sections(path, extension[1:], cache_root or path.parent / 'cache')
     except RuntimeError as exc:
         raise ValueError(str(exc)) from exc
     except (OSError, UnicodeError, json.JSONDecodeError, zipfile.BadZipFile, ET.ParseError, subprocess.SubprocessError) as exc:
@@ -218,8 +265,10 @@ def attached_material(path_text: str, *, title: str = "", max_chars: int = 30000
             remaining -= len(excerpt)
     if not usable:
         raise ValueError("첨부 파일에서 읽을 수 있는 텍스트가 없습니다. 이미지형 PDF라면 OCR이 필요합니다.")
-    identifier = "attachment-" + hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-    return {"id": identifier, "title": title or path.name, "sections": usable,
+    digest = material_cache.fingerprint(cache_root or path.parent / 'cache', path)
+    identifier = "attachment-" + digest[:16]
+    return {"id": identifier, "title": title or path.name, "extension": extension[1:], "sections": usable,
+            'contentKey': digest,
             "truncated": sum(len(s.get("text", "")) for s in sections) > max_chars}
 
 
@@ -227,6 +276,7 @@ def study_materials(
     courses: list[dict[str, Any]], resources: list[dict[str, Any]], *,
     files_root: Path, course_query: str = "", resource_query: str = "", max_chars: int = 30000,
     course_id: str = "", resource_ids: list[str] | None = None, locations: dict | None = None, include_ids: bool = False,
+    metadata_only: bool = False,
 ) -> dict[str, Any]:
     """Return grounded, bounded source text without local paths or database IDs."""
     if course_id:
@@ -276,18 +326,6 @@ def study_materials(
         except (OSError, ValueError):
             errors[item["id"]] = "로컬 파일이 없습니다. TLS 동기화를 다시 실행해 주세요."
 
-    pdf_items = [item for item in selected if item.get("id") in resolved and item.get("extension", "").lower() == "pdf"]
-    pdf_text: dict[str, list[dict[str, str]]] = {}
-    if pdf_items:
-        script = Path(__file__).resolve().parents[1] / "scripts" / "extract_pdf.swift"
-        for item in pdf_items:
-            try:
-                pdf_text.update(_pdf_sections([resolved[item["id"]]], script, files_root.parent / "cache" / "swift-modules"))
-            except RuntimeError as exc:
-                errors[item["id"]] = str(exc)
-            except (json.JSONDecodeError, OSError, subprocess.SubprocessError):
-                errors[item["id"]] = "PDF 읽기 도구 실행에 실패했어요. 파일 상태와 도구 설치를 확인해 주세요."
-
     materials = []
     remaining = max_chars
     for item in selected:
@@ -301,29 +339,18 @@ def study_materials(
         path = resolved[item["id"]]
         try:
             extension = item["extension"].lower()
-            if extension == "pdf":
-                sections = pdf_text.get(str(path), [])
-            elif extension == "pptx":
-                sections = _pptx_sections(path)
-            elif extension in ("txt", "md"):
-                sections = [{"location": f"줄 {i}", "text": line} for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1) if line.strip()]
-            elif extension == "ppt":
-                sections = _ppt_sections(path)
-            elif extension == "docx":
-                sections = _docx_sections(path)
-            elif extension == "doc":
-                sections = _legacy_office_sections(path)
-            elif extension == "hwpx":
-                sections = _hwpx_sections(path)
-            elif extension == "hwp":
-                sections = _legacy_office_sections(path)
-            else:
-                if extension in ("py", "js", "java", "c", "cpp", "html", "css", "csv", "json", "xml", "yaml", "yml"):
-                    sections = _text_sections(path)
-                else:
-                    material["error"] = "지원하지 않는 파일 형식입니다. PDF/PPTX/TXT/MD 또는 읽을 수 있는 문서·코드 파일을 선택해주세요."
-                    materials.append(material)
-                    continue
+            if include_ids:
+                material['contentKey'] = material_cache.fingerprint(files_root.parent / 'cache', path)
+            if metadata_only:
+                if not include_ids:
+                    raise ValueError('내부 자료 확인에는 ID가 필요합니다.')
+                materials.append(material)
+                continue
+            sections = _read_sections(path, extension, files_root.parent / 'cache')
+        except RuntimeError as exc:
+            material['error'] = str(exc)
+            materials.append(material)
+            continue
         except (OSError, ValueError, zipfile.BadZipFile, ET.ParseError, subprocess.SubprocessError, RuntimeError):
             material["error"] = "파일 텍스트를 읽지 못했습니다. 오래된 HWP/DOC 파일은 HWPX/DOCX 또는 PDF로 변환해 주세요."
             materials.append(material)

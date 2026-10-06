@@ -14,12 +14,13 @@ from features.exam_web import create_exam_server
 def main():
     parser = argparse.ArgumentParser(description='터틀넥 로컬 시험지')
     parser.add_argument('--conversation', required=True)
+    parser.add_argument('--exam-id', help='보관한 시험을 읽기 전용으로 열기')
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--no-open', action='store_true')
     parser.add_argument('--wait', type=int, metavar='SECONDS', help='제출 대기 후 AI 채점 데이터를 반환 (1~60초)')
     args = parser.parse_args()
     try:
-        session = StudySession(DB_PATH.parent / 'study-sessions.db', USER_ID, args.conversation, database(), DB_PATH.parent / 'files')
+        session = StudySession(DB_PATH.parent / 'study-sessions.db', USER_ID, args.conversation, database(), DB_PATH.parent / 'files', exam_id=args.exam_id)
         if args.wait is not None:
             if not 1 <= args.wait <= 60:
                 raise ValueError('대기 시간은 1~60초입니다.')

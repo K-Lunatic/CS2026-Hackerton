@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'scripts'))
 from storage.local_db import LocalDatabase
+from sync_tls import _cached_resources
 from providers import credentials
 from providers.forms import collect_local, FormUnavailable, redact, requested_schema, TLS_CREDENTIALS_FORM
 from providers.moodle_session import MoodleSession, LoginError, DownloadRestricted, check_download_url, _DownloadRedirectHandler
@@ -319,6 +320,25 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(resource['downloadStatus'], 'DOWNLOADED')
         self.assertNotIn('/mod/resource/view.php?id=5', session.byte_requests)
 
+    def test_real_database_cache_keeps_tls_identifier(self):
+        data = snapshot()
+        root = Path(self.temp.name) / 'cached-files'
+        root.mkdir()
+        path = root / 'test.pdf'
+        path.write_bytes(b'%PDF-cached')
+        data['resources'][0].update(externalId='5', localPath=str(path), mimeType='application/pdf', downloadStatus='DOWNLOADED')
+        db = LocalDatabase(self.db_path)
+        upsert(db, 'fixture-user', data)
+        db.close()
+        cached = _cached_resources(self.db_path, 'fixture-user', root)
+        self.assertEqual(cached['5']['localPath'], str(path))
+        data['resources'].append(dict(data['resources'][0], id='another-resource', externalId='6'))
+        db = LocalDatabase(self.db_path)
+        upsert(db, 'fixture-user', data)
+        db.close()
+        self.assertEqual(_cached_resources(self.db_path, 'fixture-user', root), {})
+        self.assertEqual(path.read_bytes(), b'%PDF-cached')
+
     def test_moodle_requests_have_timeout(self):
         session = MoodleSession()
         session.logged_in = True
@@ -327,6 +347,19 @@ class ProjectTests(ProjectTestBase):
                 with self.assertRaises(TimeoutError):
                     fetch('/course/view.php?id=1')
                 self.assertEqual(request.call_args.kwargs['timeout'], 30)
+
+    def test_html_probe_does_not_transfer_redirected_pdf(self):
+        session = MoodleSession(); session.logged_in = True
+        response = Mock(headers={'Content-Type': 'application/pdf'}, geturl=lambda: 'https://tls.kku.ac.kr/file.pdf')
+        with patch.object(session.opener, 'open', return_value=response):
+            self.assertEqual(session.get('/mod/ubfile/view.php?id=9'), '')
+        response.read.assert_not_called()
+        response.close.assert_called_once()
+        response = Mock(headers={'Content-Type': 'text/html'}, geturl=lambda: 'https://tls.kku.ac.kr/view.php')
+        response.read.return_value = '다운로드 금지'.encode()
+        with patch.object(session.opener, 'open', return_value=response):
+            self.assertIn('다운로드 금지', session.get('/view.php'))
+        response.read.assert_called_once()
 
     def test_download_url_and_viewer_restrictions_before_file_read(self):
         check_download_url('https://fixture.invalid/test.pdf?forcedownload=0')
@@ -363,6 +396,26 @@ class ProjectTests(ProjectTestBase):
         html = '<span style="display:none">다운로드 금지</span><script>다운로드 금지</script><p>자료 설명</p><![if gte IE 9]><p>보이는 안내</p><![endif]>'
         self.assertEqual(_plain_text(html), '자료 설명 보이는 안내')
 
+    def test_metadata_refresh_never_downloads_and_still_checks_restrictions(self):
+        session = FakeTLSSession()
+        session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">수업자료.pdf</a></li>'
+        session.pages['/mod/ubfile/view.php?id=9'] = '<p>수업자료</p>'
+        progress = []
+        item = MoodleTLSProvider(session).get_resources('u', download_new_files=False, progress=progress.append)[0]
+        self.assertEqual(item['downloadStatus'], 'NOT_DOWNLOADED')
+        self.assertEqual(session.byte_requests, [])
+        self.assertTrue(progress)
+        cached_path = Path(self.temp.name) / 'cached.pdf'
+        cached_path.write_bytes(b'%PDF-cached')
+        cached = {'9': {**item, 'localPath': str(cached_path), 'mimeType': 'application/pdf'}}
+        reused = MoodleTLSProvider(session).get_resources('u', download_new_files=False, existing_resources=cached)[0]
+        self.assertEqual(reused['downloadStatus'], 'DOWNLOADED')
+        self.assertEqual(reused['localPath'], str(cached_path))
+        session.pages['/mod/ubfile/view.php?id=9'] = '<p>다운로드 금지</p>'
+        item = MoodleTLSProvider(session).get_resources('u', download_new_files=False, existing_resources=cached)[0]
+        self.assertEqual(item['downloadStatus'], 'PROHIBITED')
+        self.assertEqual(session.byte_requests, [])
+
     def test_malformed_viewer_markup_keeps_download_restriction(self):
         session = FakeTLSSession()
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
@@ -374,7 +427,7 @@ class ProjectTests(ProjectTestBase):
     def test_expired_session_does_not_return_login_page_as_empty_records(self):
         session = MoodleSession()
         session.logged_in = True
-        response = Mock(geturl=lambda: 'https://fixture.invalid/login/index.php')
+        response = Mock(headers={'Content-Type': 'text/html'}, geturl=lambda: 'https://fixture.invalid/login/index.php')
         with patch.object(session.opener, 'open', return_value=response), patch.object(session, '_decode', return_value='<input name="username">'):
             for fetch in (session.get, session.get_bytes):
                 with self.assertRaises(LoginError):

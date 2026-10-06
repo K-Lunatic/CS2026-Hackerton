@@ -2,6 +2,7 @@
 import secrets
 import re
 from features.study_materials import study_materials
+from features import material_cache, analysis_records
 
 CHUNK_CHARS = 8000
 
@@ -13,8 +14,20 @@ def start(session, state, selected, material=None):
     state.update(phase='extracting', pipeline={'files': selected, 'fileIndex': 0,
                  'units': [], 'candidates': [], 'failures': [], 'chunks': [], 'chunkIndex': 0})
     if material:
-        load_chunks(state, material)
+        state['pipeline']['analysisKey'] = analysis_key(state, material)
+        if not reuse_analysis(session, state, material):
+            load_chunks(state, material)
     return advance(session, state)
+
+
+def analysis_key(state, material):
+    configuration = {k: state['settings'][k] for k in ('choices', 'difficulty')}
+    configuration['types'] = sorted(set(state['settings']['types']))
+    locations = state['selection'].get('locations', {}).get(material['id'])
+    text_formats = {'txt', 'md', 'java', 'py', 'js', 'c', 'cpp', 'html', 'css', 'csv', 'json', 'xml', 'yaml', 'yml'}
+    return material_cache.key(['analysis-v3' if material.get('extension') in text_formats else 'analysis-v2', CHUNK_CHARS, state['selection']['courseId'],
+        material['id'], material['title'], material.get('extension'), material.get('contentKey'),
+        sorted(set(locations)) if locations is not None else None, configuration])
 
 
 def load_chunks(state, material):
@@ -22,8 +35,10 @@ def load_chunks(state, material):
     chunks, chunk, size = [], [], 0
     for section in material['sections']:
         text = section['text']
-        while text:
-            excerpt, text = text[:CHUNK_CHARS - size], text[CHUNK_CHARS - size:]
+        position = 0
+        while position < len(text):
+            excerpt = text[position:position + CHUNK_CHARS - size]
+            position += len(excerpt)
             chunk.append({'resourceId': material['id'], 'courseId': state['selection']['courseId'],
                           'name': material['title'], 'location': section['location'], 'text': excerpt})
             size += len(excerpt)
@@ -31,7 +46,39 @@ def load_chunks(state, material):
                 chunks.append(chunk); chunk, size = [], 0
     if chunk:
         chunks.append(chunk)
-    p.update(chunks=chunks, chunkIndex=0, fileName=material['title'])
+    p.update(chunks=chunks, chunkIndex=0, fileName=material['title'],
+             analysisKey=analysis_key(state, material),
+             unitStart=len(p['units']), candidateStart=len(p['candidates']))
+
+
+def reuse_analysis(session, state, material=None):
+    p = state['pipeline']
+    if state['selection'].get('rebuildAnalysis') is True:
+        return False
+    saved = material_cache.get(session.files_root.parent / 'cache', 'analysis', session.user, p['analysisKey'])
+    if not saved and material is not None:
+        configuration = {k: state['settings'][k] for k in ('choices', 'difficulty')}
+        configuration['types'] = sorted(set(state['settings']['types']))
+        legacy = material_cache.key(['analysis-v1', CHUNK_CHARS, state['selection']['courseId'],
+            {k: v for k, v in material.items() if k != 'contentKey'}, configuration])
+        saved = material_cache.get(session.files_root.parent / 'cache', 'analysis', session.user, legacy)
+        if saved and material.get('extension') not in ('txt', 'md', 'java', 'py', 'js', 'c', 'cpp', 'html', 'css', 'csv', 'json', 'xml', 'yaml', 'yml'):
+            material_cache.put(session.files_root.parent / 'cache', 'analysis', session.user, p['analysisKey'], saved)
+        else:
+            saved = None
+    if not saved:
+        return False
+    ids = {}
+    for unit in saved['units']:
+        uid = f"u{len(p['units']) + 1}"
+        ids[unit['id']] = uid
+        p['units'].append({**unit, 'id': uid})
+    for question in saved['candidates']:
+        p['candidates'].append({**question, 'id': f"c{len(p['candidates']) + 1}", 'unitId': ids[question['unitId']]})
+    p['fileIndex'] += 1
+    p['chunks'] = []
+    p['reusedFiles'] = p.get('reusedFiles', 0) + 1
+    return True
 
 
 def advance(session, state):
@@ -40,21 +87,32 @@ def advance(session, state):
     while p['fileIndex'] < len(p['files']):
         if not p['chunks']:
             rid = p['files'][p['fileIndex']]
-            result = study_materials(session.provider.get_courses(session.user), session.provider.get_resources(session.user),
+            courses, resources = session.provider.get_courses(session.user), session.provider.get_resources(session.user)
+            result = study_materials(courses, resources,
                 files_root=session.files_root, course_id=state['selection']['courseId'], resource_ids=[rid],
-                locations=state['selection'].get('locations', {}), include_ids=True, max_chars=10_000_000)
+                locations=state['selection'].get('locations', {}), include_ids=True, metadata_only=True)
             material = result['data']['materials'][0]
+            if not material.get('error'):
+                p['analysisKey'] = analysis_key(state, material)
+                if reuse_analysis(session, state):
+                    continue
+                material = study_materials(courses, resources, files_root=session.files_root,
+                    course_id=state['selection']['courseId'], resource_ids=[rid],
+                    locations=state['selection'].get('locations', {}), include_ids=True,
+                    max_chars=10_000_000)['data']['materials'][0]
             if material.get('error') or material.get('truncated') or not material['sections']:
                 p['failures'].append({'resourceId': rid, 'name': material['title'],
                                       'reason': material.get('error', '본문 전체를 읽지 못해 제외했습니다.')})
                 p['fileIndex'] += 1
+                continue
+            if reuse_analysis(session, state, material):
                 continue
             load_chunks(state, material)
         state['requestId'] = state.get('requestId') or secrets.token_hex(12)
         progress = {'processedFiles': p['fileIndex'], 'totalFiles': len(p['files']),
                     'fileName': p['fileName'], 'part': p['chunkIndex'] + 1, 'totalParts': len(p['chunks'])}
         schema = session.generation_request({'settings': state['settings'], 'selection': state['selection'],
-            'sources': p['chunks'][p['chunkIndex']], 'requestId': state['requestId']}, [], False)['hostOnly']['schema']
+            'sources': p['chunks'][p['chunkIndex']], 'requestId': state['requestId']}, [], False, schema_only=True)
         schema.update(context='수업 맥락 (2000자 이내)',
             learning=[{'concept': '주요 학습 내용', 'explanation': '설명',
                        'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}],
@@ -80,6 +138,7 @@ def catalog(state, event):
         raise ValueError('후보 목록은 offset >= 0, limit 1~20으로 조회하세요.')
     candidates = p['candidates']
     return {'status': 'assembling', 'needsAssembly': True, 'totalCandidates': len(candidates),
+            'reusedFiles': p.get('reusedFiles', 0),
             'processedFiles': p['fileIndex'], 'totalFiles': len(p['files']), 'failures': p['failures'],
             'answer': f"자료 {len(p['files'])}개를 확인했어요. 저장한 후보 {len(candidates)}개에서 범위와 유형을 맞춰 시험지를 엮을게요.",
             'nextOffset': offset + limit if offset + limit < len(candidates) else None,
@@ -126,6 +185,13 @@ def handle(session, state, event):
             p['candidates'].append({**q, 'id': f"c{len(p['candidates']) + 1}", 'unitId': unit_id})
         p['chunkIndex'] += 1
         if p['chunkIndex'] == len(p['chunks']):
+            units = p['units'][p['unitStart']:]
+            candidates = p['candidates'][p['candidateStart']:]
+            analysis_records.save(session.files_root.parent, session.user,
+                [s for u in units for s in u['sources']], state['settings'], 'exam_analysis',
+                {'units': units, 'candidates': candidates, 'candidateCount': len(candidates)}, operation_id=state['requestId'])
+            material_cache.put(session.files_root.parent / 'cache', 'analysis', session.user, p['analysisKey'],
+                {'units': p['units'][p['unitStart']:], 'candidates': p['candidates'][p['candidateStart']:]})
             p['fileIndex'] += 1
             p['chunks'] = []
         state.pop('requestId', None)

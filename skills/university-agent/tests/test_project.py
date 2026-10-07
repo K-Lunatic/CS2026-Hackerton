@@ -89,6 +89,16 @@ class ProjectTestBase(unittest.TestCase):
         return json.loads(result.stdout)
 
 class ProjectTests(ProjectTestBase):
+    def test_sync_state_round_trip(self):
+        db = LocalDatabase(self.db_path)
+        self.addCleanup(db.close)
+        upsert(db, 'fixture-user', snapshot())
+        db.save_sync_state('fixture-user', {'course_ids': '["course-1"]', 'course_fingerprints': '{"course-1":"x"}'})
+        self.assertEqual(db.get_sync_state('fixture-user')['course_fingerprints'], '{"course-1":"x"}')
+        readonly = LocalDatabase(self.db_path, read_only=True)
+        self.addCleanup(readonly.close)
+        self.assertEqual(readonly.get_sync_state('fixture-user')['course_ids'], '["course-1"]')
+
     def test_legacy_migration_releases_write_lock(self):
         schema = (ROOT / 'database/schema.sql').read_text(encoding='utf-8')
         legacy_schema = '\n'.join(line for line in schema.splitlines()
@@ -283,7 +293,15 @@ class ProjectTests(ProjectTestBase):
         self.assertIn('다운로드 제한', prohibited[0]['downloadReason'])
         self.assertIn('과목 공지', prohibited[1]['downloadReason'])
         self.assertIn('서버가 파일 다운로드를 거부', prohibited[2]['downloadReason'])
-        self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8', '/mod/ubfile/view.php?id=9'])
+        self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8'])
+
+    def test_allowed_ubfile_viewer_redirects_to_observed_download(self):
+        session = FakeTLSSession()
+        session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=11">허용 자료.pdf</a></li>'
+        session.pages['/mod/ubfile/view.php?id=11'] = '<a href="/local/ubdoc/?id=12345&amp;tp=m&amp;pg=ubfile">Down</a>'
+        item = MoodleTLSProvider(session).get_resources('u')[0]
+        self.assertEqual(item['_content'], b'%PDF-test-fixture')
+        self.assertEqual(session.byte_requests, ['https://tls.kku.ac.kr/local/ubdoc/download.php?id=12345&tp=m&pg=ubfile'])
 
     def test_moodle_provider_reuses_course_pages_during_one_sync(self):
         session = FakeTLSSession()
@@ -382,8 +400,8 @@ class ProjectTests(ProjectTestBase):
         session.pages['/mod/ubfile/view.php?id=9'] = '<a href="/mod/ubfile/viewer.php?id=9">열기</a>'
         item = MoodleTLSProvider(session).get_resources('u')[0]
         self.assertEqual(item['downloadStatus'], 'NOT_DOWNLOADED')
-        self.assertIn('뷰어 페이지', item['downloadReason'])
-        self.assertEqual(session.byte_requests, ['/mod/ubfile/view.php?id=9'])
+        self.assertIn('원본 다운로드 주소를 확인하지 못했어요', item['downloadReason'])
+        self.assertEqual(session.byte_requests, [])
         session = FakeTLSSession()
         session.pages['/course/view.php?id=1'] = '<li class="activity"><a href="/mod/ubfile/view.php?id=9">뷰어 자료</a></li>'
         session.pages['/mod/ubfile/view.php?id=9'] = '<p>다운로드 금지</p>'

@@ -1,6 +1,8 @@
 """Moodle HTML adapter for the KKU TLS pages observed by MoodleSession."""
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from html import unescape
 from html.parser import HTMLParser
@@ -213,6 +215,63 @@ class MoodleTLSProvider:
             self._activity_links[external_id] = self._links(self._course_page(course), only_activities=True)
         return self._activity_links[external_id]
 
+    def _resource_download_path(self, href, title, notices):
+        """Resolve only a visible ubdoc viewer to its matching download URL."""
+        if "/mod/ubfile/view.php" not in urlsplit(href).path:
+            return href, None
+        if hasattr(self.session, 'get_page'):
+            html, page_url = self.session.get_page(href, allowed_origin='tls.kku.ac.kr')
+        else:
+            html, page_url = self.session.get(href), href
+        restriction = _download_restriction(_plain_text(html), title, notices)
+        if restriction:
+            raise DownloadRestricted(restriction)
+        parser = _ViewerLinks()
+        parser.feed(html)
+        origin = getattr(self.session, 'base_url', 'https://tls.kku.ac.kr').rstrip('/') + '/'
+        observed = set()
+        for link in (page_url, *parser.links):
+            try:
+                observed.add(permitted_download_url(urljoin(origin, link)))
+            except (ValueError, DownloadRestricted):
+                continue
+        if len(observed) == 1:
+            return next(iter(observed)), None
+        if not observed:
+            return None, 'TLS 자료 화면에서 원본 다운로드 주소를 확인하지 못했어요.'
+        return None, 'TLS 자료의 원본 주소가 여러 개라 자동으로 선택하지 않았어요.'
+
+    @staticmethod
+    def _activity_fingerprint(html: str) -> str:
+        parser = _ActivityParser()
+        parser.feed(html)
+        activities = [{key: item.get(key, "") for key in ("href", "title", "text")}
+                      for item in parser.items]
+        payload = json.dumps(activities, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def preflight(self, user_id: str, course_ids: set[str] | None = None) -> dict[str, Any]:
+        """Fetch only course activity lists to detect additions before a full sync."""
+        courses = self.get_courses(user_id)
+        selected = [course for course in courses if not course_ids or course["id"] in course_ids]
+        if len(selected) < 2 or not hasattr(self.session, "fork"):
+            fingerprints = {course["id"]: self._activity_fingerprint(self._course_page(course))
+                            for course in selected}
+        else:
+            def collect(course):
+                child = MoodleTLSProvider(self.session.fork(), self.progress)
+                child._courses = [course]
+                return course["id"], child._activity_fingerprint(child._course_page(course))
+
+            with ThreadPoolExecutor(max_workers=min(4, len(selected))) as pool:
+                fingerprints = dict(pool.map(collect, selected))
+        return {"courseIds": [course["id"] for course in courses], "fingerprints": fingerprints}
+
+    def activity_fingerprints(self, user_id: str) -> dict[str, str]:
+        """Return fingerprints for course pages already fetched during a full sync."""
+        courses = self.get_courses(user_id)
+        return {course["id"]: self._activity_fingerprint(self._course_page(course)) for course in courses}
+
     def get_assignments(self, user_id: str) -> list[dict[str, Any]]:
         parallel = self._parallel_courses('get_assignments', user_id)
         if parallel is not None:
@@ -317,12 +376,13 @@ class MoodleTLSProvider:
                 if progress:
                     progress(f"{course['name']} · 자료 {len(result) + 1} 확인 중이에요…")
                 restriction = _download_restriction(activity["text"], title, notices_by_course.get(course["id"], []))
+                download_path = href
+                download_issue = None
                 if not restriction:
                     try:
                         check_download_url(href)
-                        if "/mod/ubfile/view.php" in urlsplit(href).path:
-                            page_text = _plain_text(self.session.get(href))
-                            restriction = _download_restriction(page_text, title, notices_by_course.get(course["id"], []))
+                        download_path, download_issue = self._resource_download_path(
+                            href, title, notices_by_course.get(course["id"], []))
                     except DownloadRestricted as error:
                         restriction = str(error)
                     except HTTPError as error:
@@ -359,8 +419,16 @@ class MoodleTLSProvider:
                                    "downloadStatus": "NOT_DOWNLOADED",
                                    "downloadReason": "이번에는 목록만 확인했어요. 파일이 필요하면 전체 새로고침을 요청해 주세요."})
                     continue
+                if not download_path:
+                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
+                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
+                                   "fileName": title or f"resource-{resource_id}", "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
+                                   "mimeType": "text/html", "remotePath": href, "source": "tls",
+                                   "downloadStatus": "NOT_DOWNLOADED",
+                                   "downloadReason": download_issue or 'TLS 자료의 원본 다운로드 주소를 확인하지 못했어요.'})
+                    continue
                 try:
-                    content, response = self.session.revalidate(href, cached) if reusable else self.session.get_bytes(href)
+                    content, response = self.session.revalidate(download_path, cached) if reusable else self.session.get_bytes(download_path)
                 except (HTTPError, DownloadRestricted) as error:
                     if isinstance(error, HTTPError):
                         if error.code != 403:

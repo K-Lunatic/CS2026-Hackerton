@@ -123,6 +123,60 @@ def persist(db_path, user_id, username, courses, *, assignments=None, lectures=N
             notices=notices, resources=resources)
 
 
+def _saved_sync_state(db_path: Path, user_id: str) -> dict[str, str]:
+    if not db_path.exists():
+        return {}
+    try:
+        with closing(LocalDatabase(db_path, read_only=True)) as database:
+            return database.get_sync_state(user_id)
+    except (OSError, RuntimeError):
+        return {}
+
+
+def _resource_needs_data(db_path: Path, user_id: str, resource_ids: list[str]) -> bool:
+    if not resource_ids:
+        return False
+    if not db_path.exists():
+        return True
+    try:
+        with closing(LocalDatabase(db_path, read_only=True)) as database:
+            resources = {item['id']: item for item in database.get_resources(user_id, include_permissions=True)}
+    except (OSError, RuntimeError):
+        return True
+    for resource_id in resource_ids:
+        item = resources.get(resource_id)
+        if item is None:
+            return True
+        if item.get('downloadStatus') == 'PROHIBITED':
+            continue
+        if item.get('downloadStatus') != 'DOWNLOADED' or not item.get('localPath') or not Path(item['localPath']).is_file():
+            return True
+    return False
+
+
+def _preflight_changed(state: dict[str, str], result: dict, *, needs_data: bool) -> bool:
+    if needs_data:
+        return True
+    try:
+        saved_courses = json.loads(state.get('course_ids', '[]'))
+        saved_fingerprints = json.loads(state.get('course_fingerprints', '{}'))
+    except (TypeError, ValueError):
+        return True
+    if sorted(saved_courses) != sorted(result.get('courseIds', [])):
+        return True
+    return any(saved_fingerprints.get(course_id) != fingerprint
+               for course_id, fingerprint in result.get('fingerprints', {}).items())
+
+
+def _save_sync_state(db_path: Path, user_id: str, provider: MoodleTLSProvider) -> None:
+    state = {
+        'course_ids': json.dumps(sorted(course['id'] for course in provider.get_courses(user_id)), ensure_ascii=False),
+        'course_fingerprints': json.dumps(provider.activity_fingerprints(user_id), ensure_ascii=False, sort_keys=True),
+    }
+    with closing(LocalDatabase(db_path)) as database:
+        database.save_sync_state(user_id, state)
+
+
 def _progress(step: int, total: int, message: str) -> None:
     print(f"[{step}/{total}] {message}", flush=True)
 
@@ -148,7 +202,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sync KKU TLS data into the local SQLite database")
     parser.add_argument('--connect', action='store_true', help='Open a private native terminal for account connection')
     parser.add_argument('--metadata-only', action='store_true', help='Refresh records without downloading new file contents')
+    parser.add_argument('--ensure', action='store_true', help='Check course activity changes first and sync only when needed')
+    parser.add_argument('--full', action='store_true', help='Skip the preflight and force a complete sync')
+    parser.add_argument('--resource-id', action='append', default=[], help='With --ensure, force data refresh when this resource is not local')
     args = parser.parse_args()
+    if args.ensure and args.full:
+        parser.error('--ensure와 --full은 함께 사용할 수 없습니다.')
+    smart_sync = args.ensure or not args.full
+    if args.metadata_only and not args.ensure:
+        smart_sync = False
     if args.connect:
         try:
             open_connection_terminal()
@@ -172,6 +234,18 @@ def main() -> None:
         print("연결됐어요. 이제 필요한 내용만 차근차근 가져올게요.", flush=True)
         provider = MoodleTLSProvider(session)
         provider.progress = lambda message: print(message, flush=True)
+        if smart_sync:
+            saved_state = _saved_sync_state(db_path, user_id)
+            if saved_state:
+                print("새 자료가 있는지 빠르게 확인하고 있어요…", flush=True)
+                preflight = provider.preflight(user_id)
+                if not _preflight_changed(saved_state, preflight,
+                                          needs_data=_resource_needs_data(db_path, user_id, args.resource_id)):
+                    print("새로 가져올 내용이 없어요. 저장된 학교 정보를 그대로 사용할게요.", flush=True)
+                    return
+                print("새 자료나 변경된 내용이 있어 필요한 정보를 가져올게요.", flush=True)
+            else:
+                print("처음 연결이라 학교 정보를 한 번에 준비할게요.", flush=True)
         _progress(1, 5, "수강 과목을 확인하는 중이에요…")
         stage_started = monotonic()
         courses = provider.get_courses(user_id)
@@ -219,6 +293,7 @@ def main() -> None:
             continue
         store_resource(file_root, item)
     persist(db_path, user_id, username, courses, assignments=assignments, lectures=lectures, notices=notices, resources=resources)
+    _save_sync_state(db_path, user_id, provider)
     elapsed = round(monotonic() - started, 1)
     print(f"터틀넥 준비 완료 · 과목 {len(courses)}개 · 과제 {len(assignments)}개 · 강의 {len(lectures)}개 · 공지 {len(notices)}개 · 자료 {len(resources)}개 · 제한으로 건너뜀 {prohibited}개 · {elapsed}초", flush=True)
     print("이제 ‘이번 주에 뭐부터 해야 해?’라고 물어보면 우선순위를 정리해 드릴게요.", flush=True)

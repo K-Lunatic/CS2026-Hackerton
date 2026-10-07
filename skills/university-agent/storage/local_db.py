@@ -74,6 +74,26 @@ class LocalDatabase:
         row = self.connection.execute("SELECT id, name, department, updated_at AS lastSyncedAt FROM users WHERE id=?", (user_id,)).fetchone()
         return dict(row, department=row["department"] or None) if row else None
 
+    def get_sync_state(self, user_id: str) -> dict[str, str]:
+        try:
+            rows = self.connection.execute(
+                "SELECT state_key, state_value FROM sync_state WHERE user_id=?", (user_id,))
+        except sqlite3.OperationalError as error:
+            if "no such table" not in str(error).lower():
+                raise
+            return {}
+        return {row["state_key"]: row["state_value"] for row in rows}
+
+    def save_sync_state(self, user_id: str, state: dict[str, str]) -> None:
+        if self.read_only:
+            raise sqlite3.OperationalError("readonly database")
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connection:
+            self.connection.execute("DELETE FROM sync_state WHERE user_id=?", (user_id,))
+            self.connection.executemany(
+                "INSERT INTO sync_state(user_id, state_key, state_value, updated_at) VALUES (?, ?, ?, ?)",
+                [(user_id, key, value, now) for key, value in state.items()])
+
     def upsert_tls_snapshot(self, user_id: str, courses: list[dict[str, Any]], assignments: list[dict[str, Any]], lectures: list[dict[str, Any]], user_name: str, department: str | None, now: str | None = None, notices: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None) -> None:
         now = now or datetime.now(timezone.utc).isoformat()
         db = self.connection

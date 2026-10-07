@@ -30,6 +30,19 @@ from test_project import FakeTLSSession
 
 
 class SyncSafetyTests(unittest.TestCase):
+    def test_preflight_fingerprint_reuses_unchanged_activity_lists(self):
+        session = FakeTLSSession()
+        provider = MoodleTLSProvider(session)
+        first = provider.preflight('u')
+        state = {
+            'course_ids': json.dumps(first['courseIds']),
+            'course_fingerprints': json.dumps(first['fingerprints']),
+        }
+        self.assertFalse(sync_tls._preflight_changed(state, first, needs_data=False))
+        changed = dict(first, fingerprints={**first['fingerprints'], 'tls-course-1': 'changed'})
+        self.assertTrue(sync_tls._preflight_changed(state, changed, needs_data=False))
+        self.assertTrue(sync_tls._preflight_changed(state, first, needs_data=True))
+
     def permitted_fixture(self):
         session = FakeTLSSession()
         session.base_url = 'https://tls.kku.ac.kr'

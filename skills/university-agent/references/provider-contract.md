@@ -2,12 +2,18 @@
 
 The runner reads the device-local database only; it does not invent sample TLS data. The TLS owner supplies data; feature owners only consume this contract. With no server or cross-device sync layer, `sync_tls.py` logs into KKU TLS and imports normalized data into the current device's local SQLite DB. The database shape is documented in [data-model.md](data-model.md) and implemented in `database/schema.sql`.
 
-`providers/moodle_session.py` handles the Moodle login form, hidden fields such as `logintoken`, redirects, and the in-memory `MoodleSession` cookie. `providers/credentials.py` keeps the username locally and protects the password with macOS Keychain or Windows DPAPI. It is intentionally separate from record parsers. Run `scripts/sync_tls.py` for the first and later syncs.
+`providers/moodle_session.py` handles the Moodle login form, hidden fields such as `logintoken`, redirects, and the in-memory `MoodleSession` cookie. `providers/credentials.py` keeps the username locally and protects the password with macOS Keychain or Windows DPAPI. It is intentionally separate from record parsers. Run `scripts/sync_tls.py --ensure` for the first and later syncs; use `--full` only when a complete refresh is explicitly needed.
+On macOS, if the selected Python runtime has no configured CA bundle, the session loads the system certificate file while keeping normal HTTPS certificate verification enabled.
 
-For a faster status/list refresh, run `scripts/sync_tls.py --metadata-only`.
-This still checks visible download prohibitions and retains valid cached files,
-but leaves new files as `NOT_DOWNLOADED` with an explicit reason. It does not
-prepare new file contents for study. Run normal sync when those files are needed.
+For the first use of a local database, `scripts/sync_tls.py --ensure` performs the
+full import. Later `--ensure` runs a lightweight preflight over visible course
+activity lists and compares per-course fingerprints saved in `sync_state`. When
+nothing changed it exits without fetching assignment details, notice bodies,
+lecture viewers or file bytes. A changed activity list, a new course, or a
+requested `--resource-id` that is not already local falls through to the normal
+sync. `--metadata-only` remains available for an explicit record refresh; it
+leaves new files as `NOT_DOWNLOADED` with an explicit reason and does not prepare
+new file contents for study.
 Each stage reports elapsed time and resource checks report progress.
 Independent per-course reads use up to four worker sessions, each with its own cookie jar/opener.
 The local sync commits completed assignment/lecture/notice stages before fetching more data.
@@ -64,6 +70,12 @@ Only for this explicit operation does it map the viewer to `local/ubdoc/download
 It never substitutes a Moodle activity ID for a document ID, scans scripts/hidden URLs,
 enumerates documents, or follows an off-school redirect. HTML responses are rejected and
 known document signatures checked before versioned atomic saving; originals are never executed.
+For ordinary synchronization, a ubfile activity is first checked for an explicit visible
+download prohibition. If none is present, the adapter follows only the visible viewer URL
+or redirect observed on that activity page and maps the exact
+`local/ubdoc/?id=...&tp=m&pg=ubfile` shape to `local/ubdoc/download.php`. If that single
+source cannot be established, it does not guess or request the viewer HTML as a file.
+The separate permission path above remains required for materials explicitly marked as prohibited.
 Login failure, HTTP 403, explicit URL restriction or HTML
 instead of a file stops the operation; permission does not override server authentication.
 An already-recorded server rejection also remains blocked.

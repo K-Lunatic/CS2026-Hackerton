@@ -122,6 +122,23 @@ class StudyMaterialsTests(ProjectTestBase):
         self.assertNotIn("resource-1", str(result))
         self.assertNotIn(str(self.pptx), str(result))
 
+    def test_study_materials_accepts_more_than_three_files(self):
+        db = LocalDatabase(self.db_path)
+        data = snapshot()
+        data["courses"][0]["name"] = "자료구조"
+        data["resources"] = []
+        for index in range(4):
+            path = self.files / "course-1" / f"week-{index}.txt"
+            path.write_text(f"자료 {index}의 핵심 내용", encoding="utf-8")
+            data["resources"].append(dict(snapshot()["resources"][0], id=f"resource-{index}",
+                                           title=f"자료 {index}", fileName=path.name, extension="txt",
+                                           localPath=str(path), downloadStatus="DOWNLOADED"))
+        upsert(db, "fixture-user", data)
+        db.close()
+        result = self.cli("study-materials", "--course", "자료구조")
+        self.assertFalse(result.get("needsInput"))
+        self.assertEqual(len(result["data"]["materials"]), 4)
+
     def test_text_docx_and_hwpx_sections(self):
         root = self.files / "formats"
         root.mkdir()

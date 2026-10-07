@@ -12,6 +12,16 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TEXT NOT NULL
 );
 
+-- Fast TLS preflight fingerprints. They describe the visible course activity list,
+-- not the source records themselves; a mismatch triggers a normal refresh.
+CREATE TABLE IF NOT EXISTS sync_state (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  state_key TEXT NOT NULL,
+  state_value TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, state_key)
+);
+
 CREATE TABLE IF NOT EXISTS courses (
   id TEXT PRIMARY KEY,
   external_id TEXT NOT NULL UNIQUE,
@@ -193,6 +203,7 @@ CREATE TABLE IF NOT EXISTS handover_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_assignments_course_due ON assignments(course_id, due_at);
+CREATE INDEX IF NOT EXISTS idx_sync_state_user ON sync_state(user_id, state_key);
 CREATE INDEX IF NOT EXISTS idx_submissions_user_status ON assignment_submissions(user_id, submission_status);
 CREATE INDEX IF NOT EXISTS idx_manual_assignments_user_due ON manual_assignments(user_id, due_at);
 CREATE INDEX IF NOT EXISTS idx_progress_user_completed ON lecture_progress(user_id, completed);

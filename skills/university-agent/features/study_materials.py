@@ -302,9 +302,6 @@ def study_materials(
         if not resource_ids or not set(resource_ids) <= available:
             raise ValueError('선택 과목에서 접근 가능한 자료 ID만 사용하세요.')
         selected = [item for item in selected if item['id'] in resource_ids]
-    if len(selected) > 3:
-        return {'needsInput': True, 'answer': '자료가 많습니다. 사용할 자료를 3개 이하로 골라주세요.',
-                'data': {'materials': [{'id': x['id'], 'title': x['title']} for x in selected[:10]], 'totalMaterials': len(selected)}}
     if not selected:
         return {"needsInput": bool(not resource_query), "answer": "이 과목에서 조건에 맞는 다운로드 자료를 찾지 못했습니다.", "data": {"courseName": course["name"], "materials": []}}
 

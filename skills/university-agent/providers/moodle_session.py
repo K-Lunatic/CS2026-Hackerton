@@ -4,11 +4,13 @@ from __future__ import annotations
 import gzip
 import re
 import ssl
+import sys
 import zlib
 from copy import copy
 from urllib.error import HTTPError
 from http.cookiejar import CookieJar
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler, HTTPCookieProcessor, HTTPSHandler
@@ -20,6 +22,19 @@ class LoginError(RuntimeError):
 
 class DownloadRestricted(RuntimeError):
     pass
+
+
+def _default_ssl_context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    paths = ssl.get_default_verify_paths()
+    has_trust_store = ((paths.cafile and Path(paths.cafile).is_file()) or
+                       (paths.capath and Path(paths.capath).is_dir()))
+    if not has_trust_store and sys.platform == "darwin":
+        for candidate in ("/private/etc/ssl/cert.pem", "/etc/ssl/cert.pem"):
+            if Path(candidate).is_file():
+                context.load_verify_locations(cafile=candidate)
+                break
+    return context
 
 
 def check_download_url(url: str) -> None:
@@ -77,7 +92,7 @@ class MoodleSession:
     def __init__(self, base_url: str = "https://tls.kku.ac.kr"):
         self.base_url = base_url.rstrip("/")
         self.cookies = CookieJar()
-        self.opener = build_opener(HTTPCookieProcessor(self.cookies), _DownloadRedirectHandler(), HTTPSHandler(context=ssl.create_default_context()))
+        self.opener = build_opener(HTTPCookieProcessor(self.cookies), _DownloadRedirectHandler(), HTTPSHandler(context=_default_ssl_context()))
         self.logged_in = False
 
     def fork(self):

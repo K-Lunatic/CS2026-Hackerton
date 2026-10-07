@@ -5,8 +5,10 @@ from pathlib import Path
 import secrets
 
 
-def create_exam_server(session, port=0):
-    session.call({'action': 'web_status'})  # Fail before opening a browser for an absent exam.
+def create_exam_server(session, port=0, view='exam'):
+    if view not in ('exam', 'match', 'sets'):
+        raise ValueError('지원하지 않는 학습 화면입니다.')
+    session.call({'action': {'exam': 'web_status', 'match': 'match_status', 'sets': 'sets_status'}[view]})
     token = secrets.token_urlsafe(32)
     assets = Path(__file__).resolve().parents[1] / 'assets'
 
@@ -39,8 +41,14 @@ def create_exam_server(session, port=0):
         def do_GET(self):
             if not self.authorized():
                 return
-            files = {'/': ('exam.html', 'text/html; charset=utf-8'), '/exam.js': ('exam.js', 'text/javascript; charset=utf-8'),
-                     '/exam.css': ('exam.css', 'text/css; charset=utf-8'), '/icon.png': ('turtleneck.png', 'image/png')}
+            html = {'exam': 'exam.html', 'match': 'match.html', 'sets': 'sets.html'}[view]
+            files = {'/': (html, 'text/html; charset=utf-8'), '/exam.css': ('exam.css', 'text/css; charset=utf-8'),
+                     '/exam.js': ('exam.js', 'text/javascript; charset=utf-8'),
+                     '/match.js': ('match.js', 'text/javascript; charset=utf-8'),
+                     '/sets.js': ('sets.js', 'text/javascript; charset=utf-8'),
+                     '/icon.png': ('turtleneck.png', 'image/png')}
+            if view == 'match': files['/match'] = ('match.html', 'text/html; charset=utf-8')
+            if view == 'sets': files['/exam'] = ('exam.html', 'text/html; charset=utf-8')
             if self.path in files:
                 name, content_type = files[self.path]
                 self.send(200, (assets / name).read_bytes(), content_type)
@@ -49,13 +57,28 @@ def create_exam_server(session, port=0):
                     self.send(200, session.call({'action': 'web_status'}))
                 except ValueError as exc:
                     self.send(409, {'error': str(exc)})
+            elif self.path == '/api/match' and view == 'match':
+                try:
+                    self.send(200, session.call({'action': 'match_status'}))
+                except ValueError as exc:
+                    self.send(409, {'error': str(exc)})
+            elif self.path == '/api/sets' and view == 'sets':
+                try:
+                    self.send(200, session.call({'action': 'sets_status'}))
+                except ValueError as exc:
+                    self.send(409, {'error': str(exc)})
             else:
                 self.send(404, {'error': '화면을 찾을 수 없어요.'})
 
         def do_POST(self):
             if not self.authorized():
                 return
-            if self.path not in ('/api/draft', '/api/submit'):
+            allowed_paths = {
+                'exam': ('/api/draft', '/api/submit', '/api/confusion', '/api/focus'),
+                'match': ('/api/match',),
+                'sets': ('/api/sets/select',),
+            }[view]
+            if self.path not in allowed_paths:
                 self.send(404, {'error': '지원하지 않는 요청입니다.'})
                 return
             try:
@@ -63,10 +86,29 @@ def create_exam_server(session, port=0):
                 if not 0 < size <= 2_000_000 or self.headers.get('Content-Type') != 'application/json':
                     raise ValueError('답안 형식이나 크기를 확인해주세요.')
                 data = json.loads(self.rfile.read(size))
-                if not isinstance(data, dict) or set(data) != {'examId', 'answers', 'revision'}:
-                    raise ValueError('답안 입력 형식을 확인해주세요.')
+                if view == 'exam':
+                    if self.path == '/api/confusion':
+                        if not isinstance(data, dict) or set(data) != {'examId', 'questionId', 'confused'}:
+                            raise ValueError('헷갈린 문항 표시 형식을 확인해주세요.')
+                        action = 'confusion_toggle'
+                    elif self.path == '/api/focus':
+                        if not isinstance(data, dict) or set(data) != {'examId', 'questionId'}:
+                            raise ValueError('문항 시간 기록 형식을 확인해주세요.')
+                        action = 'question_focus'
+                    else:
+                        if not isinstance(data, dict) or set(data) != {'examId', 'answers', 'revision'}:
+                            raise ValueError('답안 입력 형식을 확인해주세요.')
+                        action = 'draft' if self.path == '/api/draft' else 'web_submit'
+                elif view == 'match':
+                    if not isinstance(data, dict) or set(data) != {'matchId', 'leftId', 'rightId'}:
+                        raise ValueError('매칭 입력 형식을 확인해주세요.')
+                    action = 'match_pick'
+                else:
+                    if not isinstance(data, dict) or set(data) != {'collectionId', 'setId'}:
+                        raise ValueError('문제 세트 선택 내용을 확인해주세요.')
+                    action = 'set_select'
                 # HTTP clients cannot call generate/grade or choose a DB/user/session.
-                result = session.call({**data, 'action': 'draft' if self.path == '/api/draft' else 'web_submit'})
+                result = session.call({**data, 'action': action})
                 self.send(200, result)
             except (ValueError, UnicodeError) as exc:
                 self.send(409, {'error': str(exc)})

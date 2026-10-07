@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "university-agent",
-  "version": "0.3.6",
-  "description": "터틀넥: 대학생활 관리와 읽은 수업자료 기반 대화형 학습보조",
+  "version": "0.4.1",
+  "description": "터틀넥: TLS·에타 통합 설치, 과제·시간표·강의평과 수업자료 기반 학습보조",
   "author": {
     "name": "K-Lunatic"
   },
@@ -11,13 +11,15 @@
     "com.openai": {
       "interface": {
         "displayName": "터틀넥",
-        "shortDescription": "수업자료 기반 시험지와 AI 채점",
-        "longDescription": "안녕하세요! 터틀넥입니다 🎓 과제 관리, 문제 풀이, 진행 상황 저장, 수업자료 요약과 연습문제 생성을 도와드려요.",
+        "shortDescription": "학교·에타 연결부터 시간표와 학습까지",
+        "longDescription": "안녕하세요! 터틀넥입니다 🎓 한 번 설치하면 학교 자료와 에타 시간표·강의평을 함께 준비해요. 과제 관리, 진행 상황 저장, 수업자료 기반 연습문제도 도와드려요.",
         "developerName": "K-Lunatic",
         "category": "Productivity",
         "capabilities": [
           "Read local academic data",
           "Manage local assignments",
+          "Read Everytime timetables and course reviews",
+          "Apply explicitly approved Everytime changes",
           "Create study materials from local course files"
         ],
         "composerIcon": "./assets/turtleneck.png",

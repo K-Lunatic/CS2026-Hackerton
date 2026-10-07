@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>터틀넥 개념 매칭</title><link rel="icon" href="/icon.png"><link rel="stylesheet" href="/exam.css"><script src="/match.js" defer></script></head>
+<body>
+<header class="topbar"><a class="brand" href="#"><img src="/icon.png" alt="" width="36" height="36">터틀넥 개념 매칭</a><span id="phase" class="phase">매칭판 준비 중</span></header>
+<main class="match-shell">
+  <section class="match-card" aria-labelledby="title">
+    <div class="match-head"><div><h1 id="title">개념 매칭</h1><p id="total" class="subtitle"></p></div><p id="progress" class="match-progress"></p></div>
+    <p id="notice" class="notice" role="status" aria-live="polite">왼쪽 개념과 오른쪽 설명을 하나씩 연결해 보세요.</p>
+    <div class="match-board">
+      <section class="match-column" aria-labelledby="left-title"><h2 id="left-title">개념</h2><div id="left-tiles" class="match-tiles"></div></section>
+      <section class="match-column" aria-labelledby="right-title"><h2 id="right-title">설명</h2><div id="right-tiles" class="match-tiles"></div></section>
+    </div>
+    <section id="result" class="match-result" hidden><h2>이번 매칭 결과</h2><p id="score"></p><ul id="review-list"></ul></section>
+    <p id="error" class="match-error" role="alert" hidden></p>
+  </section>
+</main>
+</body>
+</html>

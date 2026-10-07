@@ -42,10 +42,12 @@ class ExamWebTests(ProjectTestBase):
             'types': [{'type': t, 'reason': '탐색 조건을 확인한다'} for t in dict.fromkeys(q['type'] for q in questions)],
             'questions': questions, 'shortageReason': '이 부분의 근거 있는 후보만 저장'}})
 
-    def make_exam(self):
+    def make_exam(self, time_limit=None):
         session = self.session('exam')
-        prepared = session.call({'action': 'request', 'selection': {'courseId': 'course-1'},
-                                 'settings': {'count': 6, 'choices': 3, 'delivery': 'web'}})
+        exam_settings = {'count': 6, 'choices': 3, 'delivery': 'web'}
+        if time_limit is not None:
+            exam_settings['timeLimitMinutes'] = time_limit
+        prepared = session.call({'action': 'request', 'selection': {'courseId': 'course-1'}, 'settings': exam_settings})
         types = ['mcq', 'short', 'essay', 'code_fix', 'code_output', 'trace_table']
         questions = []
         for index, kind in enumerate(types, 1):
@@ -119,6 +121,60 @@ class ExamWebTests(ProjectTestBase):
         result = s.call({'action': 'grade_batch', 'gradeId': pending['gradeId'], 'grades': grades})
         self.assertEqual(result['summary']['score'], 0)
 
+    def test_ordering_question_preserves_blocks_and_accepts_numbered_order(self):
+        s = self.session('ordering')
+        prepared = s.call({'action': 'request', 'selection': {'courseId': 'course-1'},
+                           'settings': {'count': 1, 'types': ['ordering'], 'delivery': 'web'}})
+        q = self.question('short')
+        q.update(type='ordering', typeLabel='순서 배열형', responseFormat='ordering',
+                 blocks=['범위 확인', '중간값 계산', '왼쪽 또는 오른쪽 선택'],
+                 answer=json.dumps([0, 1, 2], ensure_ascii=False), rubric=['올바른 절차'])
+        self.extract_questions(s, prepared, [q]); s.call({'action': 'assemble', 'candidateIds': ['c1']})
+        public = s.call({'action': 'web_status'})
+        self.assertEqual(public['questions'][0]['responseFormat'], 'ordering')
+        self.assertEqual(public['questions'][0]['blocks'], q['blocks'])
+        draft = s.call({'action': 'draft', 'examId': public['examId'], 'revision': 0,
+                        'answers': {'q1': '[2,1,0]'}})
+        self.assertEqual(draft['drafts']['q1'], '[2,1,0]')
+
+    def test_confusion_mark_is_saved_separately_from_grading_feedback(self):
+        s = self.make_exam(); public = s.call({'action': 'web_status'})
+        marked = s.call({'action': 'confusion_toggle', 'examId': public['examId'], 'questionId': 'q2', 'confused': True})
+        self.assertEqual(marked['confusedIds'], ['q2'])
+        self.assertEqual(s.call({'action': 'web_status'})['confusedIds'], ['q2'])
+        cleared = s.call({'action': 'confusion_toggle', 'examId': public['examId'], 'questionId': 'q2', 'confused': False})
+        self.assertEqual(cleared['confusedIds'], [])
+
+    def test_web_clock_records_elapsed_time_and_optional_limit(self):
+        s = self.make_exam(time_limit=50)
+        public = s.call({'action': 'web_status'})
+        self.assertEqual(public['timeLimitSeconds'], 3000)
+        self.assertIsInstance(public['elapsedSeconds'], int)
+        self.assertGreaterEqual(public['remainingSeconds'], 0)
+        answers = {q['id']: '' for q in public['questions']}
+        submitted = s.call({'action': 'web_submit', 'examId': public['examId'], 'revision': 0, 'answers': answers})
+        self.assertEqual(submitted['status'], 'grading')
+        self.assertIsInstance(submitted['elapsedSeconds'], int)
+        self.assertEqual(submitted['timeLimitSeconds'], 3000)
+        self.assertEqual(submitted['remainingSeconds'] + submitted['overtimeSeconds'],
+                         max(submitted['elapsedSeconds'], 3000))
+        self.assertEqual(s.call({'action': 'web_status'})['elapsedSeconds'], submitted['elapsedSeconds'])
+
+    def test_question_timestamps_accumulate_and_skip_unvisited_questions(self):
+        from features.study import StudySession
+        self.assertEqual(StudySession._question_times({'questionTimeline': [
+            {'questionId': 'q2', 'at': '2026-10-07T00:00:00+00:00'},
+            {'questionId': 'q1', 'at': '2026-10-07T00:00:05+00:00'},
+            {'questionId': 'q2', 'at': '2026-10-07T00:00:08+00:00'}],
+            'submittedAt': '2026-10-07T00:00:12+00:00'}), {'q2': 9, 'q1': 3})
+        s = self.make_exam(); public = s.call({'action': 'web_status'})
+        s.call({'action': 'question_focus', 'examId': public['examId'], 'questionId': 'q2'})
+        s.call({'action': 'question_focus', 'examId': public['examId'], 'questionId': 'q1'})
+        answers = {q['id']: '' for q in public['questions']}
+        submitted = s.call({'action': 'web_submit', 'examId': public['examId'], 'revision': 0, 'answers': answers})
+        self.assertEqual(set(submitted['questionTimes']), {'q1', 'q2'})
+        self.assertNotIn('q3', submitted['questionTimes'])
+
     def test_previous_exam_retains_answers_after_new_request_and_is_read_only(self):
         from features.study import StudySession
         s = self.make_exam()
@@ -152,6 +208,109 @@ class ExamWebTests(ProjectTestBase):
             urlopen(Request(base + 'api/draft', headers=headers,
                 data=json.dumps({'examId': original['examId'], 'revision': 1, 'answers': {}}).encode()), timeout=3)
         self.assertEqual(exc.exception.code, 409)
+
+    def test_saved_exam_can_start_a_shuffled_web_copy(self):
+        s = self.make_exam()
+        original = s.call({'action': 'web_status'})
+        shuffled = s.call({'action': 'shuffle_exam', 'examId': original['examId'], 'count': 4})
+        self.assertTrue(shuffled['needsWeb'])
+        self.assertEqual(shuffled['total'], 4)
+        self.assertNotEqual(shuffled['examId'], original['examId'])
+        current = s.call({'action': 'web_status'})
+        self.assertEqual(len(current['questions']), 4)
+        self.assertTrue({q['question'] for q in current['questions']} <= {q['question'] for q in original['questions']})
+        self.assertNotIn('answer', json.dumps(current, ensure_ascii=False))
+        from features.study import StudySession
+        original_view = StudySession(s.path, s.user, 'original-review', s.provider, s.files_root, exam_id=original['examId'])
+        self.assertEqual(original_view.call({'action': 'web_status'})['questions'], original['questions'])
+        history = s.call({'action': 'exam_history'})
+        self.assertEqual(len(history['exams']), 2)
+
+    def test_saved_exam_shuffle_can_follow_area_quotas(self):
+        from features.study import StudySession
+        source = {'questions': [
+            {'id': 'a', 'type': 'short', 'unitId': 'u1', 'evidence': [{'resourceId': 'r1'}]},
+            {'id': 'b', 'type': 'short', 'unitId': 'u1', 'evidence': [{'resourceId': 'r1'}]},
+            {'id': 'c', 'type': 'short', 'unitId': 'u2', 'evidence': [{'resourceId': 'r2'}]},
+        ], 'settings': {}, 'selection': {}, 'sources': []}
+        state = StudySession.shuffled_state(source, {'examId': 'source', 'sections': [
+            {'unitId': 'u1', 'count': 1}, {'resourceId': 'r2', 'count': 1}], 'count': 2})
+        self.assertEqual(len(state['questions']), 2)
+        self.assertEqual({q['unitId'] for q in state['questions']}, {'u1', 'u2'})
+
+    def test_saved_exam_can_be_split_into_selectable_web_sets(self):
+        s = self.make_exam()
+        original = s.call({'action': 'web_status'})
+        selector = s.call({'action': 'set_collection_start', 'examId': original['examId'], 'setSize': 2})
+        self.assertEqual(selector['status'], 'set_selector')
+        self.assertEqual(selector['totalSets'], 3)
+        self.assertEqual(selector['sets'][0]['questionCount'], 2)
+        chosen = s.call({'action': 'set_select', 'collectionId': selector['collectionId'], 'setId': 'set-2'})
+        self.assertTrue(chosen['needsWeb'])
+        self.assertEqual(chosen['total'], 2)
+        self.assertEqual(s.call({'action': 'sets_status'})['completedSets'], 0)
+        self.assertNotEqual(chosen['examId'], original['examId'])
+
+    def test_set_selector_server_opens_one_set_as_exam(self):
+        s = self.make_exam()
+        original = s.call({'action': 'web_status'})
+        selector = s.call({'action': 'set_collection_start', 'examId': original['examId'], 'setSize': 2})
+        server, url = create_exam_server(s, view='sets')
+        worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        base, token = url.split('#')
+        headers = {'X-Exam-Token': token}
+        with urlopen(Request(base, headers=headers), timeout=3) as response:
+            self.assertIn('문제 세트', response.read().decode('utf-8'))
+        with urlopen(Request(base + 'api/sets', headers=headers), timeout=3) as response:
+            self.assertEqual(json.loads(response.read())['totalSets'], 3)
+        request = Request(base + 'api/sets/select', headers={**headers, 'Content-Type': 'application/json'},
+                          data=json.dumps({'collectionId': selector['collectionId'], 'setId': 'set-1'}).encode())
+        with urlopen(request, timeout=3) as response:
+            self.assertEqual(json.loads(response.read())['total'], 2)
+        with urlopen(Request(base + 'exam', headers=headers), timeout=3) as response:
+            self.assertIn('문제 세트 목록으로 돌아가기', response.read().decode('utf-8'))
+        with urlopen(Request(base + 'api/exam', headers=headers), timeout=3) as response:
+            self.assertEqual(json.loads(response.read())['setIndex'], 1)
+
+    def test_concept_match_board_grades_pairs_and_preserves_source_exam(self):
+        from features.study import StudySession
+        s = self.make_exam()
+        original = s.call({'action': 'web_status'})
+        started = s.call({'action': 'match_start', 'examId': original['examId']})
+        self.assertEqual(started['status'], 'matching')
+        self.assertEqual(len(started['leftTiles']), 4)
+        self.assertEqual(len(started['rightTiles']), 4)
+        board = started
+        while board['status'] != 'finished':
+            unmatched_left = [item for item in board['leftTiles'] if not item['matched']]
+            unmatched_right = [item for item in board['rightTiles'] if not item['matched']]
+            for left in unmatched_left:
+                for right in unmatched_right:
+                    board = s.call({'action': 'match_pick', 'matchId': board['matchId'],
+                                    'leftId': left['id'], 'rightId': right['id']})
+                    if board['status'] == 'finished' or board.get('correct'):
+                        break
+                if board['status'] == 'finished' or board.get('correct'):
+                    break
+        self.assertEqual(board['matched'], 4)
+        self.assertIn('score', board)
+        original_view = StudySession(s.path, s.user, 'match-source-review', s.provider, s.files_root, exam_id=original['examId'])
+        self.assertTrue(original_view.call({'action': 'web_status'})['readOnly'])
+
+    def test_match_server_serves_dedicated_board(self):
+        s = self.make_exam()
+        original = s.call({'action': 'web_status'})
+        s.call({'action': 'match_start', 'examId': original['examId']})
+        server, url = create_exam_server(s, view='match')
+        worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        base, token = url.split('#')
+        headers = {'X-Exam-Token': token}
+        with urlopen(Request(base, headers=headers), timeout=3) as response:
+            self.assertIn('개념 매칭', response.read().decode('utf-8'))
+        with urlopen(Request(base + 'api/match', headers=headers), timeout=3) as response:
+            self.assertEqual(json.loads(response.read())['status'], 'matching')
 
     def test_http_only_accepts_exam_answers_and_loopback_token(self):
         session = self.make_exam()
@@ -242,6 +401,7 @@ class ExamWebTests(ProjectTestBase):
 
     def test_custom_type_contract_and_choices(self):
         self.assertEqual(settings({'delivery': 'web', 'count': 4})['types'], ['auto'] * 4)
+        self.assertEqual(len(settings({'delivery': 'web', 'count': 50})['types']), 50)
         self.assertEqual(settings({'delivery': 'web', 'choices': 7})['choices'], 7)
         with self.assertRaises(ValueError): settings({'types': ['<script>'], 'count': 1})
 

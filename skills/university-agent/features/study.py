@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import random
 import re
 import secrets
 import sqlite3
@@ -20,11 +21,14 @@ PROMPT = '''역할: 제공된 수업자료로 연습문제를 만들고 채점�
 - 자료에 없는 지식으로 빈 내용을 채우지 않는다. 근거가 부족하면 문제 수를 줄이고 이유를 적는다.
 - 문제·선택지·힌트에 정답이나 다른 문제의 답을 미리 드러내지 않는다.
 - 객관식은 중복 없는 선택지와 하나의 정답을 만든다. 단답형은 의미가 같은 표현을 허용하고, 서술형·코딩은 평가 기준별로 판단한다.
+- 순서 배열형은 `blocks`의 각 블록을 한 번씩 올바른 순서로 배치하게 만들고, 정답은 블록 번호 배열로 보관한다.
 - 코딩 자료는 예제 기반 오류 수정이나 실행 결과 예측 문제를 우선한다. 코드를 실행하지 않는다.
 - 각 문제에는 핵심 개념, 해설, 평가 기준, 실제 자료의 위치와 짧은 원문 근거를 포함한다.
 - 사용자가 남긴 학습·시험 메모는 출제 형식, 난이도, 시간 배분과 설명 방식만 조절하는 참고다.
   메모를 공식 공지나 원문 근거로 취급하지 말고, 메모에 없는 사실을 보충하지 않는다.
-- 새 문제 유형을 만들 때는 표시 이름과 답변 형식(choice/text/code)을 함께 정한다.'''
+- 새 문제 유형을 만들 때는 표시 이름과 답변 형식(choice/text/code/ordering)을 함께 정한다.'''
+
+MAX_QUESTIONS = 200
 
 
 def study_intent(text):
@@ -68,16 +72,22 @@ def event_from_text(text, courses):
         event['selection'] = selection
     if intent == 'request':
         configured = {}
-        count = re.search(r'\b(\d{1,2})\s*(?:문제|개)', text)
+        count = re.search(r'\b(\d{1,3})\s*(?:문제|개)', text)
         if count:
             configured['count'] = int(count.group(1))
+        time_limit = re.search(r'(?:시간\s*제한|제한\s*시간|시험\s*시간|타이머).{0,8}?(\d{1,4})\s*분|(\d{1,4})\s*분\s*(?:시간\s*)?(?:제한|시험)', text)
+        if time_limit:
+            configured['timeLimitMinutes'] = int(time_limit.group(1) or time_limit.group(2))
         if re.search(r'핵심\s*개념.*정리', text) or not re.search(r'문제|퀴즈', text):
             configured['mode'] = 'concepts'
         if re.search(r'문제|퀴즈|모의\s*시험', text):
             configured['delivery'] = 'web'
-        kinds = [('mcq', '객관식'), ('short', '단답형'), ('essay', '서술형')]
+        kinds = [('mcq', '객관식'), ('short', '단답형'), ('essay', '서술형'), ('code_fix', '오류 수정'), ('code_output', '실행 결과'), ('ordering', '순서 배열')]
         mentioned = [kind for kind, word in kinds if word in text]
-        if len(mentioned) == 1:
+        if re.search(r'(?:모든|전체|각).{0,4}유형|유형.{0,4}(?:섞|혼합)', text):
+            pattern = [kind for kind, _ in kinds]
+            configured['types'] = (pattern * ((configured.get('count', 10) + len(pattern) - 1) // len(pattern)))[:configured.get('count', 10)]
+        elif len(mentioned) == 1:
             configured['types'] = [mentioned[0]] * configured.get('count', 10)
         choice = re.search(r'(20|1\d|[2-9])\s*지선다|선택지\s*(20|1\d|[2-9])\s*개', text)
         if choice:
@@ -92,9 +102,9 @@ def event_from_text(text, courses):
 
 
 def settings(raw):
-    value = {'count': 10, 'types': ['mcq', 'mcq', 'mcq', 'short', 'essay'] * 2, 'choices': 4, 'difficulty': '기본 개념', 'mode': 'quiz', 'delivery': 'web'}
+    value = {'count': 10, 'types': ['mcq', 'mcq', 'mcq', 'short', 'essay'] * 2, 'choices': 4, 'difficulty': '기본 개념', 'mode': 'quiz', 'delivery': 'web', 'timeLimitMinutes': None}
     if not isinstance(raw, dict) or set(raw) - set(value):
-        raise ValueError('설정은 count/types/choices/difficulty/mode/delivery만 지원합니다.')
+        raise ValueError('설정은 count/types/choices/difficulty/mode/delivery/timeLimitMinutes만 지원합니다.')
     if 'types' in raw and 'count' not in raw and isinstance(raw['types'], list):
         raw = {**raw, 'count': len(raw['types'])}
     value.update(raw)
@@ -102,18 +112,21 @@ def settings(raw):
         raise ValueError('모드나 난이도를 확인하세요.')
     if value['mode'] == 'quiz':
         value['delivery'] = 'web'  # New exams cannot silently fall back to chat.
-    if type(value['count']) is not int or not 1 <= value['count'] <= 20:
-        raise ValueError('문항 수는 1~20입니다.')
+    if type(value['count']) is not int or not 1 <= value['count'] <= MAX_QUESTIONS:
+        raise ValueError(f'문항 수는 1~{MAX_QUESTIONS}개까지 지정할 수 있어요.')
     if value['delivery'] == 'web' and 'types' not in raw:
         value['types'] = ['auto'] * value['count']
     if 'count' in raw and 'types' not in raw and value['delivery'] != 'web':
-        value['types'] = (['mcq', 'mcq', 'mcq', 'short', 'essay'] * 4)[:value['count']]
+        pattern = ['mcq', 'mcq', 'mcq', 'short', 'essay']
+        value['types'] = (pattern * ((value['count'] + len(pattern) - 1) // len(pattern)))[:value['count']]
     if not isinstance(value['types'], list) or len(value['types']) != value['count'] or any(not isinstance(t, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,39}', t) for t in value['types']):
         raise ValueError('문항 수만큼 유형 식별자를 지정하세요.')
     if type(value['choices']) is not int or not 2 <= value['choices'] <= 20:
         raise ValueError('선택지 수는 2~20입니다.')
     if value['delivery'] not in ('batch', 'single', 'web') or value['mode'] not in ('quiz', 'concepts') or not isinstance(value['difficulty'], str) or not value['difficulty'].strip():
         raise ValueError('모드나 난이도를 확인하세요.')
+    if value['timeLimitMinutes'] is not None and (type(value['timeLimitMinutes']) is not int or not 1 <= value['timeLimitMinutes'] <= 1440):
+        raise ValueError('시험 시간은 1~1440분 사이로 지정하세요.')
     return value
 
 
@@ -212,13 +225,19 @@ def validate_generated(data, state):
         if q['id'] in ids or not isinstance(q.get('type'), str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,39}', q['type']) or q['type'] == 'auto' or (expected != 'auto' and q['type'] != expected):
             raise ValueError('문항 ID 중복 또는 문제 유형 불일치')
         ids.add(q['id'])
-        labels = {'mcq': '객관식', 'short': '용어 단답형', 'essay': '서술형', 'code_fix': '코드 오류 수정', 'code_output': '실행 결과 예측'}
+        labels = {'mcq': '객관식', 'short': '용어 단답형', 'essay': '서술형', 'code_fix': '코드 오류 수정', 'code_output': '실행 결과 예측', 'ordering': '순서 배열형'}
         q['typeLabel'] = labels.get(q['type']) or required_text(q, 'typeLabel')
         if q['type'] not in labels:
             required_text(q, 'responseFormat')
-        q['responseFormat'] = q.get('responseFormat', 'choice' if q['type'] == 'mcq' else 'code' if q['type'] == 'code_fix' else 'text')
-        if q['responseFormat'] not in ('choice', 'text', 'code') or (q['type'] == 'mcq' and q['responseFormat'] != 'choice'):
-            raise ValueError('답안 입력 형식은 choice/text/code입니다.')
+        q['responseFormat'] = q.get('responseFormat', 'choice' if q['type'] == 'mcq' else 'code' if q['type'] == 'code_fix' else 'ordering' if q['type'] == 'ordering' else 'text')
+        if q['responseFormat'] not in ('choice', 'text', 'code', 'ordering') or (q['type'] == 'mcq' and q['responseFormat'] != 'choice') or (q['type'] == 'ordering' and q['responseFormat'] != 'ordering'):
+            raise ValueError('답안 입력 형식은 choice/text/code/ordering입니다.')
+        blocks = q.get('blocks', [])
+        if q['responseFormat'] == 'ordering':
+            if not isinstance(blocks, list) or not 2 <= len(blocks) <= 20 or any(not isinstance(block, str) or not block.strip() for block in blocks) or len(set(blocks)) != len(blocks):
+                raise ValueError('순서 배열형에는 중복 없는 블록 2~20개가 필요합니다.')
+        elif blocks:
+            raise ValueError('순서 배열형이 아닌 문항에는 blocks를 넣을 수 없습니다.')
         q['points'] = q.get('points', 10)
         if type(q['points']) is not int or not 1 <= q['points'] <= 100:
             raise ValueError('문항 배점은 1~100입니다.')
@@ -248,7 +267,7 @@ def validate_generated(data, state):
             raise ValueError('단답형 허용 답안 기준이 필요합니다.')
         q['evidence'] = evidence(q.get('evidence'), state['sources'])
         # Store only the defined contract, never arbitrary host fields in public output.
-        checked.append({**{k: q[k] for k in ('id', 'type', 'question', 'answer', 'explanation', 'concept', 'hint', 'rubric', 'evidence', 'typeLabel', 'responseFormat', 'points', 'code', 'language', 'keywords')}, 'options': options, 'acceptedAnswers': q.get('acceptedAnswers', [])})
+        checked.append({**{k: q[k] for k in ('id', 'type', 'question', 'answer', 'explanation', 'concept', 'hint', 'rubric', 'evidence', 'typeLabel', 'responseFormat', 'points', 'code', 'language', 'keywords')}, 'blocks': blocks, 'options': options, 'acceptedAnswers': q.get('acceptedAnswers', [])})
     return checked
 
 
@@ -410,7 +429,303 @@ class StudySession:
                           (self.user, limit + 1, offset)).fetchall()
         return {'status': 'history', 'exams': [dict(zip(('examId', 'createdAt', 'title', 'questionCount', 'status', 'score'), row)) for row in rows[:limit]],
                 'nextOffset': offset + limit if len(rows) > limit else None,
-                'answer': '저장해 둔 시험지를 골라 다시 볼 수 있어요.'}
+                'answer': '저장해 둔 시험지를 골라 다시 보거나, 문항 순서를 섞어 새로 풀 수 있어요.'}
+
+    @staticmethod
+    def shuffled_state(source, event):
+        questions = source.get('questions')
+        if not isinstance(questions, list) or not questions:
+            raise ValueError('섞어서 풀 수 있는 저장된 문항이 없습니다.')
+        sections = event.get('sections')
+        if sections is not None:
+            if not isinstance(sections, list) or not sections:
+                raise ValueError('영역별 출제 범위를 확인해 주세요.')
+            plan = []
+            for section in sections:
+                if not isinstance(section, dict) or (not section.get('unitId') and not section.get('resourceId')):
+                    raise ValueError('영역은 unitId 또는 resourceId가 필요합니다.')
+                amount = section.get('count')
+                if type(amount) is not int or amount < 1:
+                    raise ValueError('영역별 문항 수는 1개 이상이어야 합니다.')
+                plan.append((section, amount))
+            count = sum(amount for _, amount in plan)
+            if 'count' in event and event['count'] != count:
+                raise ValueError('총 문항 수는 영역별 문항 수의 합과 같아야 합니다.')
+            available = set(range(len(questions)))
+            chosen = []
+            for section, amount in plan:
+                def matches(question):
+                    if section.get('unitId') and question.get('unitId') == section['unitId']:
+                        return True
+                    return section.get('resourceId') and any(ref.get('resourceId') == section['resourceId']
+                        for ref in question.get('evidence', []) if isinstance(ref, dict))
+                pool = [index for index in available if matches(questions[index])]
+                if len(pool) < amount:
+                    label = section.get('label') or section.get('unitId') or section.get('resourceId')
+                    raise ValueError(f'{label} 영역에서 고를 수 있는 문항이 부족해요.')
+                random.SystemRandom().shuffle(pool)
+                selected = pool[:amount]
+                chosen.extend(selected)
+                available.difference_update(selected)
+            questions = [dict(questions[index]) for index in chosen]
+        else:
+            count = event.get('count', len(questions))
+            if type(count) is not int or not 1 <= count <= len(questions):
+                raise ValueError(f'셔플할 문항 수는 1~{len(questions)}개 사이여야 합니다.')
+            questions = [dict(question) for question in questions]
+            random.SystemRandom().shuffle(questions)
+            questions = questions[:count]
+        questions = [{**question, 'id': f'q{index}'} for index, question in enumerate(questions[:count], 1)]
+        settings_value = {**source.get('settings', {}), 'count': count,
+                          'types': [question['type'] for question in questions],
+                          'mode': 'quiz', 'delivery': 'web'}
+        return {'phase': 'question', 'settings': settings_value,
+                'selection': dict(source.get('selection', {})), 'sources': list(source.get('sources', [])),
+                'questions': questions, 'index': 0, 'history': [], 'hinted': False,
+                'hintedIds': [], 'examId': secrets.token_hex(12), 'drafts': {},
+                'draftRevision': 0, 'shuffledFrom': event['examId']}
+
+    @staticmethod
+    def matching_state(source, event):
+        questions = source.get('questions')
+        count = event.get('count', 4)
+        if not isinstance(questions, list) or not questions:
+            raise ValueError('매칭할 저장된 문항이 없습니다.')
+        if type(count) is not int or not 2 <= count <= 4:
+            raise ValueError('매칭판은 2~4쌍으로 열 수 있어요.')
+        candidates = [q for q in questions if str(q.get('concept') or q.get('question')).strip()
+                      and str(q.get('answer') or q.get('explanation')).strip()]
+        if len(candidates) < count:
+            raise ValueError('매칭에 사용할 개념과 설명이 충분하지 않아요.')
+        random.SystemRandom().shuffle(candidates)
+        pairs = []
+        for question in candidates[:count]:
+            pairs.append({'id': secrets.token_hex(8),
+                          'leftId': 'l-' + secrets.token_hex(6), 'rightId': 'r-' + secrets.token_hex(6),
+                          'left': str(question.get('concept') or question['question']).strip()[:240],
+                          'right': re.sub(r'\s+', ' ', str(question.get('answer') or question['explanation']).strip())[:320],
+                          'concept': str(question.get('concept') or question['question']).strip()[:240],
+                          'explanation': str(question.get('explanation') or '').strip()[:1000],
+                          'evidence': question.get('evidence', [])})
+        left_order = [p['leftId'] for p in pairs]
+        right_order = [p['rightId'] for p in pairs]
+        random.SystemRandom().shuffle(left_order)
+        random.SystemRandom().shuffle(right_order)
+        return {'phase': 'matching', 'matchId': secrets.token_hex(12),
+                'sourceExamId': event.get('examId'), 'title': ' / '.join(dict.fromkeys(s['name'] for s in source.get('sources', []))) or '개념 매칭',
+                'match': {'pairs': pairs, 'leftOrder': left_order, 'rightOrder': right_order,
+                          'matched': [], 'wrongPairIds': [], 'attempts': 0, 'wrong': 0,
+                          'count': count}}
+
+    @staticmethod
+    def matching_public(state, *, correct=None):
+        match = state['match']
+        pairs = {p['leftId']: p for p in match['pairs']}
+        right_pairs = {p['rightId']: p for p in match['pairs']}
+        matched = set(match['matched'])
+        result = {'status': 'finished' if state['phase'] == 'finished' else 'matching',
+                  'matchId': state['matchId'], 'title': state.get('title', '개념 매칭'),
+                  'round': 1, 'totalRounds': 1, 'total': match['count'],
+                  'matched': len(matched), 'attempts': match['attempts'], 'wrong': match['wrong'],
+                  'leftTiles': [{'id': pid, 'text': pairs[pid]['left'], 'matched': pairs[pid]['id'] in matched}
+                                for pid in match['leftOrder']],
+                  'rightTiles': [{'id': pid, 'text': right_pairs[pid]['right'], 'matched': right_pairs[pid]['id'] in matched}
+                                 for pid in match['rightOrder']]}
+        if correct is not None:
+            result['correct'] = correct
+        if state['phase'] == 'finished':
+            result['score'] = round(len(matched) / max(match['attempts'], 1) * 100)
+            result['review'] = [{'concept': p['concept'], 'explanation': p['explanation'], 'evidence': p['evidence']}
+                                for p in match['pairs'] if p['id'] in set(match['wrongPairIds'])]
+            result['answer'] = '개념 매칭을 마쳤어요. 헷갈린 개념부터 한 번 더 복습해 보세요.' if result['review'] else '개념 매칭을 모두 맞혔어요.'
+        return result
+
+    def matching_pick(self, db, state, event):
+        match = state.get('match')
+        if state.get('phase') != 'matching' or not match:
+            raise ValueError('진행 중인 개념 매칭이 없습니다.')
+        if event.get('matchId') != state.get('matchId'):
+            raise ValueError('매칭판이 바뀌었어요. 화면을 새로 열어주세요.')
+        left_id, right_id = event.get('leftId'), event.get('rightId')
+        left = next((p for p in match['pairs'] if p['leftId'] == left_id), None)
+        right = next((p for p in match['pairs'] if p['rightId'] == right_id), None)
+        if not left or not right or left['id'] in match['matched'] or right['id'] in match['matched']:
+            raise ValueError('이미 맞혔거나 올바르지 않은 카드입니다.')
+        match['attempts'] += 1
+        correct = left['id'] == right['id']
+        if correct:
+            match['matched'].append(left['id'])
+        else:
+            match['wrong'] += 1
+            for pair_id in (left['id'], right['id']):
+                if pair_id not in match['wrongPairIds']:
+                    match['wrongPairIds'].append(pair_id)
+        if len(match['matched']) == match['count']:
+            state['phase'] = 'finished'
+            saved = {k: v for k, v in state.items() if k != 'match'}
+            saved['match'] = match
+            db.execute('INSERT OR REPLACE INTO study_match_history VALUES (?,?,?,?,?,?,?,?,?)',
+                       (self.user, state['matchId'], state.get('sourceExamId'), self.conversation,
+                        datetime.now(timezone.utc).isoformat(), 'finished', match['count'], match['attempts'],
+                        json.dumps(saved, ensure_ascii=False, separators=(',', ':'))))
+        return self.matching_public(state, correct=correct)
+
+    @staticmethod
+    def collection_state(source, event):
+        questions = source.get('questions')
+        size = event.get('setSize', 20)
+        if not isinstance(questions, list) or not questions:
+            raise ValueError('나눌 저장된 문항이 없습니다.')
+        if type(size) is not int or not 1 <= size <= 200:
+            raise ValueError('세트당 문항 수는 1~200개 사이여야 합니다.')
+        questions = [dict(q) for q in questions]
+        if event.get('shuffle') is True:
+            random.SystemRandom().shuffle(questions)
+        sets = []
+        for start in range(0, len(questions), size):
+            chunk = questions[start:start + size]
+            sets.append({'setId': f'set-{len(sets) + 1}', 'index': len(sets) + 1,
+                         'questions': chunk, 'questionCount': len(chunk)})
+        return {'collectionId': secrets.token_hex(12), 'sourceExamId': event.get('examId'),
+                'title': source.get('title') or '문제 세트 모음', 'settings': source.get('settings', {}),
+                'selection': source.get('selection', {}), 'sources': source.get('sources', []),
+                'sets': sets, 'completedSetIds': []}
+
+    @staticmethod
+    def collection_public(payload):
+        completed = set(payload.get('completedSetIds', []))
+        return {'status': 'set_selector', 'collectionId': payload['collectionId'], 'title': payload['title'],
+                'totalSets': len(payload['sets']), 'completedSets': len(completed),
+                'sets': [{'setId': item['setId'], 'index': item['index'], 'questionCount': item['questionCount'],
+                          'completed': item['setId'] in completed} for item in payload['sets']],
+                'answer': '풀고 싶은 문제 세트를 골라 주세요.'}
+
+    def collection_status(self, db, state):
+        collection_id = state.get('collectionId')
+        row = db.execute('SELECT state FROM study_exam_collections WHERE user=? AND collection_id=?',
+                         (self.user, collection_id)).fetchone()
+        if not row:
+            raise ValueError('문제 세트 모음을 찾지 못했어요.')
+        return self.collection_public(json.loads(row[0]))
+
+    def collection_select(self, db, state, event):
+        collection_id = event.get('collectionId') or state.get('collectionId')
+        row = db.execute('SELECT state FROM study_exam_collections WHERE user=? AND collection_id=?',
+                         (self.user, collection_id)).fetchone()
+        if not row:
+            raise ValueError('문제 세트 모음을 찾지 못했어요.')
+        payload = json.loads(row[0])
+        chosen = next((item for item in payload['sets'] if item['setId'] == event.get('setId')), None)
+        if not chosen:
+            raise ValueError('선택한 문제 세트를 찾지 못했어요.')
+        questions = [{**question, 'id': f'q{index}'} for index, question in enumerate(chosen['questions'], 1)]
+        settings_value = {**payload.get('settings', {}), 'count': len(questions),
+                          'types': [question.get('type', 'auto') for question in questions], 'mode': 'quiz', 'delivery': 'web'}
+        state.clear(); state.update({'phase': 'question', 'settings': settings_value,
+            'selection': dict(payload.get('selection', {})), 'sources': list(payload.get('sources', [])),
+            'questions': questions, 'index': 0, 'history': [], 'hinted': False, 'hintedIds': [],
+            'examId': secrets.token_hex(12), 'drafts': {}, 'draftRevision': 0,
+            'collectionId': payload['collectionId'], 'setId': chosen['setId'],
+            'collectionTitle': payload['title'], 'setIndex': chosen['index'], 'totalSets': len(payload['sets'])})
+        return {**current(state), 'collectionId': payload['collectionId'], 'setId': chosen['setId'],
+                'setIndex': chosen['index'], 'totalSets': len(payload['sets'])}
+
+    def collection_mark_complete(self, db, state):
+        collection_id, set_id = state.get('collectionId'), state.get('setId')
+        if not collection_id or not set_id:
+            return
+        row = db.execute('SELECT state FROM study_exam_collections WHERE user=? AND collection_id=?',
+                         (self.user, collection_id)).fetchone()
+        if not row:
+            return
+        payload = json.loads(row[0])
+        if set_id not in payload.get('completedSetIds', []):
+            payload.setdefault('completedSetIds', []).append(set_id)
+            db.execute('UPDATE study_exam_collections SET state=? WHERE user=? AND collection_id=?',
+                       (json.dumps(payload, ensure_ascii=False, separators=(',', ':')), self.user, collection_id))
+
+    @staticmethod
+    def toggle_confusion(state, event):
+        if state.get('settings', {}).get('delivery') != 'web' or state.get('phase') != 'question':
+            raise ValueError('지금 표시를 남길 수 있는 시험지가 아니에요.')
+        if event.get('examId') != state.get('examId'):
+            raise ValueError('시험지가 바뀌었어요. 화면을 새로고침해 주세요.')
+        question_id = event.get('questionId')
+        if question_id not in {question['id'] for question in state.get('questions', [])} or type(event.get('confused')) is not bool:
+            raise ValueError('헷갈린 문항 표시를 확인해 주세요.')
+        confused = state.setdefault('confusedIds', [])
+        if event['confused'] and question_id not in confused:
+            confused.append(question_id)
+        if not event['confused'] and question_id in confused:
+            confused.remove(question_id)
+        return {'status': 'confusion_saved', 'examId': state['examId'], 'questionId': question_id,
+                'confused': event['confused'], 'confusedIds': confused,
+                'answer': '헷갈린 문항으로 표시했어요.' if event['confused'] else '헷갈린 표시를 지웠어요.'}
+
+    @staticmethod
+    def _question_times(state):
+        events = state.get('questionTimeline', [])
+        end = state.get('submittedAt')
+        if not isinstance(events, list) or not end:
+            return {}
+        totals = {}
+        for index, event in enumerate(events):
+            if not isinstance(event, dict) or not isinstance(event.get('questionId'), str):
+                continue
+            try:
+                started = datetime.fromisoformat(event['at'])
+                finished = datetime.fromisoformat(events[index + 1]['at']) if index + 1 < len(events) else datetime.fromisoformat(end)
+            except (KeyError, TypeError, ValueError):
+                continue
+            seconds = max(0, int((finished - started).total_seconds()))
+            totals[event['questionId']] = totals.get(event['questionId'], 0) + seconds
+        return totals
+
+    def focus_question(self, state, event):
+        if state.get('settings', {}).get('delivery') != 'web' or state.get('phase') != 'question':
+            raise ValueError('지금 기록할 수 있는 시험지가 아니에요.')
+        if event.get('examId') != state.get('examId'):
+            raise ValueError('시험지가 바뀌었어요. 화면을 새로고침해 주세요.')
+        question_id = event.get('questionId')
+        if question_id not in {question['id'] for question in state.get('questions', [])}:
+            raise ValueError('문항을 확인해 주세요.')
+        self._touch_web_clock(state)
+        timeline = state.setdefault('questionTimeline', [])
+        if not timeline or timeline[-1].get('questionId') != question_id:
+            timeline.append({'questionId': question_id, 'at': datetime.now(timezone.utc).isoformat()})
+        return {'status': 'question_focused', 'examId': state['examId'], 'questionId': question_id}
+
+    @staticmethod
+    def _touch_web_clock(state, freeze=False):
+        now = datetime.now(timezone.utc)
+        started = state.get('startedAt')
+        try:
+            started_at = datetime.fromisoformat(started) if started else now
+        except (TypeError, ValueError):
+            started_at = now
+        if not started:
+            state['startedAt'] = started_at.isoformat()
+        elapsed = max(0, int((now - started_at).total_seconds()))
+        if freeze:
+            state['elapsedSeconds'] = elapsed
+            state['submittedAt'] = now.isoformat()
+        return elapsed
+
+    @staticmethod
+    def _web_clock(state):
+        elapsed = state.get('elapsedSeconds')
+        if state.get('phase') == 'question' and state.get('startedAt'):
+            try:
+                elapsed = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(state['startedAt'])).total_seconds()))
+            except (TypeError, ValueError):
+                elapsed = None
+        if type(elapsed) is not int:
+            return {'elapsedSeconds': None, 'timeLimitSeconds': None, 'remainingSeconds': None, 'overtimeSeconds': 0}
+        minutes = state.get('settings', {}).get('timeLimitMinutes')
+        limit = minutes * 60 if type(minutes) is int else None
+        remaining = max(0, limit - elapsed) if limit is not None else None
+        overtime = max(0, elapsed - limit) if limit is not None else 0
+        return {'elapsedSeconds': elapsed, 'timeLimitSeconds': limit, 'remainingSeconds': remaining, 'overtimeSeconds': overtime}
 
     def call(self, event):
         if not isinstance(event, dict):
@@ -426,8 +741,10 @@ class StudySession:
             db.execute('CREATE INDEX IF NOT EXISTS study_exam_history ON study_exams(user,created_at DESC,exam_id)')
             db.execute('CREATE INDEX IF NOT EXISTS study_exam_conversations ON study_exams(user,conversation)')
             db.execute('CREATE TABLE IF NOT EXISTS study_pipelines (user TEXT, exam_id TEXT, state TEXT, PRIMARY KEY(user,exam_id))')
+            db.execute('CREATE TABLE IF NOT EXISTS study_match_history (user TEXT, match_id TEXT, source_exam_id TEXT, conversation TEXT, created_at TEXT, phase TEXT, pair_count INTEGER, attempts INTEGER, state TEXT, PRIMARY KEY(user,match_id))')
+            db.execute('CREATE TABLE IF NOT EXISTS study_exam_collections (user TEXT, collection_id TEXT, conversation TEXT, created_at TEXT, state TEXT, PRIMARY KEY(user,collection_id))')
             self._ensure_context_notes(db)
-            read_only = self.exam_id is not None or event.get('action') in ('list_context_notes', 'catalog', 'unit', 'candidate', 'web_status', 'exam_review')
+            read_only = self.exam_id is not None or event.get('action') in ('list_context_notes', 'catalog', 'unit', 'candidate', 'exam_review', 'match_status', 'sets_status')
             db.execute('BEGIN' if read_only else 'BEGIN IMMEDIATE')
             if event.get('action') in ('save_context_note', 'list_context_notes'):
                 return self.context_note_event(db, event)
@@ -447,13 +764,67 @@ class StudySession:
                 return self.exam_history(db, event)
             row = db.execute('SELECT state FROM study_sessions WHERE user=? AND conversation=?', (self.user, self.conversation)).fetchone()
             state = json.loads(row[0]) if row else {'phase': 'idle'}
-            if not read_only:
-                self.detach_pipeline(db, state)
-                if event.get('action') in ('request', 'offer', 'cancel', 'observe'):
+            if event.get('action') == 'set_collection_start':
+                source_id = event.get('examId')
+                saved = db.execute('SELECT state FROM study_exams WHERE user=? AND exam_id=?', (self.user, source_id)).fetchone()
+                if not saved:
+                    raise ValueError('현재 사용자의 저장된 시험지를 찾지 못했어요.')
+                payload = self.collection_state(json.loads(saved[0]), event)
+                db.execute('INSERT INTO study_exam_collections VALUES (?,?,?,?,?)',
+                           (self.user, payload['collectionId'], self.conversation, datetime.now(timezone.utc).isoformat(),
+                            json.dumps(payload, ensure_ascii=False, separators=(',', ':'))))
+                state.clear(); state.update({'phase': 'set_selector', 'collectionId': payload['collectionId']})
+                result = self.collection_public(payload)
+            elif event.get('action') == 'sets_status':
+                result = self.collection_status(db, state)
+            elif event.get('action') == 'set_select':
+                if state.get('questions'):
+                    self.detach_pipeline(db, state); self.archive_exam(db, state)
+                result = self.collection_select(db, state, event)
+            elif event.get('action') == 'confusion_toggle':
+                result = self.toggle_confusion(state, event)
+            elif event.get('action') == 'question_focus':
+                result = self.focus_question(state, event)
+            elif event.get('action') == 'match_start':
+                source_id = event.get('examId')
+                if source_id:
+                    saved = db.execute('SELECT state FROM study_exams WHERE user=? AND exam_id=?', (self.user, source_id)).fetchone()
+                    if not saved:
+                        raise ValueError('현재 사용자의 저장된 시험지를 찾지 못했어요.')
+                    source = json.loads(saved[0])
+                elif state.get('questions'):
+                    source = state
+                else:
+                    raise ValueError('먼저 저장된 시험지를 선택해 주세요.')
+                if state.get('questions'):
+                    self.detach_pipeline(db, state)
                     self.archive_exam(db, state)
-            result = self.transition(state, event)
+                state.clear(); state.update(self.matching_state(source, event))
+                result = self.matching_public(state)
+            elif event.get('action') == 'match_status':
+                if state.get('phase') not in ('matching', 'finished'):
+                    raise ValueError('진행 중인 개념 매칭이 없습니다.')
+                result = self.matching_public(state)
+            elif event.get('action') == 'match_pick':
+                result = self.matching_pick(db, state, event)
+            elif event.get('action') == 'shuffle_exam':
+                source_id = event.get('examId')
+                if not isinstance(source_id, str) or not source_id.strip():
+                    raise ValueError('섞을 저장 시험지를 먼저 선택해 주세요.')
+                saved = db.execute('SELECT state FROM study_exams WHERE user=? AND exam_id=?', (self.user, source_id)).fetchone()
+                if not saved:
+                    raise ValueError('현재 사용자의 저장된 시험지를 찾지 못했어요.')
+                self.detach_pipeline(db, state)
+                self.archive_exam(db, state)
+                state.clear()
+                state.update(self.shuffled_state(json.loads(saved[0]), event))
+                result = {**current(state), 'shuffled': True, 'sourceExamId': source_id}
+            else:
+                result = self.transition(state, event)
             if not read_only:
                 self.detach_pipeline(db, state)
+                if state.get('phase') == 'finished':
+                    self.collection_mark_complete(db, state)
                 self.archive_exam(db, state)
                 encoded = json.dumps(state, ensure_ascii=False, separators=(',', ':'))
                 if not row or row[0] != encoded:
@@ -531,7 +902,7 @@ class StudySession:
                     material_cache.key(['concepts-v1', state['sources']]), items)
                 return {'status': 'concepts', 'concepts': items, 'offerId': state['offerId'],
                         'answer': '필수 개념을 훑어봤어요. 이 자료로 문제를 풀어볼까요?',
-                        'nextCommands': ['문제 10개 풀기', '문제 20개 풀기', '개념 다시 설명해줘']}
+                        'nextCommands': ['문제 10개 풀기', '문제 20개 풀기(권장)', '개념 다시 설명해줘']}
             if not items:
                 state.update(phase='finished', questions=[], history=[], shortageReason=event['data']['shortageReason'])
                 return {'status': 'insufficient', 'answer': '읽은 자료로 근거 있는 문제를 만들 수 없습니다. 다른 자료를 선택하거나 파일을 첨부해주세요.', 'reason': event['data']['shortageReason']}
@@ -650,8 +1021,8 @@ class StudySession:
                 return {'status': 'concepts', 'concepts': cached, 'offerId': state['offerId'], 'reusedAnalysis': True,
                         'failures': failures, 'truncated': truncated,
                         'answer': '이 자료에서 정리해 둔 핵심 개념을 바로 가져왔어요.',
-                        'nextCommands': ['문제 10개 풀기', '문제 20개 풀기', '개념 다시 설명해줘']}
-        contract = {'questions': [{'id': 'q1', 'type': '설정된 유형 식별자', 'typeLabel': '새 유형의 표시 이름', 'responseFormat': 'choice|text|code', 'points': 10, 'code': '코딩 문항의 예제 코드', 'language': 'java 등', 'keywords': ['핵심 용어'], 'question': '질문', 'options': ['선택지 (choice만)'], 'answer': '정답 선택지 원문 또는 모범답안', 'acceptedAnswers': ['단답 허용 표현'], 'explanation': '해설', 'rubric': ['주요 키워드와 의미적 충족 조건'], 'concept': '핵심 개념', 'hint': '정답을 누설하지 않는 힌트', 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}], 'shortageReason': '문항 부족 시 사유'}
+                        'nextCommands': ['문제 10개 풀기', '문제 20개 풀기(권장)', '개념 다시 설명해줘']}
+        contract = {'questions': [{'id': 'q1', 'type': '설정된 유형 식별자', 'typeLabel': '새 유형의 표시 이름', 'responseFormat': 'choice|text|code|ordering', 'blocks': ['순서 배열형 블록 1', '순서 배열형 블록 2'], 'points': 10, 'code': '코딩 문항의 예제 코드', 'language': 'java 등', 'keywords': ['핵심 용어'], 'question': '질문', 'options': ['선택지 (choice만)'], 'answer': '정답 선택지 원문 또는 블록 번호 배열', 'acceptedAnswers': ['단답 허용 표현'], 'explanation': '해설', 'rubric': ['주요 키워드와 의미적 충족 조건'], 'concept': '핵심 개념', 'hint': '정답을 누설하지 않는 힌트', 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}], 'shortageReason': '문항 부족 시 사유'}
         if state['settings']['mode'] == 'concepts':
             contract = {'concepts': [{'concept': '개념', 'explanation': '설명', 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}]}
         if schema_only:
@@ -667,7 +1038,10 @@ class StudySession:
     def web_event(self, state, event):
         if state.get('settings', {}).get('delivery') != 'web' or not state.get('questions'):
             raise ValueError('delivery: web으로 생성한 시험지가 필요합니다.')
-        if event['action'] != 'web_status':
+        if event['action'] == 'web_status':
+            if not event.get('readOnly') and state['phase'] == 'question':
+                self._touch_web_clock(state)
+        else:
             if event.get('examId') != state.get('examId') or state['phase'] != 'question':
                 raise ValueError('이미 제출했거나 시험지가 바뀌었어요. 새로고침해주세요.')
             if type(event.get('revision')) is not int or event['revision'] != state.get('draftRevision', 0):
@@ -677,6 +1051,7 @@ class StudySession:
             if not isinstance(answers, dict) or not set(answers) <= ids or any(not isinstance(v, str) or len(v) > 50000 for v in answers.values()):
                 raise ValueError('답안 형식이나 길이를 확인해주세요.')
             if event['action'] == 'draft':
+                self._touch_web_clock(state)
                 state['drafts'] = answers
                 state['draftRevision'] += 1
             else:
@@ -688,11 +1063,19 @@ class StudySession:
                     if q['responseFormat'] == 'choice' and text and text not in q['options'] and text not in [str(i) for i in range(1, len(q['options']) + 1)]:
                         raise ValueError('선택지 번호를 확인해주세요.')
                     pending[q['id']] = {'index': index, 'gradeId': secrets.token_hex(12), 'text': text, 'question': q}
+                self._touch_web_clock(state, freeze=True)
+                state['questionTimes'] = self._question_times(state)
                 state.update(phase='grading', drafts=answers, pendingGrades=pending, batchFeedback=[], batchGradeId=secrets.token_hex(12))
         result = {'status': state['phase'], 'examId': state['examId'], 'title': ' / '.join(dict.fromkeys(s['name'] for s in state['sources'])),
-                  'questions': [{k: q[k] for k in ('id', 'type', 'typeLabel', 'responseFormat', 'question', 'options', 'code', 'language', 'points')} for q in state['questions']],
-                  'drafts': state.get('drafts', {}), 'totalPoints': sum(q['points'] for q in state['questions'])}
+                  'questions': [{**{k: q[k] for k in ('id', 'type', 'typeLabel', 'responseFormat', 'question', 'options', 'code', 'language', 'points')}, 'blocks': q.get('blocks', [])} for q in state['questions']],
+                  'drafts': state.get('drafts', {}), 'confusedIds': state.get('confusedIds', []),
+                  'totalPoints': sum(q['points'] for q in state['questions'])}
+        result.update(self._web_clock(state))
+        result['questionTimes'] = state.get('questionTimes', {})
         result['revision'] = state.get('draftRevision', 0)
+        if state.get('collectionId'):
+            result.update(collectionId=state['collectionId'], setId=state['setId'],
+                          setIndex=state['setIndex'], totalSets=state['totalSets'])
         if state['phase'] == 'finished':
             result['summary'] = summary(state)
             result['feedback'] = [{**h, 'answer': q['answer'], 'explanation': q['explanation']} for h in state['history'] for q in state['questions'] if h['questionId'] == q['id']]

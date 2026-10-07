@@ -42,10 +42,17 @@ class StudyFlowTests(ProjectTestBase):
 
     def test_intent_offer_direct_request_and_unrelated_short_reply(self):
         self.assertTrue(self.cli('ask', '--text', '지난 시험 문제 보여줘', '--conversation', 'history-request')['needsExamHistory'])
+        self.assertTrue(self.cli('ask', '--text', '지난 시험 문제 다시 풀고 싶어', '--conversation', 'shuffle-request')['needsExamShuffle'])
+        self.assertTrue(self.cli('ask', '--text', '개념 매칭으로 복습하고 싶어', '--conversation', 'match-request')['needsConceptMatch'])
+        self.assertTrue(self.cli('ask', '--text', '문제 세트를 하나씩 골라서 풀고 싶어', '--conversation', 'sets-request')['needsExamSets'])
+        self.assertTrue(self.cli('ask', '--text', '개념부터 차근차근 공부해서 수준에 맞춰 문제 내줘', '--conversation', 'adaptive-request')['needsAdaptiveStudy'])
         self.assertTrue(self.cli('ask', '--text', '강의 원본 파일 보내줘')['needsOriginalFile'])
         self.assertEqual(study_intent('운영체제 시험 준비해야 하는데'), 'request')
         self.assertEqual(event_from_text('운영체제 시험 준비해야 하는데', [])['settings']['mode'], 'concepts')
         self.assertEqual(event_from_text('객관식 문제 만들어줘', [])['settings']['types'], ['mcq'] * 10)
+        self.assertEqual(event_from_text('모든 유형을 섞어서 문제 만들어줘', [])['settings']['types'],
+                         ['mcq', 'short', 'essay', 'code_fix', 'code_output', 'ordering', 'mcq', 'short', 'essay', 'code_fix'])
+        self.assertEqual(event_from_text('50분 시간 제한으로 문제 만들어줘', [])['settings']['timeLimitMinutes'], 50)
         self.assertEqual(study_intent('자료구조 객관식 5문제 만들어줘'), 'request')
         self.assertEqual(study_intent('자료구조 주요 내용 학습시켜줘'), 'request')
         self.assertEqual(study_intent('중간고사는 손코딩일까?'), None)

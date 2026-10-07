@@ -1,7 +1,7 @@
 interface:
   display_name: "터틀넥"
-  short_description: "과목·과제 관리와 강의 자료 기반 학습을 돕는 로컬 Skill"
+  short_description: "TLS·에타를 한 번에 연결해 과제·시간표·강의평·학습을 돕는 Skill"
   icon_small: "./assets/turtleneck.png"
   icon_large: "./assets/turtleneck.png"
   brand_color: "#B8E9C4"
-  default_prompt: "Use $turtleneck to review courses and assignments or create source-cited study materials from a local lecture file."
+  default_prompt: "Use $turtleneck to prepare TLS and Everytime together on first use, then review assignments, timetables, course reviews or study local lecture files."

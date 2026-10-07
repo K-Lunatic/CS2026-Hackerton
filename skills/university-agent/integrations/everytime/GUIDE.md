@@ -1,18 +1,14 @@
----
-name: everytime
-description: "에타 로그인 후 탭 없이 과목·일정·강의평을 조회하고 시험 준비·수강신청 근거를 정리한다. 사용자가 승인한 시간표·게시판 변경도 지원한다."
----
+# 터틀넥 하위 기능: 에브리타임
 
-# 에브리타임 Skill
-
-에브리타임은 터틀넥과 별도의 Skill이다. TLS 코드, TLS 계정 파일, TLS SQLite DB와 섞지
+에브리타임은 터틀넥에 포함된 하위 기능이다. 별도 Skill 설치는 필요 없다. TLS 계정 파일과 TLS SQLite DB는 섞지
 않는다. 기본 동작은 사용자의 현재 기기에서만 수행한다. 최초 인증 뒤 데이터 조회는 브라우저
 탭이 아닌 로컬 HTTP 세션으로 처리한다. 한 사람이 한 계정으로 사용하는 개인 Skill이며,
-계정별 DB나 별도의 사용자 관리 기능은 만들지 않는다.
+계정별 DB나 별도의 사용자 관리 기능은 만들지 않는다. 아래 `scripts/`와 `references/` 경로는
+이 문서가 있는 `integrations/everytime/` 기준이다. 터틀넥 루트 기준 명령에는 이 접두사를 붙인다.
 
 ## 로그인
 
-터미널을 열거나 외부 브라우저 탭을 크롤러로 사용하지 않는다. 최초 인증은 Codex가 준비한
+에타 비밀번호는 터미널로 받지 않으며 브라우저 탭을 크롤러로 사용하지 않는다. 최초 인증은 Codex가 준비한
 공식 로그인 화면에서 사용자가 직접 진행하고, 인증이 끝난 전용 세션을 로컬 크롤러가 이어받는다.
 비밀번호·세션 쿠키는 AI 대화·로그·학사 DB에 들어가지 않는다.
 
@@ -43,7 +39,7 @@ description: "에타 로그인 후 탭 없이 과목·일정·강의평을 조�
 실제 읽기 작업은 설명을 다시 조합하지 말고 이 Skill의 실행기를 사용한다.
 
 ```text
-skills/everytime/scripts/everytime.py --board-url https://everytime.kr/<게시판ID> --limit 20
+python3 <터틀넥 경로>/integrations/everytime/scripts/everytime.py --board-url https://everytime.kr/<게시판ID> --limit 20
 ```
 
 실행기는 에타 공식 읽기 API 응답을 정해진 결과 필드로 정규화하고, 요청 범위와 함께
@@ -62,7 +58,7 @@ Keychain 또는 Windows DPAPI만 사용하며 일반 DB에는 쿠키를 기록�
 읽거나 쿠키 값을 대화·로그에 출력하지 않는다.
 
 ```text
-python3 skills/everytime/scripts/connect.py
+python3 <터틀넥 경로>/integrations/everytime/scripts/connect.py
 ```
 
 인증이 끝난 뒤에는 `everytime.py`가 저장된 세션으로 브라우저 탭 없이 읽는다.
@@ -190,11 +186,11 @@ python3 <이 Skill의 절대 경로>/scripts/everytime.py --search-subjects "과
 
 ## 사용 예
 
-`$everytime 에타 로그인 창을 열고, 2차 인증이 끝나면 이번 학기 시간표와 내가 지정한 정보게시판의 이번 달 글만 확인해줘.`
+`$turtleneck 에타 로그인 창을 열고, 2차 인증이 끝나면 이번 학기 시간표와 내가 지정한 정보게시판의 이번 달 글만 확인해줘.`
 
 시험기간에는 다음처럼 요청한다.
 
-`$everytime 내 시간표 과목을 기준으로 강의실의 이번 시험 정보를 모아줘. 공식 안내와 학생 경험담을 나눠서 보여줘.`
+`$turtleneck 내 시간표 과목을 기준으로 강의실의 이번 시험 정보를 모아줘. 공식 안내와 학생 경험담을 나눠서 보여줘.`
 
 브라우저 연결을 구현하거나 디버깅할 때는 [연결 흐름](references/connection-flow.md)의 상태와
 비밀값 경계를 따른다.

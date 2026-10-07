@@ -181,12 +181,12 @@ def _progress(step: int, total: int, message: str) -> None:
     print(f"[{step}/{total}] {message}", flush=True)
 
 
-def open_connection_terminal() -> None:
+def open_connection_terminal(command: list[str] | None = None) -> None:
     """Credentials are typed in a native terminal, never the host's captured PTY."""
-    command = [sys.executable, str(Path(__file__).resolve())]
+    command = command or [sys.executable, str(Path(__file__).resolve())]
     if sys.platform == 'darwin':
         # Terminal does not inherit the host's configured storage location.
-        env = [f'{key}={os.environ[key]}' for key in ('UNIVERSITY_AGENT_DB', 'UNIVERSITY_AGENT_USER_ID', 'TLS_BASE_URL', 'TLS_USERNAME') if key in os.environ]
+        env = [f'{key}={os.environ[key]}' for key in ('UNIVERSITY_AGENT_DB', 'UNIVERSITY_AGENT_USER_ID', 'TLS_BASE_URL', 'TLS_USERNAME', 'EVERYTIME_DB') if key in os.environ]
         shell_command = shlex.join(['env', *env, *command])
         subprocess.run(['osascript', '-e', 'tell application "Terminal"', '-e',
                         'activate', '-e', 'do script ' + json.dumps(shell_command), '-e', 'end tell'],

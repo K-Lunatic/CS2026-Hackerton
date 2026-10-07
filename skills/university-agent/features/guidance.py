@@ -69,9 +69,25 @@ def usage_guide(text: str = "") -> dict:
 
 
 def guidance_request(text: str) -> dict | None:
+    if re.search(r'터틀넥.{0,12}(?:시작|설정|연결)|처음\s*설정|(?:학교|TLS).{0,12}(?:에타|에브리타임).{0,12}(?:연결|설정)', text, re.I):
+        return {'toolCalls': [], 'needsSetup': True, 'data': {'intent': 'setup', 'performed': False},
+                'nextCommands': ['python3 scripts/setup_turtleneck.py'],
+                'answer': '학교 자료와 에타 시간표·강의평을 한 번에 준비할게요. 로그인은 열린 창에서 직접 해주세요. 이미 연결된 항목은 다시 로그인하지 않아요.'}
+    if re.search(r'개념\s*(?:매칭|연결)|매칭판|짝\s*맞추', text):
+        return {'toolCalls': [], 'needsConceptMatch': True,
+                'answer': '저장된 문제은행에서 개념과 설명을 골라 4×4 매칭판을 열어드릴게요. 끝난 뒤 헷갈린 개념은 다음 문제에서 먼저 복습합니다.'}
+    if re.search(r'(?:단계별|차근차근|기초부터|개념부터|수준에 맞춰|통달|마스터).{0,30}(?:공부|학습|문제|시험|복습)|(?:개념|기초).{0,20}(?:문제|평가).{0,20}(?:다시|높|심화)', text):
+        return {'toolCalls': [], 'needsAdaptiveStudy': True,
+                'answer': '먼저 자료의 핵심 개념을 정리하고, 짧은 확인 문제부터 시작할게요. 채점 결과에 따라 헷갈린 개념과 아직 풀지 않은 유형을 다음 학습에 우선 반영하겠습니다.'}
+    if re.search(r'(?:문제|시험).{0,16}(?:세트|여러\s*번|나눠|나눠서).{0,20}(?:풀|선택|골라)', text) or re.search(r'(?:세트|문제지).{0,16}(?:하나씩|한\s*세트씩)', text):
+        return {'toolCalls': [], 'needsExamSets': True, 'nextCommands': ['python3 scripts/run_agent.py exam-history'],
+                'answer': '저장된 문제를 여러 세트로 나눠 웹에서 원하는 세트부터 하나씩 풀 수 있게 열어드릴게요.'}
     if re.search(r'(?:지난|이전|예전|과거|풀었던).{0,20}(?:시험|문제)', text) and re.search(r'확인|기록|내역|보여|열어|다시\s*봐|돌아보기', text):
         return {'toolCalls': [], 'needsExamHistory': True, 'nextCommands': ['python3 scripts/run_agent.py exam-history'],
-                'answer': '풀었던 시험지를 찾아볼게요. 저장된 문제와 당시 답안·채점을 다시 볼 수 있어요.'}
+                'answer': '풀었던 시험지를 찾아볼게요. 저장된 문제와 당시 답안·채점을 다시 보거나 문항 순서를 섞어 새로 풀 수 있어요.'}
+    if re.search(r'(?:지난|이전|예전|풀었던).{0,20}(?:시험|문제)', text) and re.search(r'다시\s*풀|셔플|섞|새로', text):
+        return {'toolCalls': [], 'needsExamShuffle': True, 'nextCommands': ['python3 scripts/run_agent.py exam-history'],
+                'answer': '저장된 시험지 중 하나를 골라 문항 순서를 섞은 새 시험지를 열어드릴게요.'}
     if re.search(r'원본.{0,20}(?:파일|자료)|(?:파일|자료).{0,20}(?:원본|다운로드|보내줘|제공)', text):
         return {'toolCalls': [], 'needsOriginalFile': True, 'nextCommands': [],
                 'answer': '요약본이 아닌 강의 원본 파일로 드릴게요. 대화에서 확인된 과목과 자료를 찾고, 여러 파일이면 골라드릴게요.'}

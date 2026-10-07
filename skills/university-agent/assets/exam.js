@@ -18,7 +18,7 @@ const MARK = {
   incorrect: 'M49 6 C38 22 24 40 9 55',
 };
 const GLYPH = {correct: '○', partial: '△', incorrect: '／'};
-let exam, drafts = {}, revision = 0, timer, saving = Promise.resolve(), submitting = false, dirty = false, editVersion = 0;
+let exam, drafts = {}, revision = 0, timer, clockTimer, clockBaseElapsed = null, clockSyncedAt = 0, focusRequest = Promise.resolve(), focusedQuestionId = '', saving = Promise.resolve(), submitting = false, dirty = false, editVersion = 0;
 function node(tag, text, className) {
   const el = document.createElement(tag);
   if (text !== undefined) el.textContent = text;
@@ -32,7 +32,23 @@ async function api(path, data) {
   if (!response.ok) throw new Error(result.error || '시험지 연결을 확인해주세요.');
   return result;
 }
-const answered = q => Boolean((drafts[q.id] || '').trim());
+function focusQuestion(q) {
+  if (exam.readOnly || exam.status !== 'question' || focusedQuestionId === q.id) return;
+  focusedQuestionId = q.id;
+  focusRequest = focusRequest.catch(() => {}).then(() => api('/api/focus', {examId: exam.examId, questionId: q.id})).catch(e => error(e.message));
+}
+function orderingValue(q) {
+  try { const value = JSON.parse(drafts[q.id] || '[]'); return Array.isArray(value) ? value : []; } catch (_) { return []; }
+}
+const answered = q => {
+  if (q.responseFormat !== 'ordering') return Boolean((drafts[q.id] || '').trim());
+  const value = orderingValue(q);
+  return value.length === q.blocks.length && new Set(value).size === q.blocks.length && value.every(item => Number.isInteger(item) && item >= 0 && item < q.blocks.length);
+};
+function displayAnswer(q, text) {
+  if (q.responseFormat !== 'ordering') return text;
+  try { return JSON.parse(text || '[]').map(index => q.blocks[index] || '알 수 없는 블록').join(' → '); } catch (_) { return '아직 순서를 정하지 않았어요.'; }
+}
 // A saved choice is an option number or the option text.
 function chosen(q) {
   const text = drafts[q.id] || '';
@@ -43,6 +59,29 @@ function progress() {
   if (exam.readOnly) { $('progress').textContent = '지난 시험과 당시 답안을 보고 있어요'; return; }
   $('progress').textContent = exam.status === 'question' ? exam.questions.length + '문항 중 ' + count + '문항에 답했어요'
     : exam.status === 'grading' ? '채점을 기다리고 있어요' : '채점이 끝났어요';
+}
+function formatDuration(seconds) {
+  seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), secs = seconds % 60;
+  return (hours ? String(hours).padStart(2, '0') + ':' : '') + String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+}
+function updateClock() {
+  if (!exam || !Number.isFinite(Number(exam.elapsedSeconds))) { $('time-panel').hidden = true; return; }
+  const running = exam.status === 'question' && !exam.readOnly && clockSyncedAt;
+  const elapsed = Number(exam.elapsedSeconds) + (running ? Math.floor((Date.now() - clockSyncedAt) / 1000) : 0);
+  $('time-panel').hidden = false; $('elapsed-time').textContent = formatDuration(elapsed);
+  const limited = Number.isFinite(Number(exam.timeLimitSeconds)) && Number(exam.timeLimitSeconds) > 0;
+  $('limit-clock').hidden = !limited;
+  if (!limited) return;
+  const remaining = Math.max(0, Number(exam.timeLimitSeconds) - elapsed), overtime = Math.max(0, elapsed - Number(exam.timeLimitSeconds));
+  $('limit-label').textContent = overtime ? '제한 시간 초과' : '남은 시간';
+  $('remaining-time').textContent = overtime ? '+' + formatDuration(overtime) : formatDuration(remaining);
+  $('limit-clock').classList.toggle('overtime', overtime > 0);
+}
+function syncClock(data) {
+  clearInterval(clockTimer); clockTimer = null; clockBaseElapsed = Number.isFinite(Number(data.elapsedSeconds)) ? Number(data.elapsedSeconds) : null;
+  clockSyncedAt = Date.now(); updateClock();
+  if (data.status === 'question' && !data.readOnly && clockBaseElapsed !== null) clockTimer = setInterval(updateClock, 1000);
 }
 function saveDraft() {
   if (exam.readOnly) return Promise.resolve();
@@ -62,6 +101,7 @@ function saveDraft() {
 }
 function setDraft(q, value) {
   if (submitting || exam.readOnly || exam.status !== 'question') return;
+  focusQuestion(q);
   drafts[q.id] = value;
   editVersion++;
   $('row-' + q.id).replaceWith(omrRow(q, exam.questions.indexOf(q)));
@@ -76,6 +116,28 @@ function mark(outcome, order) {
   path.setAttribute('d', MARK[outcome]); path.setAttribute('pathLength', '1');
   svg.append(path);
   return svg;
+}
+function confusionIcon() {
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('viewBox', '0 0 44 32'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('confusion-mark');
+  const eye = document.createElementNS(SVG, 'path'); eye.setAttribute('d', 'M3 16 Q12 5 22 5 Q32 5 41 16 Q32 27 22 27 Q12 27 3 16');
+  const line = document.createElementNS(SVG, 'path'); line.setAttribute('d', 'M22 1 V31'); svg.append(eye, line); return svg;
+}
+function confusionButton(q) {
+  const button = node('button', undefined, 'confusion-toggle'); button.type = 'button';
+  button.append(confusionIcon(), node('span', '헷갈렸어요'));
+  const update = confused => { button.classList.toggle('selected', confused); button.setAttribute('aria-pressed', String(confused)); };
+  update((exam.confusedIds || []).includes(q.id)); button.disabled = exam.readOnly || exam.status !== 'question';
+  button.addEventListener('click', async () => {
+    if (button.disabled) return;
+    const confused = !(exam.confusedIds || []).includes(q.id); button.disabled = true;
+    try {
+      const result = await api('/api/confusion', {examId: exam.examId, questionId: q.id, confused});
+      exam.confusedIds = result.confusedIds; update(confused);
+    } catch (e) { error(e.message); }
+    finally { button.disabled = exam.readOnly || exam.status !== 'question'; }
+  });
+  return button;
 }
 function define(list, term, text, className) { list.append(node('dt', term), node('dd', text, className)); }
 function options(q, feedback) {
@@ -96,7 +158,40 @@ function options(q, feedback) {
   });
   return list;
 }
+function orderingInput(q, index) {
+  const wrap = node('div', undefined, 'ordering-input'), help = node('p', '블록을 끌어 순서 칸에 놓거나, 블록과 칸을 차례로 눌러 주세요.', 'ordering-help');
+  const bank = node('div', undefined, 'ordering-bank'), slots = node('ol', undefined, 'ordering-slots');
+  let order = orderingValue(q).filter(item => Number.isInteger(item) && item >= 0 && item < q.blocks.length);
+  order = Array.from({length: q.blocks.length}, (_, slot) => order[slot] ?? null);
+  let selected = -1, dragging = -1;
+  const save = () => setDraft(q, JSON.stringify(order));
+  const place = (block, slot) => {
+    if (block < 0) return;
+    const oldSlot = order.indexOf(block), previous = order[slot];
+    if (oldSlot >= 0) order[oldSlot] = previous === null ? null : previous;
+    else if (previous !== null) order[slot] = null;
+    order[slot] = block; selected = dragging = -1; save(); draw();
+  };
+  const draw = () => {
+    bank.replaceChildren(...q.blocks.map((text, block) => {
+      if (order.includes(block)) return null;
+      const button = node('button', text, 'order-block' + (selected === block ? ' selected' : ''));
+      button.type = 'button'; button.draggable = true; button.addEventListener('dragstart', () => { dragging = block; });
+      button.addEventListener('click', () => { selected = selected === block ? -1 : block; draw(); }); return button;
+    }).filter(Boolean));
+    slots.replaceChildren(...order.map((block, slot) => {
+      const item = node('li', undefined, 'order-slot' + (block === null ? '' : ' filled'));
+      item.addEventListener('dragover', event => event.preventDefault()); item.addEventListener('drop', event => { event.preventDefault(); place(dragging, slot); });
+      const button = node('button', (slot + 1) + '. ' + (block === null ? '여기에 놓기' : q.blocks[block]), 'order-slot-button');
+      button.type = 'button'; button.setAttribute('aria-label', (slot + 1) + '번째 순서 칸');
+      button.addEventListener('click', () => block === null ? place(selected, slot) : (order[slot] = null, selected = -1, save(), draw()));
+      item.append(button); return item;
+    }));
+  };
+  wrap.append(help, node('p', '아직 배치하지 않은 블록', 'ordering-label'), bank, node('p', '정해진 순서', 'ordering-label'), slots); draw(); return wrap;
+}
 function answerInput(q, index) {
+  if (q.responseFormat === 'ordering') return orderingInput(q, index);
   const input = node(q.type === 'short' ? 'input' : 'textarea', undefined, q.responseFormat === 'code' ? 'code' : q.type === 'short' ? 'short' : 'essay');
   if (q.type === 'short') input.type = 'text'; else input.rows = 4;
   if (q.responseFormat === 'code') input.spellcheck = false;
@@ -109,7 +204,7 @@ function answerInput(q, index) {
 function result(q, feedback) {
   const box = node('div', undefined, 'result'), list = node('dl');
   box.append(node('p', OUTCOME[feedback.outcome] + ' ' + feedback.score + '/' + feedback.points + '점', 'outcome'));
-  if (q.responseFormat !== 'choice') define(list, '내 답', answered(q) ? drafts[q.id] : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : '');
+  if (q.responseFormat !== 'choice') define(list, '내 답', answered(q) ? displayAnswer(q, drafts[q.id]) : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : '');
   else if (!chosen(q)) define(list, '내 답', '답을 고르지 않았어요.');
   if (q.responseFormat !== 'choice') define(list, '모범 답안', feedback.answer, q.responseFormat === 'code' ? 'code' : '');
   define(list, '해설', feedback.explanation);
@@ -132,16 +227,18 @@ function result(q, feedback) {
 function questionItem(q, index, feedback) {
   const item = node('li', undefined, 'question'), num = node('div', String(index + 1), 'num'), body = node('div', undefined, 'body'), text = node('p', undefined, 'q-text');
   item.id = 'q-' + index;
+  item.addEventListener('pointerdown', () => focusQuestion(q)); item.addEventListener('focusin', () => focusQuestion(q));
   if (feedback) num.append(mark(feedback.outcome, index));
   if (q.responseFormat !== 'choice') text.append(node('span', '[' + q.typeLabel + ']', 'kind'), ' ');
   text.append(q.question, ' ', node('span', '[' + q.points + '점]', 'points'));
-  body.append(text);
+  if (Number.isFinite(Number(exam.questionTimes?.[q.id]))) text.append(' ', node('span', '[풀이 ' + formatDuration(exam.questionTimes[q.id]) + ']', 'question-time'));
+  const head = node('div', undefined, 'question-head'); head.append(text, confusionButton(q)); body.append(head);
   if (q.code) { const pre = node('pre', q.code); if (q.language) pre.dataset.language = q.language; body.append(pre); }
   if (q.responseFormat === 'choice') body.append(options(q, feedback));
   else if (exam.status === 'question' && !exam.readOnly) body.append(answerInput(q, index));
   if (feedback) body.append(result(q, feedback));
   else if (exam.status !== 'question' || exam.readOnly) {
-    if (q.responseFormat !== 'choice') { const list = node('dl'); define(list, '내 답', answered(q) ? drafts[q.id] : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : ''); body.append(list); }
+    if (q.responseFormat !== 'choice') { const list = node('dl'); define(list, '내 답', answered(q) ? displayAnswer(q, drafts[q.id]) : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : ''); body.append(list); }
     body.append(node('p', exam.readOnly ? '당시 저장된 답안이에요.' : '채점을 기다리고 있어요.', 'pending'));
   }
   item.append(num, body);
@@ -151,6 +248,7 @@ function omrRow(q, index, feedback) {
   const row = node('li', undefined, 'omr-row'), link = node('a', String(index + 1), 'omr-num'), answering = exam.status === 'question' && !exam.readOnly;
   row.id = 'row-' + q.id;
   link.href = '#q-' + index; link.id = 'jump-' + index; link.setAttribute('aria-label', (index + 1) + '번 문항으로 이동');
+  link.addEventListener('click', () => focusQuestion(q));
   row.append(link);
   if (q.responseFormat === 'choice') {
     // The paper's radio buttons are the accessible control; these bubbles mirror them.
@@ -173,7 +271,7 @@ function omrRow(q, index, feedback) {
   return row;
 }
 function render(data) {
-  exam = data; revision = data.revision;
+  exam = data; exam.confusedIds = data.confusedIds || []; revision = data.revision;
   drafts = Object.fromEntries(data.questions.map(q => [q.id, data.drafts[q.id] || '']));
   const finished = data.status === 'finished', feedback = Object.fromEntries((data.feedback || []).map(item => [item.questionId, item]));
   $('title').textContent = data.title; document.title = data.title + ' 연습 시험';
@@ -186,6 +284,8 @@ function render(data) {
   if (data.status !== 'question') $('saved').textContent = '';
   resetConfirm(); progress();
   $('notice').hidden = data.status === 'question';
+  $('sets-link').hidden = !data.collectionId;
+  syncClock(data);
   $('notice').classList.toggle('grading', data.status === 'grading');
   if (data.status === 'grading') $('notice').textContent = '답안을 잘 받았어요. Codex가 평가 기준을 확인해 채점하면 이 화면에 결과가 나타나요. 채점이 시작되지 않으면 대화에서 “시험 채점해줘”라고 말해주세요.';
   $('score').hidden = !finished; $('review').hidden = true;
@@ -232,6 +332,7 @@ async function submit() {
   $('exam').querySelectorAll('input,textarea,button').forEach(el => { el.disabled = true; });
   clearTimeout(timer); error('');
   try {
+    await focusRequest;
     await saveDraft();
     render(await api('/api/submit', {examId: exam.examId, answers: submittedAnswers, revision}));
   } catch (e) { error(e.message); $('exam').querySelectorAll('input,textarea,button').forEach(el => { el.disabled = false; }); }

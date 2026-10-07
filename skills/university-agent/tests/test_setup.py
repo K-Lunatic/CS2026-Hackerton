@@ -89,20 +89,18 @@ class SetupTests(unittest.TestCase):
             tls.assert_not_called()
 
     def test_private_console_required_and_mac_windows_commands(self):
-        with patch.object(sys, 'argv', ['setup', '--run']), patch.object(sys.stdin, 'isatty', return_value=False), redirect_stdout(io.StringIO()), patch('sys.stderr', new=io.StringIO()):
-            with self.assertRaises(SystemExit):
-                setup.main()
-        command = [sys.executable, str(ROOT / 'scripts/setup_turtleneck.py'), '--run']
-        with patch.object(sync_tls.sys, 'platform', 'darwin'), patch.dict(os.environ, {'EVERYTIME_DB': '/tmp/eta space/cache.db'}), patch.object(sync_tls.subprocess, 'run') as run, redirect_stdout(io.StringIO()):
-            sync_tls.open_connection_terminal(command)
-        self.assertIn('EVERYTIME_DB=', ' '.join(run.call_args.args[0]))
-        self.assertIn('setup_turtleneck.py', ' '.join(run.call_args.args[0]))
-        with patch.object(sync_tls.sys, 'platform', 'win32'), patch.object(sync_tls.os, 'name', 'nt'), patch.object(sync_tls.subprocess, 'CREATE_NEW_CONSOLE', 16, create=True), patch.object(sync_tls.subprocess, 'Popen') as launch, redirect_stdout(io.StringIO()):
-            sync_tls.open_connection_terminal(command)
-        launch.assert_called_once_with(command, creationflags=16)
-        with patch.object(sys, 'argv', ['setup', '--run']), patch.object(sys.stdin, 'isatty', return_value=True), patch.object(sys.stderr, 'isatty', return_value=True), patch.object(setup.os, 'name', 'nt'), patch.object(setup, 'prepare', return_value=0), patch('builtins.input', return_value='') as close:
+        with patch.object(sys, 'argv', ['setup', '--run']), patch.object(setup, 'prepare', return_value=0) as prepare, redirect_stdout(io.StringIO()):
             self.assertEqual(setup.main(), 0)
-            close.assert_called_once()
+            prepare.assert_called_once()
+        command = [sys.executable, str(ROOT / 'scripts/setup_turtleneck.py'), '--run']
+        with patch.dict(os.environ, {'EVERYTIME_DB': '/tmp/eta space/cache.db'}), patch.object(sync_tls.subprocess, 'Popen') as launch, redirect_stdout(io.StringIO()):
+            sync_tls.open_connection_terminal(command)
+        self.assertIn('setup_turtleneck.py', ' '.join(launch.call_args.args[0]))
+        with patch.object(sync_tls.os, 'name', 'nt'), patch.object(sync_tls.subprocess, 'CREATE_NO_WINDOW', 16, create=True), patch.object(sync_tls.subprocess, 'Popen') as launch, redirect_stdout(io.StringIO()):
+            sync_tls.open_connection_terminal(command)
+        self.assertEqual(launch.call_args.kwargs['creationflags'], 16)
+        with patch.object(sys, 'argv', ['setup', '--run']), patch.object(setup.os, 'name', 'nt'), patch.object(setup, 'prepare', return_value=0):
+            self.assertEqual(setup.main(), 0)
 
     def test_single_folder_install_contains_all_runners(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -1,5 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
+const API_ROOT = document.documentElement.dataset.apiRoot || '';
+const APP_ROOT = document.documentElement.dataset.appRoot || '/';
 const fragment = location.hash.slice(1);
 let savedToken = '';
 try { savedToken = sessionStorage.getItem('exam-token') || ''; } catch (_) { /* Browser privacy settings can disable storage. */ }
@@ -7,7 +9,7 @@ const token = /^[A-Za-z0-9_-]{43}$/.test(fragment) ? fragment : savedToken;
 // Tab-scoped token survives refresh, but never enters a request URL or localStorage.
 try {
   sessionStorage.setItem('exam-token', token);
-  history.replaceState(null, '', '/');
+  history.replaceState(null, '', APP_ROOT);
 } catch (_) { /* Keep the fragment for refresh when tab storage is unavailable. */ }
 const SVG = 'http://www.w3.org/2000/svg';
 const OUTCOME = {correct: '맞았어요', partial: '일부만 맞았어요', incorrect: '틀렸어요'};
@@ -27,7 +29,7 @@ function node(tag, text, className) {
 }
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
 async function api(path, data) {
-  const response = await fetch(path, {method: data ? 'POST' : 'GET', headers: {'X-Exam-Token': token, 'Content-Type': 'application/json'}, body: data ? JSON.stringify(data) : undefined});
+  const response = await fetch(API_ROOT + path, {method: data ? 'POST' : 'GET', headers: {'X-Exam-Token': token, 'Content-Type': 'application/json'}, body: data ? JSON.stringify(data) : undefined});
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '시험지 연결을 확인해주세요.');
   return result;

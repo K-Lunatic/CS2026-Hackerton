@@ -245,6 +245,18 @@ class GatewayTests(unittest.TestCase):
                                       query={'command': 'load "개인 과제"'})['body']['data'], again['body']['data'])
         self.assertIn('nextCommands', self.request('/v1/lectures', bearer=token)['body'])
 
+    def test_mobile_study_pack_link_opens_private_upload_page(self):
+        token = self.connect('alice')['access_token']
+        link = self.request('/v1/study-pack/link', 'POST', bearer=token)
+        self.assertEqual(link['status'], 200)
+        path = urlsplit(link['body']['url']).path
+        self.assertRegex(path, r'^/study/[A-Za-z0-9_-]{43}$')
+        page = self.request(path)
+        self.assertEqual(page['status'], 200)
+        self.assertIn('학습 팩 가져오기', page['body'])
+        self.assertIn('.tpack', page['body'])
+        self.assertEqual(self.request('/study/' + 'x' * 43)['status'], 404)
+
 
 if __name__ == '__main__':
     unittest.main()

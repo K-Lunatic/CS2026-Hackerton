@@ -9,7 +9,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from providers.forms import FormUnavailable, TLS_CREDENTIALS_FORM, collect_local
+from providers.forms import FormUnavailable, TLS_CREDENTIALS_FORM, collect_secure
 
 SERVICE = "university-agent/tls"
 CONFIG_PATH = Path.home() / ".university-agent" / "tls-account.json"
@@ -77,12 +77,15 @@ def _windows_unprotect(value: bytes) -> bytes:
         ctypes.windll.kernel32.LocalFree(result.pbData)
 
 
-def resolve(username: str | None = None) -> tuple[str, str]:
+def resolve(username: str | None = None, *, force_input: bool = False) -> tuple[str, str]:
+    if force_input:
+        values = collect_secure(TLS_CREDENTIALS_FORM, initial={"username": username or ""})
+        return values["username"], values["password"]
     try:
         stored_username, stored_password = load()
     except (OSError, KeyError, ValueError, subprocess.CalledProcessError):
         stored_username, stored_password = "", ""
     if stored_username and stored_password and (not username or username == stored_username):
         return username or stored_username, stored_password
-    values = collect_local(TLS_CREDENTIALS_FORM, initial={"username": username or stored_username})
+    values = collect_secure(TLS_CREDENTIALS_FORM, initial={"username": username or stored_username})
     return values["username"], values["password"]

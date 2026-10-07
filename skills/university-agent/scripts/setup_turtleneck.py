@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / 'integrations/everytime/scripts'))
 
 from providers.credentials import CONFIG_PATH
 from scripts.sync_tls import _saved_sync_state, open_connection_terminal
+from scripts.academic_watch import install_schedule, uninstall_schedule
 from everytime_cache import default_path, scope_key
 
 
@@ -88,6 +89,11 @@ def prepare(only: str | None = None) -> int:
         if not ready:
             failed = True
             print(f'{label}는 아직 준비되지 않았어요. 연결과 저장 권한을 확인해 주세요. 다른 기능은 계속 준비할게요.', flush=True)
+        elif service == 'tls' and current[service]['status'] != 'READY':
+            try:
+                print(install_schedule(), flush=True)
+            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                print(f'학교 자료는 준비됐지만 자동 확인은 아직 켜지 못했어요. {error}', flush=True)
     print('준비를 마쳤어요. 대화로 돌아와 주세요.' if not failed else
           '준비된 기능부터 쓸 수 있어요. 대화에서 아직 연결되지 않은 항목을 확인해 주세요.', flush=True)
     return int(failed)
@@ -98,14 +104,22 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--status', action='store_true', help='비밀값 없이 준비 상태만 확인')
     mode.add_argument('--run', action='store_true', help='사용자의 별도 터미널에서 직접 설정')
+    mode.add_argument('--watch-install', action='store_true', help='6시간마다 학교 자료를 확인하도록 등록')
+    mode.add_argument('--watch-uninstall', action='store_true', help='학교 자료 자동 확인 해제')
     parser.add_argument('--only', choices=('tls', 'everytime'), help='빠진 연결 하나만 준비')
     args = parser.parse_args()
+    if args.watch_install:
+        try:
+            print(install_schedule())
+            return 0
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            print(f'자동 확인을 등록하지 못했어요. {error}')
+            return 1
+    if args.watch_uninstall:
+        print(uninstall_schedule())
+        return 0
     if args.run:
-        if not sys.stdin.isatty() or not sys.stderr.isatty():
-            parser.error('--run은 별도 터미널에서만 사용할 수 있어요. 기본 명령으로 연결창을 열어주세요.')
         result = prepare(args.only)
-        if os.name == 'nt':
-            input('확인을 마쳤다면 Enter를 눌러 연결창을 닫아주세요. ')
         return result
     current = status()
     print(json.dumps(current, ensure_ascii=False))

@@ -1,7 +1,7 @@
 interface:
   display_name: "터틀넥"
-  short_description: "TLS·에타를 한 번에 연결해 과제·시간표·강의평·학습을 돕는 Skill"
+  short_description: "TLS·에타를 확인해 과제·마감·미시청 강의를 먼저 알려주는 Skill"
   icon_small: "./assets/turtleneck.png"
   icon_large: "./assets/turtleneck.png"
   brand_color: "#B8E9C4"
-  default_prompt: "Use $turtleneck to prepare TLS and Everytime together on first use, then review assignments, timetables, course reviews or study local lecture files."
+  default_prompt: "학교 자료를 준비하고, 지금 해야 할 과제·미시청 강의·공지부터 알려줘."

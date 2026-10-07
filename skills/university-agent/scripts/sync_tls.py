@@ -7,7 +7,6 @@ import argparse
 import re
 import sys
 import json
-import shlex
 import subprocess
 import hashlib
 import tempfile
@@ -174,7 +173,7 @@ def _save_sync_state(db_path: Path, user_id: str, provider: MoodleTLSProvider) -
         'course_fingerprints': json.dumps(provider.activity_fingerprints(user_id), ensure_ascii=False, sort_keys=True),
     }
     with closing(LocalDatabase(db_path)) as database:
-        database.save_sync_state(user_id, state)
+        database.merge_sync_state(user_id, state)
 
 
 def _progress(step: int, total: int, message: str) -> None:
@@ -182,20 +181,34 @@ def _progress(step: int, total: int, message: str) -> None:
 
 
 def open_connection_terminal(command: list[str] | None = None) -> None:
-    """Credentials are typed in a native terminal, never the host's captured PTY."""
+    """Start the private local flow without opening a terminal window."""
     command = command or [sys.executable, str(Path(__file__).resolve())]
-    if sys.platform == 'darwin':
-        # Terminal does not inherit the host's configured storage location.
-        env = [f'{key}={os.environ[key]}' for key in ('UNIVERSITY_AGENT_DB', 'UNIVERSITY_AGENT_USER_ID', 'TLS_BASE_URL', 'TLS_USERNAME', 'EVERYTIME_DB') if key in os.environ]
-        shell_command = shlex.join(['env', *env, *command])
-        subprocess.run(['osascript', '-e', 'tell application "Terminal"', '-e',
-                        'activate', '-e', 'do script ' + json.dumps(shell_command), '-e', 'end tell'],
-                       check=True, stdout=subprocess.DEVNULL, timeout=30)
-    elif os.name == 'nt':
-        subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    options = {'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
+    if os.name == 'nt':
+        options['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
     else:
-        raise SystemExit('이 터미널에서 직접 실행해 주세요: ' + shlex.join(command))
-    print('연결창을 열었어요. 그 창에서 로그인을 마친 뒤 이 대화로 돌아와 주세요. 아직 연결 완료는 아니에요.', flush=True)
+        options['start_new_session'] = True
+    subprocess.Popen(command, **options)
+    print('학교 연결 화면을 열었어요. 브라우저에서 입력을 마치면 안전하게 저장돼요.', flush=True)
+
+
+def _login_with_retries(base_url: str, requested_username: str | None = None) -> tuple[str, MoodleSession]:
+    """Login without ever returning the password to the caller."""
+    for attempt in range(1, 4):
+        username, password = resolve(requested_username, force_input=attempt > 1)
+        print(f"학교 로그인 확인 중이에요… ({attempt}/3)", flush=True)
+        session = MoodleSession(base_url)
+        try:
+            session.login(username, password)
+        except LoginError:
+            if attempt == 3:
+                raise
+            requested_username = username
+            print("로그인이 되지 않았어요. 아이디나 비밀번호를 다시 확인할게요.", flush=True)
+            continue
+        save(username, password)
+        return username, session
+    raise AssertionError("unreachable")
 
 
 def main() -> None:
@@ -218,19 +231,21 @@ def main() -> None:
             raise SystemExit('연결창을 자동으로 열지 못했어요. 직접 터미널에서 실행해 주세요: ' + subprocess.list2cmdline([sys.executable, str(Path(__file__).resolve())])) from exc
         return
     try:
-        username, password = resolve(os.environ.get("TLS_USERNAME"))
+        username, session = _login_with_retries(
+            os.environ.get("TLS_BASE_URL", "https://tls.kku.ac.kr"),
+            os.environ.get("TLS_USERNAME"),
+        )
     except CredentialInputRequired as error:
         raise SystemExit(str(error) + '\n연결창 열기: ' + subprocess.list2cmdline([sys.executable, str(Path(__file__).resolve()), '--connect'])) from error
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from error
     user_id = os.environ.get("UNIVERSITY_AGENT_USER_ID", username)
     db_path = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-agent" / "university.db"))
-    session = MoodleSession(os.environ.get("TLS_BASE_URL", "https://tls.kku.ac.kr"))
     file_root = db_path.parent / "files"
     cached_resources = _cached_resources(db_path, user_id, file_root)
     started = monotonic()
     try:
         print("터틀넥이 학교 자료를 살펴볼 준비를 하고 있어요…", flush=True)
-        session.login(username, password)
-        save(username, password)
         print("연결됐어요. 이제 필요한 내용만 차근차근 가져올게요.", flush=True)
         provider = MoodleTLSProvider(session)
         provider.progress = lambda message: print(message, flush=True)

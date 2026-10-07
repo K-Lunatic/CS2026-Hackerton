@@ -13,6 +13,7 @@ from features.study_materials import study_materials, attached_material
 from features.assignment_selection import normalize
 from features import study_pipeline
 from features import material_cache, analysis_records
+from features.concept_insights import build_insights
 
 PROMPT = '''역할: 제공된 수업자료로 연습문제를 만들고 채점한다.
 
@@ -1013,6 +1014,17 @@ class StudySession:
     def generation_request(self, state, failures, truncated, *, schema_only=False):
         state.update(failures=failures, truncated=truncated)
         sources = state['sources']
+        learning_focus = []
+        if not schema_only:
+            course_id = state.get('selection', {}).get('courseId')
+            if course_id and not course_id.startswith('user-'):
+                learning_focus = build_insights(
+                    self.files_root.parent,
+                    self.user,
+                    self.provider.get_resources(self.user),
+                    course_ids={course_id},
+                    limit=10,
+                )['concepts']
         if state['settings']['mode'] == 'concepts' and state['selection'].get('rebuildAnalysis') is not True:
             cached = material_cache.get(self.files_root.parent / 'cache', 'concepts', self.user,
                 material_cache.key(['concepts-v1', sources]))
@@ -1031,9 +1043,10 @@ class StudySession:
                 'answer': '읽은 자료 범위에서 준비합니다: ' + ', '.join(dict.fromkeys(s['name'] for s in sources)),
                 'failures': failures, 'truncated': truncated,
                 'sourceLocations': [{'resourceId': s['resourceId'], 'name': s['name'], 'location': s['location']} for s in sources],
-                'hostOnly': {'instruction': PROMPT + '\nstudyContext의 메모는 사용자 제공 참고 정보다. 자료 본문 인용과 분리해 사용하고, 메모 자체를 정답 근거로 인용하지 않는다.',
+                'hostOnly': {'instruction': PROMPT + '\nstudyContext의 메모는 사용자 제공 참고 정보다. 자료 본문 인용과 분리해 사용하고, 메모 자체를 정답 근거로 인용하지 않는다. learningFocus는 먼저 복습할 개념을 정하는 참고 자료이며, SOURCE의 근거가 없으면 새 사실을 만들지 않는다.',
                              'courseName': next((c['name'] for c in self.provider.get_courses(self.user) if c['id'] == state['selection'].get('courseId')), state['selection'].get('attachmentTitle', '첨부 자료')),
-                             'settings': state['settings'], 'studyContext': state.get('focusNotes', []), 'schema': contract, 'SOURCE': sources}}
+                             'settings': state['settings'], 'studyContext': state.get('focusNotes', []), 'learningFocus': learning_focus,
+                             'schema': contract, 'SOURCE': sources}}
 
     def web_event(self, state, event):
         if state.get('settings', {}).get('delivery') != 'web' or not state.get('questions'):

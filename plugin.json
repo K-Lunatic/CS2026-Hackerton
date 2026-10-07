@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "university-agent",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "터틀넥: TLS·에타 통합 설치, 과제·시간표·강의평과 수업자료 기반 학습보조",
   "author": {
     "name": "K-Lunatic"
@@ -20,12 +20,13 @@
           "Manage local assignments",
           "Read Everytime timetables and course reviews",
           "Apply explicitly approved Everytime changes",
-          "Create study materials from local course files"
+          "Create study materials from local course files",
+          "Check local academic updates and urgent study items"
         ],
         "composerIcon": "./assets/turtleneck.png",
         "logo": "./assets/turtleneck.png",
         "defaultPrompt": [
-          "이번 주 미제출 과제 알려줘",
+          "지금 먼저 해야 할 일 알려줘",
           "이 문제 절반만 풀어줘",
           "진행 상황 저장해줘",
           "이 자료로 공부해줘"

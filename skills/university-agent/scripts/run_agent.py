@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import sys
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,8 @@ from features.context import format_current_context, get_current_context
 from features.context_bookmarks import format_resume_card, get_context_bookmark, list_unfinished_context_bookmarks, save_context_bookmark
 from features.context_commands import command_template, detect_context_intent, parse_context_command, with_next_commands
 from features.study import StudySession, study_intent, event_from_text
-from features import analysis_records
+from features import analysis_records, study_pack
+from features.concept_insights import build_insights
 from features.lectures import get_lectures
 from features.guidance import academic_list_answer, guidance_request, is_status_request, usage_guide
 from features.deadlines import format_deadline
@@ -38,8 +40,19 @@ try:
     default_user_id = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))["username"]
 except (OSError, ValueError, KeyError):
     default_user_id = ""
-USER_ID = os.environ.get("UNIVERSITY_AGENT_USER_ID", default_user_id)
 DB_PATH = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-agent" / "university.db")).expanduser()
+DEVICE_ID_PATH = DB_PATH.parent / "device-id"
+
+
+def _load_device_id() -> str:
+    try:
+        value = DEVICE_ID_PATH.read_text(encoding="utf-8").strip()
+        return value if re.fullmatch(r"local-[a-f0-9]{16}", value) else ""
+    except OSError:
+        return ""
+
+
+USER_ID = os.environ.get("UNIVERSITY_AGENT_USER_ID", default_user_id or _load_device_id())
 DB: LocalDatabase | None = None
 
 
@@ -47,7 +60,7 @@ def database(*, write: bool = False) -> LocalDatabase:
     """Open the device database only when a command actually needs it."""
     global DB
     if not USER_ID:
-        raise SystemExit("아직 학교 계정이 연결되지 않았어요. 연결창 열기: python3 scripts/sync_tls.py --connect\n비밀번호는 채팅이 아닌 열린 터미널에 입력해 주세요.")
+        raise SystemExit("아직 학교 계정이 연결되지 않았어요. 먼저 터틀넥 연결 화면에서 학교 계정을 연결하거나 학습 팩을 가져와 주세요.")
     if DB is not None and write and DB.read_only:
         DB.close()
         DB = None
@@ -305,6 +318,7 @@ def ask(text: str, **options) -> dict[str, Any]:
 
 
 def main() -> None:
+    global USER_ID
     parser = argparse.ArgumentParser(description="터틀넥 local university skill")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("context")
@@ -341,6 +355,15 @@ def main() -> None:
     analysis.add_argument('--resource-id', default='')
     analysis.add_argument('--offset', type=int, default=0)
     analysis.add_argument('--limit', type=int, default=20)
+    pack = sub.add_parser('study-pack', help='분석 결과와 학습 세트를 기기 사이에서 이동')
+    pack_mode = pack.add_subparsers(dest='pack_action', required=True)
+    pack_export = pack_mode.add_parser('export', help='원본 파일과 계정 정보 없이 내보내기')
+    pack_export.add_argument('--output', type=Path, required=True)
+    pack_export.add_argument('--course', default='')
+    pack_export.add_argument('--include-notes', action='store_true')
+    pack_import = pack_mode.add_parser('import', help='학습 팩 가져오기')
+    pack_import.add_argument('--input', dest='input_path', type=Path, required=True)
+    pack_import.add_argument('--user-id', default='')
     past_exams = sub.add_parser('exam-history', help='보관된 시험 목록')
     past_exams.add_argument('--offset', type=int, default=0)
     past_exams.add_argument('--limit', type=int, default=20)
@@ -368,6 +391,9 @@ def main() -> None:
     notes_parser = sub.add_parser("study-notes", help="과목별 학습·시험 메모 조회")
     notes_parser.add_argument("--course", default="", help="과목명 또는 일부")
     notes_parser.add_argument("--lesson", default="", help="주차·차시·단원 일부")
+    insights_parser = sub.add_parser("study-insights", help="중요도와 취약도에 따른 개념 복습 자료")
+    insights_parser.add_argument("--course", default="", help="과목명 또는 일부")
+    insights_parser.add_argument("--limit", type=int, default=10)
     args = parser.parse_args()
 
     if args.command == "context":
@@ -422,6 +448,31 @@ def main() -> None:
         result = {'toolCalls': ['get_analysis_records'], 'data': analysis_records.read(
             DB_PATH.parent, USER_ID, database().get_resources(USER_ID), args.id,
             args.resource_id, args.offset, args.limit)}
+    elif args.command == 'study-pack':
+        if args.pack_action == 'export':
+            store = database()
+            courses = store.get_courses(USER_ID)
+            matches = [course for course in courses if not args.course.strip() or normalize(args.course) in normalize(course["name"])]
+            if args.course.strip() and len(matches) != 1:
+                raise SystemExit("내보낼 과목을 하나만 지정해 주세요.")
+            result = {"toolCalls": ["export_study_pack"], "data": study_pack.export_pack(
+                DB_PATH.parent, USER_ID, args.output, courses=courses, resources=store.get_resources(USER_ID),
+                course_ids={course["id"] for course in (matches if args.course.strip() else courses)},
+                include_notes=args.include_notes,
+            ), "answer": "원본 파일과 계정 정보 없이 학습 팩을 만들었어요. 다른 기기에서 가져올 수 있습니다."}
+        else:
+            user_id = USER_ID or args.user_id or f"local-{secrets.token_hex(8)}"
+            if not USER_ID:
+                DEVICE_ID_PATH.parent.mkdir(parents=True, exist_ok=True)
+                DEVICE_ID_PATH.write_text(user_id + "\n", encoding="utf-8")
+                os.chmod(DEVICE_ID_PATH, 0o600)
+                USER_ID = user_id
+            store = LocalDatabase(DB_PATH)
+            try:
+                data = study_pack.import_pack(DB_PATH.parent, USER_ID, args.input_path, database=store)
+            finally:
+                store.close()
+            result = {"toolCalls": ["import_study_pack"], "data": data, "answer": "학습 팩을 이 기기의 학습 공간에 추가했어요. 원본 파일과 학교 로그인 정보는 가져오지 않았습니다."}
     elif args.command == 'resource-file':
         store = database()
         result = original_files(store.get_courses(USER_ID), store.get_resources(USER_ID),
@@ -446,6 +497,16 @@ def main() -> None:
             selection["lessonKey"] = args.lesson
         result = StudySession(DB_PATH.parent / "study-sessions.db", USER_ID, 'context-notes',
             database(), DB_PATH.parent / "files").call({'action': 'list_context_notes', 'selection': selection})
+    elif args.command == "study-insights":
+        store = database()
+        courses = store.get_courses(USER_ID)
+        matches = [course for course in courses if not args.course.strip() or normalize(args.course) in normalize(course["name"])]
+        if args.course.strip() and len(matches) != 1:
+            raise SystemExit("복습할 과목을 하나만 지정해 주세요.")
+        course_ids = {course["id"] for course in (matches if args.course.strip() else courses)}
+        data = build_insights(DB_PATH.parent, USER_ID, store.get_resources(USER_ID), course_ids=course_ids, limit=args.limit)
+        result = {"toolCalls": ["get_concept_insights"], "data": data,
+                  "answer": "취약한 개념부터 다시 확인할 수 있는 학습 자료를 정리했어요." if data["concepts"] else "아직 풀이 기록이나 자료 분석이 없어 개념 우선순위를 정하지 못했어요."}
     elif args.command == "bookmarks":
         result = {"toolCalls": ["get_bookmarks"], "data": list_bookmarks(database(), USER_ID)}
     elif args.command == "bookmark-add":

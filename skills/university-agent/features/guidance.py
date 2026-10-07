@@ -76,6 +76,10 @@ def guidance_request(text: str) -> dict | None:
     if re.search(r'개념\s*(?:매칭|연결)|매칭판|짝\s*맞추', text):
         return {'toolCalls': [], 'needsConceptMatch': True,
                 'answer': '저장된 문제은행에서 개념과 설명을 골라 4×4 매칭판을 열어드릴게요. 끝난 뒤 헷갈린 개념은 다음 문제에서 먼저 복습합니다.'}
+    if re.search(r'(?:약한|취약|헷갈린|중요한|핵심).{0,20}(?:개념|내용)|(?:개념|내용).{0,20}(?:중요도|취약도|복습 자료|학습 자료)', text):
+        return {'toolCalls': [], 'needsConceptInsights': True,
+                'nextCommands': ['python3 scripts/run_agent.py study-insights --course "<과목명>"'],
+                'answer': '자료 분석과 지금까지의 풀이 기록을 살펴서, 중요한 개념과 먼저 복습할 개념을 나눠 학습 자료로 정리할게요.'}
     if re.search(r'(?:단계별|차근차근|기초부터|개념부터|수준에 맞춰|통달|마스터).{0,30}(?:공부|학습|문제|시험|복습)|(?:개념|기초).{0,20}(?:문제|평가).{0,20}(?:다시|높|심화)', text):
         return {'toolCalls': [], 'needsAdaptiveStudy': True,
                 'answer': '먼저 자료의 핵심 개념을 정리하고, 짧은 확인 문제부터 시작할게요. 채점 결과에 따라 헷갈린 개념과 아직 풀지 않은 유형을 다음 학습에 우선 반영하겠습니다.'}
@@ -88,13 +92,21 @@ def guidance_request(text: str) -> dict | None:
     if re.search(r'(?:지난|이전|예전|풀었던).{0,20}(?:시험|문제)', text) and re.search(r'다시\s*풀|셔플|섞|새로', text):
         return {'toolCalls': [], 'needsExamShuffle': True, 'nextCommands': ['python3 scripts/run_agent.py exam-history'],
                 'answer': '저장된 시험지 중 하나를 골라 문항 순서를 섞은 새 시험지를 열어드릴게요.'}
+    if re.search(r'학습\s*팩|분석.{0,16}(?:다른|모바일|새|이)\s*(?:기기|컴퓨터|곳).{0,12}(?:옮|보내|공유)|(?:다른|모바일|새|이)\s*(?:기기|컴퓨터).{0,12}(?:학습|분석).{0,12}(?:옮|가져|공유)', text):
+        if re.search(r'가져|받아|불러|import', text, re.I):
+            return {'toolCalls': [], 'needsStudyPackImport': True,
+                    'nextCommands': ['python3 scripts/run_agent.py study-pack import --input "<받은 .tpack 파일 경로>"'],
+                    'answer': '받은 학습 팩을 이 기기의 학습 공간에 넣을게요. .tpack 파일 경로만 알려 주세요. 원본 강의 파일과 학교 로그인 정보는 따라오지 않아요.'}
+        return {'toolCalls': [], 'needsStudyPackExport': True,
+                'nextCommands': ['python3 scripts/run_agent.py study-pack export --course "<과목명>" --output "<저장할 경로>.tpack"'],
+                'answer': '분석 결과와 학습 세트를 원본 파일 없이 하나의 학습 팩으로 묶을게요. 옮길 과목과 저장할 위치를 정하면 바로 만들 수 있어요.'}
     if re.search(r'원본.{0,20}(?:파일|자료)|(?:파일|자료).{0,20}(?:원본|다운로드|보내줘|제공)', text):
         return {'toolCalls': [], 'needsOriginalFile': True, 'nextCommands': [],
                 'answer': '요약본이 아닌 강의 원본 파일로 드릴게요. 대화에서 확인된 과목과 자료를 찾고, 여러 파일이면 골라드릴게요.'}
     if re.search(r"새로\s*고침|동기화|(?:TLS|학교|계정).{0,12}(?:연결|로그인)|(?:최신|다시).{0,8}(?:TLS|학사|제출|시청).{0,12}(?:확인|조회)", text, re.I):
         return {"toolCalls": [], "needsSync": True, "data": {"intent": "sync", "performed": False},
                 "nextCommands": ["python3 scripts/sync_tls.py --connect"],
-                "answer": "터틀넥 연결창을 열어드릴게요. 처음이라면 열린 터미널에 아이디와 비밀번호를 입력해 주세요. 비밀번호는 화면과 채팅에 표시되지 않아요."}
+                "answer": "터틀넥 연결창을 열어드릴게요. 열린 화면에서 학교 계정을 직접 입력하면 됩니다. 비밀번호는 화면과 채팅에 표시되지 않아요."}
     if re.search(r"과제\s*(?:id|아이디)|저장.{0,12}(?:방법|어떻게)|(?:어떻게|방법).{0,12}저장", text, re.I):
         return {"toolCalls": [], "needsInput": True, "data": {"intent": "find-assignment"},
                 "answer": "‘과제 진행 상황 저장해줘’라고 말하면 과제를 찾아드려요. 후보를 고른 뒤 안내된 저장 명령을 한 번 보내면 됩니다. 과제 ID는 필요 없어요."}

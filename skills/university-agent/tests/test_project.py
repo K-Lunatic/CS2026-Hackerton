@@ -478,7 +478,7 @@ class ProjectTests(ProjectTestBase):
             self.assertNotIn('fixture-password', config.read_text())
             keychain.return_value = SimpleNamespace(stdout='fixture-password\n')
             self.assertEqual(credentials.load(), ('fixture-user', 'fixture-password'))
-        with patch.object(credentials, 'CONFIG_PATH', Path(self.temp.name) / 'missing.json'), patch('sys.stdin.isatty', return_value=False):
+        with patch.object(credentials, 'CONFIG_PATH', Path(self.temp.name) / 'missing.json'), patch('sys.stdin.isatty', return_value=False), patch.object(credentials, 'collect_secure', side_effect=FormUnavailable('browser form unavailable')):
             with self.assertRaises(FormUnavailable): credentials.resolve()
 
     def test_windows_credentials_use_user_bound_protection(self):

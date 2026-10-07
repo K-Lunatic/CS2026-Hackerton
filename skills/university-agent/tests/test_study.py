@@ -6,6 +6,8 @@ import unittest
 
 from test_project import ProjectTestBase, snapshot, upsert
 from storage.local_db import LocalDatabase
+from features import analysis_records
+from features.concept_insights import build_insights
 from features.study import StudySession, study_intent, event_from_text
 
 
@@ -122,6 +124,29 @@ class StudyFlowTests(ProjectTestBase):
         other = self.session('lesson-other').call({'action': 'request', 'selection': {
             'courseId': 'course-1', 'resourceName': '1주차'}})
         self.assertEqual(other['status'], 'selecting')
+
+    def test_saved_concept_priority_is_available_to_question_generation(self):
+        source = {'resourceId': 'resource-1', 'courseId': 'course-1', 'name': '3주차 탐색',
+                  'location': '줄 1', 'quote': '이진 탐색은 정렬된 배열에서 탐색한다.'}
+        analysis_records.save(self.db_path.parent, 'fixture-user', [source], {}, 'concepts', {
+            'concepts': [{'concept': '이진 탐색', 'explanation': '정렬된 배열을 절반씩 좁혀 탐색합니다.',
+                          'evidence': [source]}]
+        })
+        self.assertEqual(build_insights(self.db_path.parent, 'fixture-user', snapshot()['resources'], course_ids={'course-1'})['concepts'][0]['concept'], '이진 탐색')
+        prepared = self.session('learning-focus').call({'action': 'request', 'selection': {'courseId': 'course-1'}})
+        self.assertIn('hostOnly', prepared, prepared)
+        self.assertEqual(prepared['hostOnly']['learningFocus'][0]['concept'], '이진 탐색')
+
+    def test_cli_exposes_saved_concept_priorities(self):
+        source = {'resourceId': 'resource-1', 'courseId': 'course-1', 'name': '3주차 탐색',
+                  'location': '줄 1', 'quote': '이진 탐색은 정렬된 배열에서 탐색한다.'}
+        analysis_records.save(self.db_path.parent, 'fixture-user', [source], {}, 'concepts', {
+            'concepts': [{'concept': '이진 탐색', 'explanation': '정렬된 배열을 절반씩 좁혀 탐색합니다.',
+                          'evidence': [source]}]
+        })
+        result = self.cli('study-insights', '--course', '자료구조')
+        self.assertEqual(result['toolCalls'], ['get_concept_insights'])
+        self.assertEqual(result['data']['concepts'][0]['concept'], '이진 탐색')
 
     def test_context_note_requires_a_real_course_and_does_not_need_conversation(self):
         self.assertEqual(event_from_text('손코딩 시험 방식 저장해줘', [])["action"], 'save_context_note')

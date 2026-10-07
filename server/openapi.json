@@ -490,6 +490,54 @@
         "x-openai-isConsequential": false
       }
     },
+    "/v1/study-pack/link": {
+      "post": {
+        "operationId": "createStudyPackUploadLink",
+        "summary": "Create a short-lived mobile upload link for a private study pack",
+        "description": "Open the returned link on the mobile device and choose a .tpack file. The pack is stored only in this gateway's private local data directory; TLS credentials and original files are not imported.",
+        "responses": {
+          "200": {
+            "description": "Mobile upload link",
+            "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}
+          }
+        },
+        "x-openai-isConsequential": false
+      }
+    },
+    "/v1/study/analysis": {
+      "get": {
+        "operationId": "getStudyAnalysis",
+        "summary": "Read imported study analysis for generating grounded practice questions",
+        "responses": {"200": {"description": "Analysis records", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}}}
+      }
+    },
+    "/v1/study/exam": {
+      "post": {
+        "operationId": "saveGeneratedStudyExam",
+        "summary": "Save AI-generated grounded questions as a mobile web exam",
+        "description": "The caller must use the returned analysis records as evidence. The server validates every citation before saving the web exam.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}},
+        "responses": {"200": {"description": "Saved exam", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}}},
+        "x-openai-isConsequential": false
+      }
+    },
+    "/v1/study/status": {
+      "post": {
+        "operationId": "getStudyStatus",
+        "summary": "Read the current mobile study session and pending grading request",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["conversation"], "properties": {"conversation": {"type": "string"}}}}}},
+        "responses": {"200": {"description": "Study status", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}}}
+      }
+    },
+    "/v1/study/grade": {
+      "post": {
+        "operationId": "gradeStudyExam",
+        "summary": "Save AI grading for the current mobile web exam",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}},
+        "responses": {"200": {"description": "Graded result", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}}},
+        "x-openai-isConsequential": false
+      }
+    },
     "/v1/disconnect": {
       "post": {
         "operationId": "disconnectAccount",

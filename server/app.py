@@ -11,6 +11,9 @@ import secrets
 import sys
 import threading
 import time
+import tempfile
+from email.parser import BytesParser
+from email.policy import default as email_default
 from datetime import datetime, timezone
 from html import escape
 from http import HTTPStatus
@@ -27,6 +30,7 @@ from features.lectures import get_lectures
 from features.assignment_selection import find_assignments, public_checkpoint, normalize, selection_command
 from features.context_bookmarks import get_context_bookmark, list_unfinished_context_bookmarks, save_context_bookmark
 from features.context_commands import parse_context_command, next_commands
+from server import study_bridge
 
 
 def digest(value):
@@ -48,7 +52,7 @@ class Gateway:
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.data_dir, 0o700)
         self.session_factory = session_factory
-        self.flows, self.codes, self.tokens, self.accounts, self.attempts = {}, {}, {}, {}, {}
+        self.flows, self.codes, self.tokens, self.accounts, self.attempts, self.study_links = {}, {}, {}, {}, {}, {}
         # ponytail: one process and in-memory OAuth; use a shared token store before multiple workers.
         self.lock = threading.RLock()
 
@@ -113,14 +117,14 @@ class Gateway:
     def __call__(self, env, start_response):
         headers = [('Cache-Control', 'no-store'), ('Referrer-Policy', 'no-referrer'),
                    ('X-Content-Type-Options', 'nosniff'), ('X-Frame-Options', 'DENY'),
-                   ('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
+                   ('Content-Security-Policy', "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")]
         try:
             status, content, kind, extra = self.route(env)
         except (ValueError, UnicodeError, json.JSONDecodeError):
             status, content, kind, extra = 400, {'error': 'invalid_request'}, 'application/json', []
         except Exception:
             status, content, kind, extra = 500, {'error': 'internal_error'}, 'application/json', []
-        payload = json.dumps(content, ensure_ascii=False).encode() if kind == 'application/json' else content.encode()
+        payload = json.dumps(content, ensure_ascii=False).encode() if kind == 'application/json' else content if isinstance(content, bytes) else content.encode()
         start_response(f'{status} {HTTPStatus(status).phrase}', headers + [('Content-Type', kind + '; charset=utf-8'), ('Content-Length', str(len(payload)))] + extra)
         return [payload]
 
@@ -132,15 +136,20 @@ class Gateway:
                 calls = ['list_context_bookmarks'] if path == '/v1/checkpoints' else []
                 data = {**data, 'nextCommands': next_commands({'toolCalls': calls, 'data': data.get('data')})}
             return status, data, 'application/json', extra or []
+        mobile = re.fullmatch(r'/study/([A-Za-z0-9_-]{43})(?:/(.*))?', path)
+        if mobile:
+            return self.mobile_study_route(env, mobile.group(1), mobile.group(2) or '')
         body = {}
         if method == 'POST':
             length = int(env.get('CONTENT_LENGTH') or 0)
-            if length < 0 or length > 16384:
+            limit = 2_000_000 if path in {'/v1/study/exam', '/v1/study/grade'} else 16384
+            if length < 0 or length > limit:
                 return reply({'error': 'request_too_large'}, 413)
             raw = env['wsgi.input'].read(length).decode()
             if env.get('CONTENT_TYPE', '').split(';')[0] == 'application/json':
                 body = json.loads(raw)
-                if not isinstance(body, dict) or (path != '/v1/checkpoint' and any(not isinstance(value, str) for value in body.values())):
+                structured = path in {'/v1/checkpoint', '/v1/study/exam', '/v1/study/grade'}
+                if not isinstance(body, dict) or (not structured and any(not isinstance(value, str) for value in body.values())):
                     raise ValueError('Expected object')
             else:
                 body = {key: values[-1] for key, values in parse_qs(raw, keep_blank_values=True).items()}
@@ -247,8 +256,30 @@ class Gateway:
             with self.lock:
                 self.tokens = {key: item for key, item in self.tokens.items() if item['user'] != user}
                 self.codes = {key: item for key, item in self.codes.items() if item['user'] != user}
+                self.study_links = {key: item for key, item in self.study_links.items() if item['user'] != user}
                 self.accounts.pop(user, None)
             return reply({'status': 'disconnected'})
+        if path == '/v1/study-pack/link' and method == 'POST':
+            ticket = self.issue(self.study_links, {'user': user}, 1800)
+            return reply({'url': self.base_url + '/study/' + ticket, 'expiresIn': 1800,
+                          'message': '모바일에서 이 링크를 열고 .tpack 파일을 선택하세요.'})
+        if path == '/v1/study/analysis' and method == 'GET':
+            return reply({'data': study_bridge.analysis_catalog(self.data_dir, self.db_path, user)})
+        if path == '/v1/study/exam' and method == 'POST':
+            conversation = body.get('conversation', '').strip()
+            if not conversation:
+                raise ValueError('대화별 세션 키가 필요합니다.')
+            return reply({'data': study_bridge.save_generated_exam(self.data_dir, self.db_path, user, conversation, body)})
+        if path == '/v1/study/status' and method == 'POST':
+            conversation = body.get('conversation', '').strip()
+            current = study_bridge.session(self.data_dir, self.db_path, user, conversation)
+            try:
+                return reply({'data': current.call({'action': 'status'})})
+            finally:
+                study_bridge.close_session(current)
+        if path == '/v1/study/grade' and method == 'POST':
+            conversation = body.get('conversation', '').strip()
+            return reply({'data': study_bridge.grade(self.data_dir, self.db_path, user, conversation, body)})
         if path in {'/v1/checkpoints', '/v1/checkpoint', '/v1/assignments/complete'}:
             if 'assignments' not in status['availableSections']:
                 return reply({'error': 'sync_pending' if status['running'] else 'sync_failed', 'sync': status}, 503, [('Retry-After', '5')])
@@ -379,6 +410,108 @@ class Gateway:
             return reply({'data': public_checkpoint(record), 'message': '진행 기록을 저장했습니다.'}, 201)
         finally:
             db.close()
+
+    @staticmethod
+    def _mobile_conversation(ticket):
+        return 'mobile-' + digest(ticket)[:32]
+
+    def mobile_study_route(self, env, ticket, tail):
+        item = self.take(self.study_links, ticket)
+        if not item:
+            return 404, '이 학습 팩 연결은 만료됐어요. ChatGPT에서 새 링크를 받아 주세요.', 'text/html', []
+        user, method = item['user'], env['REQUEST_METHOD']
+        base = '/study/' + ticket
+        if not tail or tail == 'upload':
+            if method == 'GET':
+                try:
+                    exams = study_bridge.history(self.data_dir, self.db_path, user, self._mobile_conversation(ticket)).get('exams', [])
+                except (OSError, ValueError):
+                    exams = []
+                return 200, self.mobile_portal(ticket, exams), 'text/html', []
+            if method != 'POST':
+                return 405, '지원하지 않는 요청입니다.', 'text/plain', []
+            content_type = env.get('CONTENT_TYPE', '')
+            if not content_type.startswith('multipart/form-data;'):
+                return 400, '학습 팩 파일을 선택해 주세요.', 'text/plain', []
+            length = int(env.get('CONTENT_LENGTH') or 0)
+            if length <= 0 or length > study_pack.MAX_PACK_BYTES + 1_000_000:
+                return 413, '학습 팩이 너무 커요.', 'text/plain', []
+            raw = env['wsgi.input'].read(length)
+            message = BytesParser(policy=email_default).parsebytes(
+                b'Content-Type: ' + content_type.encode() + b'\r\nMIME-Version: 1.0\r\n\r\n' + raw)
+            upload = next((part for part in message.walk()
+                           if part.get_content_disposition() == 'form-data'
+                           and part.get_param('name', header='content-disposition') == 'pack'), None)
+            if not upload or not upload.get_filename():
+                return 400, '학습 팩 파일을 선택해 주세요.', 'text/plain', []
+            root = study_bridge.root_for(self.data_dir, user)
+            descriptor, name = tempfile.mkstemp(prefix='.upload-', suffix='.tpack', dir=root)
+            try:
+                with os.fdopen(descriptor, 'wb') as target:
+                    target.write(upload.get_payload(decode=True) or b'')
+                study_bridge.import_pack(self.data_dir, self.db_path, user, Path(name))
+            finally:
+                Path(name).unlink(missing_ok=True)
+            return 303, '', 'text/html', [('Location', base)]
+        if tail == 'open' and method == 'POST':
+            length = int(env.get('CONTENT_LENGTH') or 0)
+            if length <= 0 or length > 4096:
+                return 413, '시험 선택을 확인해 주세요.', 'text/plain', []
+            fields = {key: values[-1] for key, values in parse_qs(env['wsgi.input'].read(length).decode(), keep_blank_values=True).items()}
+            exam_id = fields.get('examId', '')
+            current = study_bridge.session(self.data_dir, self.db_path, user, self._mobile_conversation(ticket))
+            try:
+                current.call({'action': 'shuffle_exam', 'examId': exam_id})
+            finally:
+                study_bridge.close_session(current)
+            return 303, '', 'text/html', [('Location', base + '/exam#' + ticket)]
+        if tail in {'exam.css', 'exam.js', 'icon.png'}:
+            return self.mobile_exam_route(env, ticket, tail)
+        if tail == 'exam' or tail.startswith('exam/'):
+            return self.mobile_exam_route(env, ticket, tail[5:])
+        return 404, '화면을 찾을 수 없어요.', 'text/plain', []
+
+    @staticmethod
+    def mobile_portal(ticket, exams):
+        rows = ''.join(
+            f'<li><strong>{escape(item["title"])}</strong> · {item["questionCount"]}문항 '
+            f'<form method="post" action="/study/{ticket}/open"><input type="hidden" name="examId" value="{escape(item["examId"])}"><button>이 문제로 새로 풀기</button></form></li>'
+            for item in exams)
+        return f'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>터틀넥 학습 팩</title><style>body{{font:16px system-ui;max-width:720px;margin:32px auto;padding:20px;background:#e4eee8;color:#1b1d22}}main{{background:#fcfdfb;padding:24px;border:1px solid #d3ddd7;border-radius:10px}}button{{padding:12px 16px;border:0;border-radius:6px;background:#1b1d22;color:white;font:inherit}}li{{margin:14px 0;list-style:none;border-bottom:1px solid #d3ddd7;padding-bottom:14px}}ul{{padding:0}}input{{margin:12px 0}}</style><main><h1>터틀넥 학습 팩</h1><p>이 기기에만 학습 자료와 풀이 기록을 저장해요. 원본 강의 파일과 학교 로그인 정보는 들어오지 않습니다.</p><form method="post" action="/study/{ticket}/upload" enctype="multipart/form-data"><input type="file" name="pack" accept=".tpack,application/zip" required><br><button>학습 팩 가져오기</button></form><h2>저장된 문제</h2><ul>{rows or '<li>아직 문제 세트가 없어요. 학습 팩을 먼저 가져와 주세요.</li>'}</ul></main></html>'''
+
+    def mobile_exam_route(self, env, ticket, tail):
+        if tail.startswith('api/') and not hmac.compare_digest(env.get('HTTP_X_EXAM_TOKEN', ''), ticket):
+            return 403, {'error': '시험 링크를 다시 열어주세요.'}, 'application/json', []
+        base = '/study/' + ticket + '/exam'
+        if not tail:
+            html = (ROOT / 'skills/university-agent/assets/exam.html').read_text(encoding='utf-8')
+            html = html.replace('<html lang="ko">', f'<html lang="ko" data-api-root="{base}" data-app-root="{base}">')
+            return 200, html, 'text/html', []
+        assets = {'exam.css': ('exam.css', 'text/css; charset=utf-8'), 'exam.js': ('exam.js', 'text/javascript; charset=utf-8'), 'icon.png': ('turtleneck.png', 'image/png')}
+        if tail in assets:
+            name, content_type = assets[tail]
+            return 200, (ROOT / 'skills/university-agent/assets' / name).read_bytes(), content_type, []
+        if not tail.startswith('api/'):
+            return 404, {'error': '화면을 찾을 수 없어요.'}, 'application/json', []
+        conversation = self._mobile_conversation(ticket)
+        current = study_bridge.session(self.data_dir, self.db_path, self.take(self.study_links, ticket)['user'], conversation)
+        try:
+            action = {'/api/exam': 'web_status', '/api/draft': 'draft', '/api/submit': 'web_submit', '/api/confusion': 'confusion_toggle', '/api/focus': 'question_focus'}.get('/' + tail)
+            if not action:
+                return 404, {'error': '지원하지 않는 요청입니다.'}, 'application/json', []
+            if env['REQUEST_METHOD'] == 'GET':
+                return 200, current.call({'action': action}), 'application/json', []
+            length = int(env.get('CONTENT_LENGTH') or 0)
+            if length <= 0 or length > 2_000_000 or env.get('CONTENT_TYPE', '').split(';')[0] != 'application/json':
+                return 400, {'error': '답안 형식을 확인해 주세요.'}, 'application/json', []
+            data = json.loads(env['wsgi.input'].read(length).decode())
+            if not isinstance(data, dict):
+                raise ValueError('답안 형식을 확인해 주세요.')
+            return 200, current.call({**data, 'action': action}), 'application/json', []
+        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            return 409, {'error': str(exc)}, 'application/json', []
+        finally:
+            study_bridge.close_session(current)
 
     @staticmethod
     def login_form(ticket, error=''):

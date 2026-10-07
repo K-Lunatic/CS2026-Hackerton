@@ -94,6 +94,12 @@ class LocalDatabase:
                 "INSERT INTO sync_state(user_id, state_key, state_value, updated_at) VALUES (?, ?, ?, ?)",
                 [(user_id, key, value, now) for key, value in state.items()])
 
+    def merge_sync_state(self, user_id: str, state: dict[str, str]) -> None:
+        """Update one sync feature without erasing another feature's state."""
+        merged = self.get_sync_state(user_id)
+        merged.update(state)
+        self.save_sync_state(user_id, merged)
+
     def upsert_tls_snapshot(self, user_id: str, courses: list[dict[str, Any]], assignments: list[dict[str, Any]], lectures: list[dict[str, Any]], user_name: str, department: str | None, now: str | None = None, notices: list[dict[str, Any]] | None = None, resources: list[dict[str, Any]] | None = None) -> None:
         now = now or datetime.now(timezone.utc).isoformat()
         db = self.connection
@@ -153,8 +159,34 @@ class LocalDatabase:
         rows = self.connection.execute("SELECT c.* FROM courses c JOIN enrollments e ON e.course_id=c.id WHERE e.user_id=? ORDER BY c.name", (user_id,))
         return [dict(row) for row in rows]
 
+    def merge_courses_resources(self, user_id: str, courses: list[dict[str, Any]], resources: list[dict[str, Any]]) -> None:
+        """Add pack references without deleting unrelated TLS data."""
+        if self.read_only:
+            raise sqlite3.OperationalError("readonly database")
+        now = datetime.now(timezone.utc).isoformat()
+        self.connection.execute(
+            "INSERT INTO users(id, external_id, name, department, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at",
+            (user_id, user_id, user_id, None, now, now),
+        )
+        for course in courses:
+            self.connection.execute(
+                "INSERT INTO courses(id, external_id, name, professor, semester, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET name=excluded.name, professor=excluded.professor, semester=excluded.semester, updated_at=excluded.updated_at",
+                (course["id"], course.get("externalId", course["id"]), course["name"], course.get("professor"), course.get("semester"), course.get("source") or "pack", now),
+            )
+            self.connection.execute("INSERT OR IGNORE INTO enrollments(user_id, course_id) VALUES (?, ?)", (user_id, course["id"]))
+        for resource in resources:
+            self.connection.execute(
+                "INSERT INTO resources(id, external_id, course_id, title, file_name, extension, mime_type, remote_path, local_path, downloaded_at, download_status, download_reason, source, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET title=excluded.title, file_name=excluded.file_name, extension=excluded.extension, mime_type=excluded.mime_type, remote_path=excluded.remote_path, updated_at=excluded.updated_at",
+                (resource["id"], resource.get("externalId", resource["id"]), resource["courseId"], resource["title"], resource.get("fileName", resource["title"]), resource.get("extension", ""), resource.get("mimeType"), resource.get("remotePath", ""), None, None, "NOT_DOWNLOADED", resource.get("downloadReason"), resource.get("source") or "pack", now),
+            )
+        self.connection.commit()
+
     def get_assignments(self, user_id: str) -> list[dict[str, Any]]:
-        rows = self.connection.execute("SELECT a.id, a.course_id AS courseId, a.title, a.description, a.due_at AS dueAt, s.submission_status AS submissionStatus, s.submitted_at AS submittedAt, a.source FROM assignments a JOIN assignment_submissions s ON s.assignment_id=a.id AND s.user_id=? JOIN enrollments e ON e.course_id=a.course_id AND e.user_id=? ORDER BY a.due_at", (user_id, user_id))
+        rows = self.connection.execute("SELECT a.id, a.external_id AS externalId, a.course_id AS courseId, a.title, a.description, a.due_at AS dueAt, s.submission_status AS submissionStatus, s.submitted_at AS submittedAt, a.source FROM assignments a JOIN assignment_submissions s ON s.assignment_id=a.id AND s.user_id=? JOIN enrollments e ON e.course_id=a.course_id AND e.user_id=? ORDER BY a.due_at", (user_id, user_id))
         result = [dict(row) for row in rows]
         if self.connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_assignments'").fetchone():
             manual = self.connection.execute("SELECT id, course_id AS courseId, title, description, due_at AS dueAt, completed_at AS submittedAt FROM manual_assignments WHERE user_id=?", (user_id,))
@@ -200,7 +232,7 @@ class LocalDatabase:
         return cursor.rowcount > 0
 
     def get_lectures(self, user_id: str) -> list[dict[str, Any]]:
-        rows = self.connection.execute("SELECT l.id, l.course_id AS courseId, l.title, l.duration_seconds AS durationSeconds, l.available_from AS availableFrom, l.available_until AS availableUntil, p.watched_seconds AS watchedSeconds, p.watch_progress AS watchProgress, p.completed, l.source FROM lectures l JOIN lecture_progress p ON p.lecture_id=l.id AND p.user_id=? JOIN enrollments e ON e.course_id=l.course_id AND e.user_id=? ORDER BY l.title", (user_id, user_id))
+        rows = self.connection.execute("SELECT l.id, l.external_id AS externalId, l.course_id AS courseId, l.title, l.duration_seconds AS durationSeconds, l.available_from AS availableFrom, l.available_until AS availableUntil, p.watched_seconds AS watchedSeconds, p.watch_progress AS watchProgress, p.completed, l.source FROM lectures l JOIN lecture_progress p ON p.lecture_id=l.id AND p.user_id=? JOIN enrollments e ON e.course_id=l.course_id AND e.user_id=? ORDER BY l.title", (user_id, user_id))
         return [dict(row, completed=bool(row["completed"])) for row in rows]
 
     def get_todos(self, user_id: str) -> list[dict[str, Any]]:
@@ -219,7 +251,7 @@ class LocalDatabase:
         return list(courses.values())
 
     def get_notices(self, user_id: str) -> list[dict[str, Any]]:
-        rows = self.connection.execute("SELECT n.id, n.course_id AS courseId, n.title, n.content, n.published_at AS publishedAt, n.source FROM notices n JOIN enrollments e ON e.course_id=n.course_id AND e.user_id=? ORDER BY n.published_at DESC", (user_id,))
+        rows = self.connection.execute("SELECT n.id, n.external_id AS externalId, n.course_id AS courseId, n.title, n.content, n.published_at AS publishedAt, n.source FROM notices n JOIN enrollments e ON e.course_id=n.course_id AND e.user_id=? ORDER BY n.published_at DESC", (user_id,))
         return [dict(row) for row in rows]
 
     def get_resources(self, user_id: str, *, include_permissions=True) -> list[dict[str, Any]]:

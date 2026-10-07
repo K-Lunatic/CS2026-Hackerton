@@ -32,6 +32,11 @@
   학습 전용 DB에 저장한다. 과목이 확인되지 않으면 과목만 한 번 묻고, 같은 메모는 중복
   저장하지 않는다. `study-notes` 또는 `list_context_notes`로 다시 볼 수 있다.
   메모에는 `courseId`, 선택적 `lessonKey`, `examType`, 사용자 원문과 보조 태그를 둔다.
+- 사용자가 약한 개념·중요 개념·복습 자료를 요청하면 `study-insights --course "과목명"`을
+  사용한다. 파일별 분석에 저장된 개념 설명·근거와 이전 시험의 오답·부분점수·힌트 사용,
+  매칭 실패를 합쳐 중요도와 취약도를 계산한다. 결과의 `learningMaterial`과 `evidence`는
+  저장된 내용만 사용하며, 근거가 없으면 추측하지 않는다. 다음 문제 생성에는 이 결과가
+  `hostOnly.learningFocus`로 전달되지만 SOURCE를 대신하지 않는다.
 - 직접 첨부된 **로컬 파일**은 `~/.university-agent/attachments/`에 복사하고
   `selection.attachmentPath`에 그 실제 경로를 넣는다. 임의의 다른 로컬 경로는 읽지 않는다.
   `UNIVERSITY_AGENT_DB`를 바꿨다면 DB 옆 `attachments/` 폴더를 사용한다.

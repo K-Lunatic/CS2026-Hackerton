@@ -76,7 +76,7 @@ def guidance_request(text: str) -> dict | None:
     if re.search(r'개념\s*(?:매칭|연결)|매칭판|짝\s*맞추', text):
         return {'toolCalls': [], 'needsConceptMatch': True,
                 'answer': '저장된 문제은행에서 개념과 설명을 골라 4×4 매칭판을 열어드릴게요. 끝난 뒤 헷갈린 개념은 다음 문제에서 먼저 복습합니다.'}
-    if re.search(r'(?:약한|취약|헷갈린|중요한|핵심).{0,20}(?:개념|내용)|(?:개념|내용).{0,20}(?:중요도|취약도|복습 자료|학습 자료)', text):
+    if re.search(r'(?:약한|취약|헷갈린).{0,20}(?:개념|내용)|(?:개념|내용).{0,20}(?:중요도|취약도)', text):
         return {'toolCalls': [], 'needsConceptInsights': True,
                 'nextCommands': ['python3 scripts/run_agent.py study-insights --course "<과목명>"'],
                 'answer': '자료 분석과 지금까지의 풀이 기록을 살펴서, 중요한 개념과 먼저 복습할 개념을 나눠 학습 자료로 정리할게요.'}

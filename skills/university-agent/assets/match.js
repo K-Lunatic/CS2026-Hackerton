@@ -50,7 +50,9 @@ function render(data) {
   $('left-tiles').replaceChildren(...data.leftTiles.map(item => tile('left', item)));
   $('right-tiles').replaceChildren(...data.rightTiles.map(item => tile('right', item)));
   if (data.correct === true) $('notice').textContent = '잘 연결했어요. 다음 개념을 골라 보세요.';
-  if (data.correct === false) $('notice').textContent = '아직 짝이 아니에요. 개념의 뜻을 다시 떠올려 보세요.';
+  if (data.correct === false) $('notice').textContent = data.reshuffled
+    ? '아직 짝이 아니에요. 위치를 한 번 섞었어요. 다시 찾아보세요.'
+    : '아직 짝이 아니에요. 개념의 뜻을 다시 떠올려 보세요.';
   if (data.status !== 'finished') return;
   $('notice').textContent = data.answer;
   $('result').hidden = false; $('score').textContent = '정확도 ' + data.score + '% · 틀린 연결 ' + data.wrong + '회';

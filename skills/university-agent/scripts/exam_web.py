@@ -15,10 +15,10 @@ def main():
     parser = argparse.ArgumentParser(description='터틀넥 로컬 시험지')
     parser.add_argument('--conversation', required=True)
     parser.add_argument('--exam-id', help='보관한 시험을 읽기 전용으로 열기')
-    parser.add_argument('--match-source-exam-id', help='저장된 시험의 개념을 4×4 매칭으로 열기')
+    parser.add_argument('--match-source-exam-id', help='저장된 시험의 개념을 여러 쌍 매칭으로 열기')
     parser.add_argument('--sets-source-exam-id', help='저장된 시험을 여러 웹 문제 세트로 나눠 열기')
     parser.add_argument('--set-size', type=int, default=20, help='문제 세트 하나에 담을 문항 수')
-    parser.add_argument('--match-count', type=int, default=4, help=argparse.SUPPRESS)
+    parser.add_argument('--match-count', type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--no-open', action='store_true')
     parser.add_argument('--wait', type=int, metavar='SECONDS', help='제출 대기 후 AI 채점 데이터를 반환 (1~60초)')
@@ -40,7 +40,10 @@ def main():
                 time.sleep(1)
         view = 'exam'
         if args.match_source_exam_id:
-            session.call({'action': 'match_start', 'examId': args.match_source_exam_id, 'count': args.match_count})
+            event = {'action': 'match_start', 'examId': args.match_source_exam_id}
+            if args.match_count is not None:
+                event['count'] = args.match_count
+            session.call(event)
             view = 'match'
         elif args.sets_source_exam_id:
             session.call({'action': 'set_collection_start', 'examId': args.sets_source_exam_id, 'setSize': args.set_size})

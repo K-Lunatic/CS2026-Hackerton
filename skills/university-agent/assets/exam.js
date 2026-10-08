@@ -277,7 +277,7 @@ function render(data) {
   drafts = Object.fromEntries(data.questions.map(q => [q.id, data.drafts[q.id] || '']));
   const finished = data.status === 'finished', feedback = Object.fromEntries((data.feedback || []).map(item => [item.questionId, item]));
   $('title').textContent = data.title; document.title = data.title + ' 연습 시험';
-  $('total').textContent = '수업자료에서 만든 연습 시험 ' + data.questions.length + '문항, ' + data.totalPoints + '점 만점이에요. 실제 학교 시험이나 예상 기출이 아니에요.';
+  $('total').textContent = '수업자료에서 만든 연습 시험 ' + data.questions.length + '문항, 100점 만점이에요. 실제 학교 시험이나 예상 기출이 아니에요.';
   $('phase').textContent = {question: '시험 진행 중', grading: '채점 기다리는 중', finished: '채점 완료'}[data.status] || data.status;
   $('exam').classList.toggle('answering', data.status === 'question' && !data.readOnly);
   $('questions').replaceChildren(...data.questions.map((q, i) => questionItem(q, i, feedback[q.id])));
@@ -294,8 +294,8 @@ function render(data) {
   if (finished) {
     const counts = data.summary.counts;
     $('notice').textContent = '맞은 문항 ' + counts.correct + '개, 일부만 맞은 문항 ' + counts.partial + '개, 틀린 문항 ' + counts.incorrect + '개예요. 기준별 평가와 수업자료 근거를 함께 확인해보세요.';
-    $('score-got').textContent = data.summary.score; $('score-total').textContent = '/' + data.totalPoints;
-    $('score').setAttribute('aria-label', data.totalPoints + '점 만점에 ' + data.summary.score + '점');
+    $('score-got').textContent = data.summary.score; $('score-total').textContent = '/100';
+    $('score').setAttribute('aria-label', '100점 만점에 ' + data.summary.score + '점');
     $('score').style.setProperty('--i', data.questions.length);
     const seen = new Set(), items = [];
     data.summary.review.forEach(entry => {

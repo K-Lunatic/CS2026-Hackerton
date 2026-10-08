@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,26 @@ def database(*, write: bool = False) -> LocalDatabase:
             DB = None
             raise SystemExit("이 계정의 학사 정보가 아직 없어요. ‘TLS 새로고침해줘’라고 요청해 동기화한 뒤 다시 확인해 주세요.")
     return DB
+
+
+def _open_exam_web(result: dict[str, Any], conversation: str) -> dict[str, Any]:
+    """Open the required local exam UI when a study event produces a web exam."""
+    if result.get('needsWeb') is not True or not conversation or result.get('webOpened'):
+        return result
+    command = [sys.executable, str(ROOT / 'scripts' / 'exam_web.py'), '--conversation', conversation]
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   text=True, encoding='utf-8', errors='replace', bufsize=1)
+        line = process.stdout.readline().strip() if process.stdout else ''
+        payload = json.loads(line) if line else {}
+        if not isinstance(payload, dict) or not payload.get('url'):
+            raise ValueError('시험 화면 주소를 받지 못했어요.')
+        return {**result, 'webOpened': True, 'webUrl': payload['url'],
+                'answer': payload.get('answer') or '시험지가 준비됐어요. 열린 시험 화면에서 풀어 주세요.'}
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {**result, 'webOpened': False,
+                'answer': result.get('answer', '시험지가 준비됐어요.') +
+                          f' 시험 화면을 자동으로 열지 못했어요. 로컬 실행기를 다시 열어 주세요. ({exc})'}
 
 
 def _checkpoint_data(raw: str | None) -> dict[str, Any]:
@@ -310,6 +331,8 @@ def _ask(
 def ask(text: str, **options) -> dict[str, Any]:
     result = _ask(text, **options)
     conversation = options.get("conversation")
+    if result.get("toolCalls") == ["study"]:
+        result = _open_exam_web(result, conversation)
     if (conversation and result.get("toolCalls") != ["study"] and USER_ID and DB_PATH.exists()
             and (DB_PATH.parent / "study-sessions.db").exists()):
         StudySession(DB_PATH.parent / "study-sessions.db", USER_ID, conversation,
@@ -529,6 +552,7 @@ def main() -> None:
             store = database()
             result = {"toolCalls": ["study"], **StudySession(DB_PATH.parent / "study-sessions.db", USER_ID,
                 args.conversation, store, DB_PATH.parent / "files").call(event)}
+            result = _open_exam_web(result, args.conversation)
         except (ValueError, OSError) as exc:
             result = {"toolCalls": ["study"], "status": "error", "error": {"code": "STUDY_INVALID", "message": str(exc)}, "answer": str(exc)}
     if args.command not in ("ask", "study"):

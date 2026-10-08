@@ -39,7 +39,7 @@ def study_intent(text):
         return 'save_context_note'
     if re.search(r'(?:저장한|기록한|등록한).*(?:시험|출제|학습).*(?:정보|내용|메모).*(?:보여|확인|알려)|시험\s*정보.*(?:보여|확인|목록)', text):
         return 'list_context_notes'
-    if re.search(r'(문제|퀴즈).*(만들|내줘|출제|풀)|핵심\s*개념.*정리|주요\s*(?:내용|포인트).*정리|학습.*시켜', text):
+    if re.search(r'(문제|퀴즈).*(만들|내줘|출제|풀)|핵심\s*개념.*정리|주요\s*(?:내용|포인트).*정리|학습.*(?:시켜|자료|내용).*(?:만들|정리|준비|보여)?', text):
         return 'request'
     if re.search(r'공부|시험\s*준비|복습|이해했는지', text):
         return 'request'
@@ -293,11 +293,13 @@ def summary(state):
     review = [{'concept': h['concept'], 'sources': h['evidence']} for h in history if h['outcome'] != 'correct' or h['hintUsed']]
     answer = f"여기까지 {len(history)}문제를 진행했고 {remaining}문제가 남았어요." if remaining else '풀이를 마쳤어요.'
     answer += ' 아래 개념을 자료에서 다시 확인해 보세요.' if review else ' 복습이 필요한 기록은 없어요.'
+    total_points = sum(q.get('points', 10) for q in state.get('questions', []))
+    raw_score = sum(h.get('score', 0) for h in history)
     return {'status': 'finished', 'results': history,
             'counts': {label: sum(h['outcome'] == label for h in history) for label in ('correct', 'incorrect', 'partial', 'skipped', 'revealed')},
             'selfCorrect': sum(h['outcome'] == 'correct' and not h['hintUsed'] for h in history),
-            'score': round(sum(h.get('score', 0) for h in history), 2),
-            'totalPoints': sum(q.get('points', 10) for q in state.get('questions', [])),
+            'score': round(raw_score / total_points * 100, 2) if total_points else 0,
+            'totalPoints': 100,
             'remaining': remaining, 'review': review, 'answer': answer}
 
 
@@ -411,7 +413,10 @@ class StudySession:
             return
         saved = {k: v for k, v in state.items() if k != 'pipeline'}
         title = ' / '.join(dict.fromkeys(s['name'] for s in state.get('sources', [])))
-        score = sum(h.get('score', 0) for h in state.get('history', [])) if state['phase'] == 'finished' else None
+        questions = state.get('questions', [])
+        total_points = sum(q.get('points', 10) for q in questions)
+        raw_score = sum(h.get('score', 0) for h in state.get('history', []))
+        score = round(raw_score / total_points * 100, 2) if state['phase'] == 'finished' and total_points else 0 if state['phase'] == 'finished' else None
         db.execute('INSERT INTO study_exams VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user,exam_id) DO UPDATE SET phase=excluded.phase,score=excluded.score,state=excluded.state WHERE study_exams.state != excluded.state',
             (self.user, state['examId'], conversation or self.conversation, datetime.now(timezone.utc).isoformat(),
              title, len(state['questions']), state['phase'], score, json.dumps(saved, ensure_ascii=False, separators=(',', ':'))))
@@ -426,9 +431,22 @@ class StudySession:
         offset, limit = event.get('offset', 0), event.get('limit', 20)
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 20:
             raise ValueError('시험 목록은 offset >= 0, limit 1~20으로 조회하세요.')
-        rows = db.execute('SELECT exam_id,created_at,title,question_count,phase,score FROM study_exams WHERE user=? ORDER BY created_at DESC,exam_id LIMIT ? OFFSET ?',
+        rows = db.execute('SELECT exam_id,created_at,title,question_count,phase,score,state FROM study_exams WHERE user=? ORDER BY created_at DESC,exam_id LIMIT ? OFFSET ?',
                           (self.user, limit + 1, offset)).fetchall()
-        return {'status': 'history', 'exams': [dict(zip(('examId', 'createdAt', 'title', 'questionCount', 'status', 'score'), row)) for row in rows[:limit]],
+        exams = []
+        for row in rows[:limit]:
+            score = row[5]
+            try:
+                saved = json.loads(row[6])
+                if row[4] == 'finished' and saved.get('questions'):
+                    questions = saved['questions']
+                    total_points = sum(q.get('points', 10) for q in questions)
+                    raw_score = sum(h.get('score', 0) for h in saved.get('history', []))
+                    score = round(raw_score / total_points * 100, 2) if total_points else 0
+            except (TypeError, ValueError, KeyError):
+                pass
+            exams.append(dict(zip(('examId', 'createdAt', 'title', 'questionCount', 'status', 'score'), row[:5] + (score,))))
+        return {'status': 'history', 'exams': exams,
                 'nextOffset': offset + limit if len(rows) > limit else None,
                 'answer': '저장해 둔 시험지를 골라 다시 보거나, 문항 순서를 섞어 새로 풀 수 있어요.'}
 
@@ -489,13 +507,15 @@ class StudySession:
     @staticmethod
     def matching_state(source, event):
         questions = source.get('questions')
-        count = event.get('count', 4)
         if not isinstance(questions, list) or not questions:
             raise ValueError('매칭할 저장된 문항이 없습니다.')
-        if type(count) is not int or not 2 <= count <= 4:
-            raise ValueError('매칭판은 2~4쌍으로 열 수 있어요.')
         candidates = [q for q in questions if str(q.get('concept') or q.get('question')).strip()
                       and str(q.get('answer') or q.get('explanation')).strip()]
+        if len(candidates) < 2:
+            raise ValueError('매칭에 사용할 개념과 설명이 충분하지 않아요.')
+        count = event.get('count', len(candidates))
+        if type(count) is not int or not 2 <= count <= 200:
+            raise ValueError('매칭판은 2~200쌍으로 열 수 있어요.')
         if len(candidates) < count:
             raise ValueError('매칭에 사용할 개념과 설명이 충분하지 않아요.')
         random.SystemRandom().shuffle(candidates)
@@ -512,11 +532,13 @@ class StudySession:
         right_order = [p['rightId'] for p in pairs]
         random.SystemRandom().shuffle(left_order)
         random.SystemRandom().shuffle(right_order)
+        if right_order == left_order and count > 1:
+            right_order[-1], right_order[-2] = right_order[-2], right_order[-1]
         return {'phase': 'matching', 'matchId': secrets.token_hex(12),
                 'sourceExamId': event.get('examId'), 'title': ' / '.join(dict.fromkeys(s['name'] for s in source.get('sources', []))) or '개념 매칭',
                 'match': {'pairs': pairs, 'leftOrder': left_order, 'rightOrder': right_order,
                           'matched': [], 'wrongPairIds': [], 'attempts': 0, 'wrong': 0,
-                          'count': count}}
+                          'count': count, 'reshuffled': False}}
 
     @staticmethod
     def matching_public(state, *, correct=None):
@@ -528,6 +550,7 @@ class StudySession:
                   'matchId': state['matchId'], 'title': state.get('title', '개념 매칭'),
                   'round': 1, 'totalRounds': 1, 'total': match['count'],
                   'matched': len(matched), 'attempts': match['attempts'], 'wrong': match['wrong'],
+                  'reshuffled': match.get('reshuffled', False),
                   'leftTiles': [{'id': pid, 'text': pairs[pid]['left'], 'matched': pairs[pid]['id'] in matched}
                                 for pid in match['leftOrder']],
                   'rightTiles': [{'id': pid, 'text': right_pairs[pid]['right'], 'matched': right_pairs[pid]['id'] in matched}
@@ -561,6 +584,10 @@ class StudySession:
             for pair_id in (left['id'], right['id']):
                 if pair_id not in match['wrongPairIds']:
                     match['wrongPairIds'].append(pair_id)
+            if not match.get('reshuffled'):
+                random.SystemRandom().shuffle(match['leftOrder'])
+                random.SystemRandom().shuffle(match['rightOrder'])
+                match['reshuffled'] = True
         if len(match['matched']) == match['count']:
             state['phase'] = 'finished'
             saved = {k: v for k, v in state.items() if k != 'match'}
@@ -1082,7 +1109,7 @@ class StudySession:
         result = {'status': state['phase'], 'examId': state['examId'], 'title': ' / '.join(dict.fromkeys(s['name'] for s in state['sources'])),
                   'questions': [{**{k: q[k] for k in ('id', 'type', 'typeLabel', 'responseFormat', 'question', 'options', 'code', 'language', 'points')}, 'blocks': q.get('blocks', [])} for q in state['questions']],
                   'drafts': state.get('drafts', {}), 'confusedIds': state.get('confusedIds', []),
-                  'totalPoints': sum(q['points'] for q in state['questions'])}
+                  'totalPoints': 100}
         result.update(self._web_clock(state))
         result['questionTimes'] = state.get('questionTimes', {})
         result['revision'] = state.get('draftRevision', 0)

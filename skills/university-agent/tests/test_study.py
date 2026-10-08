@@ -1,14 +1,17 @@
 """Offline study-flow checks. Generated text is an explicit fixture, never a real AI result."""
 from pathlib import Path
+from io import StringIO
 import json
 import sqlite3
 import unittest
+from unittest.mock import patch
 
 from test_project import ProjectTestBase, snapshot, upsert
 from storage.local_db import LocalDatabase
 from features import analysis_records
 from features.concept_insights import build_insights
 from features.study import StudySession, study_intent, event_from_text
+from scripts.run_agent import _open_exam_web
 
 
 class StudyFlowTests(ProjectTestBase):
@@ -57,6 +60,7 @@ class StudyFlowTests(ProjectTestBase):
         self.assertEqual(event_from_text('50분 시간 제한으로 문제 만들어줘', [])['settings']['timeLimitMinutes'], 50)
         self.assertEqual(study_intent('자료구조 객관식 5문제 만들어줘'), 'request')
         self.assertEqual(study_intent('자료구조 주요 내용 학습시켜줘'), 'request')
+        self.assertEqual(study_intent('학습 자료 만들어줘'), 'request')
         self.assertEqual(study_intent('중간고사는 손코딩일까?'), None)
         self.assertEqual(study_intent('중간고사는 손코딩이라고 하셨어'), 'save_context_note')
         self.assertIsNone(study_intent('수업자료 목록 보여줘'))
@@ -147,6 +151,16 @@ class StudyFlowTests(ProjectTestBase):
         result = self.cli('study-insights', '--course', '자료구조')
         self.assertEqual(result['toolCalls'], ['get_concept_insights'])
         self.assertEqual(result['data']['concepts'][0]['concept'], '이진 탐색')
+
+    def test_web_exam_is_opened_instead_of_returning_plain_questions(self):
+        class Process:
+            stdout = StringIO('{"url":"http://127.0.0.1:4321/#token", "answer":"시험지가 준비됐어요."}\n')
+
+        with patch('scripts.run_agent.subprocess.Popen', return_value=Process()) as launch:
+            result = _open_exam_web({'needsWeb': True, 'answer': '시험지가 저장됐어요.'}, 'web-chat')
+        self.assertTrue(result['webOpened'])
+        self.assertEqual(result['webUrl'], 'http://127.0.0.1:4321/#token')
+        launch.assert_called_once()
 
     def test_context_note_requires_a_real_course_and_does_not_need_conversation(self):
         self.assertEqual(event_from_text('손코딩 시험 방식 저장해줘', [])["action"], 'save_context_note')

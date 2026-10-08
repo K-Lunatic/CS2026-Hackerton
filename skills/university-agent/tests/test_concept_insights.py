@@ -49,6 +49,8 @@ class ConceptInsightTests(unittest.TestCase):
         result = guidance_request("약한 개념을 먼저 복습할 학습 자료 보여줘")
         self.assertTrue(result["needsConceptInsights"])
         self.assertIn("study-insights", result["nextCommands"][0])
+        self.assertIsNone(guidance_request("핵심 개념 학습시켜줘"))
+        self.assertIsNone(guidance_request("학습 자료 만들어줘"))
 
 
 if __name__ == "__main__":

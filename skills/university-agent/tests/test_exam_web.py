@@ -1,5 +1,6 @@
 """Saved exam -> HTTP answers -> host-AI rubric -> HTTP results, no live account."""
 import json
+import sqlite3
 import threading
 import socket
 import queue
@@ -91,9 +92,11 @@ class ExamWebTests(ProjectTestBase):
         with self.assertRaises(ValueError):
             s.call({'action': 'grade_batch', 'gradeId': 'stale', 'grades': grades})
         result = s.call({'action': 'grade_batch', 'gradeId': pending['gradeId'], 'grades': grades})
-        self.assertEqual(result['summary']['score'], 30)
+        self.assertEqual(result['summary']['score'], 50)
+        self.assertEqual(result['summary']['totalPoints'], 100)
         finished = s.call({'action': 'web_status'})
-        self.assertEqual(finished['summary']['score'], 30)
+        self.assertEqual(finished['summary']['score'], 50)
+        self.assertEqual(finished['totalPoints'], 100)
         self.assertEqual(len(finished['feedback']), 6)
         self.assertIn('answer', finished['feedback'][0])
         with self.assertRaises(ValueError): s.call({'action': 'web_submit', 'examId': draft['examId'], 'revision': 1, 'answers': answers})
@@ -120,6 +123,15 @@ class ExamWebTests(ProjectTestBase):
         grades[-1]['criteria'][0]['met'] = False
         result = s.call({'action': 'grade_batch', 'gradeId': pending['gradeId'], 'grades': grades})
         self.assertEqual(result['summary']['score'], 0)
+        self.assertEqual(result['summary']['totalPoints'], 100)
+
+    def test_overall_score_is_normalized_when_question_points_change(self):
+        from features.study import summary
+        result = summary({'questions': [{'points': 10}, {'points': 30}], 'history': [
+            {'score': 5, 'outcome': 'partial', 'hintUsed': False, 'concept': 'A', 'evidence': []},
+            {'score': 30, 'outcome': 'correct', 'hintUsed': False, 'concept': 'B', 'evidence': []}]})
+        self.assertEqual(result['score'], 87.5)
+        self.assertEqual(result['totalPoints'], 100)
 
     def test_ordering_question_preserves_blocks_and_accepts_numbered_order(self):
         s = self.session('ordering')
@@ -279,9 +291,17 @@ class ExamWebTests(ProjectTestBase):
         original = s.call({'action': 'web_status'})
         started = s.call({'action': 'match_start', 'examId': original['examId']})
         self.assertEqual(started['status'], 'matching')
-        self.assertEqual(len(started['leftTiles']), 4)
-        self.assertEqual(len(started['rightTiles']), 4)
+        self.assertEqual(len(started['leftTiles']), 6)
+        self.assertEqual(len(started['rightTiles']), 6)
+        self.assertNotEqual([item['id'] for item in started['leftTiles']], [item['id'] for item in started['rightTiles']])
         board = started
+        with sqlite3.connect(s.path) as db:
+            saved = json.loads(db.execute('SELECT state FROM study_sessions WHERE conversation=?', ('exam',)).fetchone()[0])
+        wrong_left, wrong_right = saved['match']['pairs'][0]['leftId'], saved['match']['pairs'][1]['rightId']
+        board = s.call({'action': 'match_pick', 'matchId': board['matchId'],
+                        'leftId': wrong_left, 'rightId': wrong_right})
+        self.assertFalse(board['correct'])
+        self.assertTrue(board['reshuffled'])
         while board['status'] != 'finished':
             unmatched_left = [item for item in board['leftTiles'] if not item['matched']]
             unmatched_right = [item for item in board['rightTiles'] if not item['matched']]
@@ -293,7 +313,7 @@ class ExamWebTests(ProjectTestBase):
                         break
                 if board['status'] == 'finished' or board.get('correct'):
                     break
-        self.assertEqual(board['matched'], 4)
+        self.assertEqual(board['matched'], 6)
         self.assertIn('score', board)
         original_view = StudySession(s.path, s.user, 'match-source-review', s.provider, s.files_root, exam_id=original['examId'])
         self.assertTrue(original_view.call({'action': 'web_status'})['readOnly'])
@@ -311,6 +331,13 @@ class ExamWebTests(ProjectTestBase):
             self.assertIn('개념 매칭', response.read().decode('utf-8'))
         with urlopen(Request(base + 'api/match', headers=headers), timeout=3) as response:
             self.assertEqual(json.loads(response.read())['status'], 'matching')
+
+    def test_concept_match_uses_all_available_pairs_by_default(self):
+        from features.study import StudySession
+        source = {'questions': [{'concept': f'개념 {i}', 'answer': f'설명 {i}', 'explanation': f'설명 {i}'} for i in range(21)]}
+        state = StudySession.matching_state(source, {})
+        self.assertEqual(state['match']['count'], 21)
+        self.assertEqual(len(state['match']['pairs']), 21)
 
     def test_http_only_accepts_exam_answers_and_loopback_token(self):
         session = self.make_exam()

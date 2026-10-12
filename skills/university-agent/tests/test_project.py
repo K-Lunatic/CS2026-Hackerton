@@ -57,7 +57,9 @@ class FakeTLSSession:
     def get(self, path):
         self.requests.append(path)
         return self.pages[path]
-    def get_bytes(self, path):
+    def document_state(self, viewer):
+        return {'state_code': '100', 'file_download': '1'}
+    def get_bytes(self, path, **kwargs):
         self.byte_requests.append(path)
         if path.endswith('id=8'):
             from urllib.error import HTTPError

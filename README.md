@@ -6,11 +6,12 @@
 
 <p align="center">
   <strong>학교 자료를 모으고, 공부할 만큼 나누고, 시험처럼 풀어요.</strong><br>
-  <sub>KKU TLS와 수업자료를 연결하는 ChatGPT / Codex 대학생활 스킬</sub>
+  <sub>KKU TLS와 수업자료를 연결하는 Codex / Claude Code 대학생활 스킬</sub>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Codex-Skill-202124?style=flat-square" alt="Codex Skill">
+  <img src="https://img.shields.io/badge/Claude_Code-Skill-D97757?style=flat-square" alt="Claude Code Skill">
   <img src="https://img.shields.io/badge/macOS%20%7C%20Windows-28654D?style=flat-square" alt="macOS와 Windows">
   <img src="https://img.shields.io/badge/local%20first-28654D?style=flat-square" alt="기기 우선 저장">
   <img src="https://img.shields.io/badge/hackathon%20prototype-BC8B36?style=flat-square" alt="해커톤 프로토타입">
@@ -40,13 +41,15 @@
 | 자료는 있는데 공부가 막막할 때 | 핵심 개념을 먼저 정리하고 자료 근거 기반 문제 생성 |
 | 문제를 풀고 실력이 남지 않을 때 | 웹 시험지, 자동 저장, AI 채점, 지난 풀이와 약한 문항 기록 |
 
-> 현재 중심 사용 환경은 **데스크톱 Codex의 macOS·Windows**입니다. 모바일 기기와 자동 동기화하지 않고, 사용하는 컴퓨터 안에 자료를 보관합니다.
+> 로컬 **Codex·Claude Code의 macOS·Windows**를 대상으로 합니다. 일반 Claude 웹 채팅·클라우드 환경은 지원하지 않습니다. 모바일 기기와 자동 동기화하지 않고, 사용하는 컴퓨터 안에 자료를 보관합니다.
 
 ## 빠른 시작
 
 ### 1. 설치
 
-데스크톱 Codex가 필요합니다. 직접 스크립트를 실행할 때는 Python 3.10 이상을 사용하지만, 아래의 macOS·Windows 실행기를 더블클릭하면 Python이 있으면 재사용하고 없으면 사용자 컴퓨터에 필요한 실행 환경을 자동으로 준비합니다.
+로컬 Codex 또는 Claude Code가 필요합니다. 직접 스크립트를 실행할 때는 Python 3.10 이상을 사용하지만, 아래의 macOS·Windows 실행기를 더블클릭하면 Python이 있으면 재사용하고 없으면 사용자 컴퓨터에 필요한 실행 환경을 자동으로 준비합니다.
+
+**Codex:**
 
 ```bash
 codex plugin marketplace add K-Lunatic/CS2026-Hackerton --ref dev
@@ -58,6 +61,21 @@ codex plugin add university-agent@kku-university-agent-local
 ```text
 $turtleneck
 ```
+
+**Claude Code:** 저장소를 받아 둔 폴더에서 아래 두 명령으로 설치합니다.
+
+```bash
+claude plugin marketplace add .
+claude plugin install university-agent@kku-university-agent-local
+```
+
+새 Claude Code 대화에서 `/university-agent:turtleneck`을 호출하세요. 설치 없이 개발본을 확인하려면
+`claude --plugin-dir .`로 시작해 같은 명령을 사용합니다. 경로의 `.`은 이 저장소 루트입니다.
+저장소가 없다면 먼저 `git clone --branch dev https://github.com/K-Lunatic/CS2026-Hackerton.git`로
+받은 뒤 `CS2026-Hackerton` 폴더에서 설치합니다.
+스킬 폴더만 쓸 때는 `skills/university-agent`를 `~/.claude/skills/turtleneck`에 복사하고 `/turtleneck`을
+호출합니다. 이 경우 플러그인 자동 업데이트 대신 폴더를 다시 복사해 갱신합니다.
+[Claude 설치 규칙](https://code.claude.com/docs/en/plugin-marketplaces)과 [실행 지침](skills/university-agent/references/claude-code.md)을 참고하세요.
 
 로컬 시험 서버나 Actions 연결을 실행할 때는 `University Agent.command`(macOS) 또는 `University Agent.bat`(Windows)를 더블클릭하세요. 실행할 때 터틀넥 버전도 확인하고, 설치된 패키지에서 새 버전이 발견되면 자동으로 업데이트합니다. 개발 중인 Git 저장소는 자동으로 덮어쓰지 않습니다.
 
@@ -89,7 +107,7 @@ $turtleneck
 | 자료 학습 | “자료구조 공부 좀 해야겠다” | 핵심 개념을 먼저 익히고 다음 학습 선택 |
 | 취약 개념 복습 | “약한 개념부터 복습 자료 보여줘” | 자료 분석·풀이 기록으로 중요도와 취약도를 정해 짧은 복습 자료 제공 |
 | 시험지 | “자료구조 전체 자료로 10문제 만들어줘” | 전용 웹 시험지와 자동 저장 답안 |
-| 채점 | “시험 채점해줘” | Codex의 기준별 AI 채점과 자료 근거 피드백 |
+| 채점 | “시험 채점해줘” | 현재 Codex·Claude의 기준별 AI 채점과 자료 근거 피드백 |
 | 지난 기록 | “전에 풀었던 시험 다시 보여줘” | 당시 문제·답안·채점 결과를 읽기 전용으로 확인 |
 | 학습 팩 | “학습 자료를 다른 기기로 옮겨줘” | 분석 결과·문제 세트·풀이 기록만 묶어 이동 |
 | 에브리타임 | “내 시간표와 자료구조 강의평 보여줘” | 로컬에 저장한 시간표·선택한 강의평 조회 |
@@ -119,7 +137,7 @@ $turtleneck
                                                    ↓
 시험지 ← 저장된 후보 조합 ← 전체 범위 처리 확인
   ↓
-답안 자동 저장 → 제출 → Codex 채점 → 점수·피드백·근거 표시
+답안 자동 저장 → 제출 → 현재 AI 채점 → 점수·피드백·근거 표시
 ```
 
 자료를 한 번에 AI에 넣지 않습니다. 긴 파일은 작은 본문 조각으로 나누고, 파일별 분석이 끝난 뒤 후보 문항을 조합합니다. 변경된 파일이나 출제 조건만 다시 처리합니다. 시험지가 완성되면 실행기가 전용 웹 화면을 자동으로 열며, 채팅에 문제를 평문으로 대신 내지 않습니다.
@@ -172,7 +190,7 @@ python3 scripts/run_agent.py study-pack import --input ~/Desktop/data-structures
 
 학습 팩은 개인 학습 자료이므로 공유할 때는 파일을 받은 사람과 범위를 확인하세요. 가져온 기기에서는 원본 파일을 자동으로 내려받지 않으며, 필요한 경우 해당 파일을 직접 첨부해 모바일 분석을 요청할 수 있습니다.
 
-모바일 학습 팩 경로는 구현을 남겨 두었지만 현재 발표 범위에서는 잠정 보류합니다. 기본 흐름은 데스크톱 Codex에서 진행하며, 모바일 경로를 사용할 때만 학습 게이트웨이를 실행한 컴퓨터가 켜져 있어야 합니다.
+모바일 학습 팩 경로는 구현을 남겨 두었지만 현재 발표 범위에서는 잠정 보류합니다. 기본 흐름은 로컬 Codex·Claude Code에서 진행하며, 모바일 경로를 사용할 때만 학습 게이트웨이를 실행한 컴퓨터가 켜져 있어야 합니다.
 
 </details>
 
@@ -211,7 +229,19 @@ python3 scripts/run_agent.py study-pack import --input ~/Desktop/data-structures
 <details>
 <summary><strong>학사 자동 확인</strong></summary>
 
-학교 연결을 마치면 macOS 또는 Windows의 예약 작업으로 6시간마다 TLS의 가벼운 변경 여부를 확인합니다. 새 과제, 마감 임박 과제, 아직 끝내지 않은 영상, 새 공지가 있을 때만 터틀넥이 과목명·기한·확인된 내용·바로 가기 링크를 알려줍니다.
+학교 연결을 마치면 macOS 또는 Windows의 예약 작업으로 6시간마다 TLS의 과제·강의·공지 상태를 새로 확인합니다. 새 과제, 마감 임박 과제, 아직 끝내지 않은 영상, 새 공지가 있을 때만 터틀넥이 과목명·기한·확인된 내용·바로 가기 링크를 알려줍니다.
+
+채팅의 할 일·일일 보고는 과제와 강의만 먼저 확인합니다. 파일은 해당 자료를 요청할 때 받으며,
+최신 확인에 실패하면 이전 기록으로 추정하지 않습니다. 전체 과목별 보고 실행:
+
+```bash
+python3 scripts/academic_watch.py --daily-report
+```
+
+2026-10-12 실제 TLS에서 동기화부터 보고까지 **17.4초**를 측정했습니다(임시 DB, 파일 다운로드 없음).
+학교 응답 속도에 따라 달라질 수 있습니다. 시험 준비는 부분별 후보 과잉 생성과 반복 이력 조회를 줄이고,
+파일 읽기·후보 구성안을 Python이 담당합니다. 문제 의미·정답 검토와 채점은 현재 대화의 AI가 맡습니다.
+**20문항 전체 AI 출제를 1–2분에 끝내는지는 아직 재측정하지 않았습니다.**
 
 자동 확인은 현재 컴퓨터의 로컬 DB만 갱신합니다. 컴퓨터가 꺼져 있거나 학교 연결이 만료되면 다음 실행 때 다시 확인하며, 기기 간 동기화는 하지 않습니다. 기존 설치에서 켜거나 끄려면 다음을 사용합니다.
 
@@ -251,7 +281,7 @@ list
 <details>
 <summary><strong>ChatGPT 웹·모바일 Actions 경로</strong></summary>
 
-이 저장소에는 선택적 ChatGPT Actions 게이트웨이도 포함되어 있습니다. 현재 중심 범위는 데스크톱 Codex이며, 모바일·Actions 경로는 잠정 보류된 보조 구현입니다. 이를 사용하려면 컴퓨터에서 게이트웨이·HTTPS 터널·Custom GPT OAuth/Actions를 별도로 설정해야 합니다.
+이 저장소에는 선택적 ChatGPT Actions 게이트웨이도 포함되어 있습니다. 중심 범위는 로컬 Codex·Claude Code이며, 모바일·Actions 경로는 잠정 보류된 보조 구현입니다. 이를 사용하려면 컴퓨터에서 게이트웨이·HTTPS 터널·Custom GPT OAuth/Actions를 별도로 설정해야 합니다.
 
 Actions는 학교 정보·과제 진행 기록과 학습 팩 기반 학습 화면을 다룹니다. 모바일 학습 팩은 원본 강의 파일·비밀번호·쿠키를 포함하지 않으며, 분석 데이터와 저장된 문제만 가져옵니다. 실제 GPT 연결과 모바일 왕복은 별도 설정과 검증이 필요합니다.
 
@@ -269,6 +299,7 @@ Actions는 학교 정보·과제 진행 기록과 학습 팩 기반 학습 화�
 ```text
 .
 ├── plugin.json
+├── .claude-plugin/               Claude Code 설치 정보·마켓플레이스
 ├── assets/                       터틀넥 아이콘
 ├── skills/university-agent/
 │   ├── SKILL.md                  사용 지침
@@ -294,7 +325,10 @@ node skills/university-agent/tests/test_exam_client.js
 python3 skills/university-agent/integrations/everytime/scripts/self_check.py
 ```
 
-2026-10-07 기준 로컬 테스트 **168개 중 167개 통과·1개 건너뜀**, 게이트웨이 **11개**, 시험 화면 점검 **4개**가 통과했습니다. 선택적 `pypdf`가 없어 해당 직접 실행 검사만 건너뛰었습니다.
+2026-10-12 기준 로컬 테스트 **211개 중 210개 통과·1개 건너뜀**, 게이트웨이 **12개**, 시험 화면 점검 **4개**가 통과했습니다. 선택적 `pypdf`가 없어 해당 직접 실행 검사만 건너뛰었습니다.
+Claude Code 2.1.218에서 플러그인·마켓플레이스 엄격 검사, 로컬 설치 및 스킬 인식을 확인했습니다.
+과제 저장 지침을 조건부 문서로 분리해 호출 시 지침량 추정치를 약 9,900→7,600토큰으로 줄였습니다.
+실제 Claude 모델의 출제·채점과 Windows 실기기는 이번에 검사하지 않았습니다.
 
 상세 계약은 [스킬 사용 지침](skills/university-agent/SKILL.md), [학습·출제·채점 계약](skills/university-agent/references/study.md), [공통 데이터 모델](skills/university-agent/references/data-model.md), [TLS 제공자 계약](skills/university-agent/references/provider-contract.md)에서 확인할 수 있습니다.
 
@@ -304,7 +338,9 @@ python3 skills/university-agent/integrations/everytime/scripts/self_check.py
 codex plugin add university-agent@kku-university-agent-local
 ```
 
-설치본은 저장소의 사본이므로 업데이트 후 새 Codex 대화를 시작하세요.
+Claude Code는 `claude plugin marketplace update kku-university-agent-local` 후
+`claude plugin update university-agent@kku-university-agent-local`로 갱신합니다.
+설치본은 저장소의 사본이므로 업데이트 후 해당 앱에서 새 대화를 시작하세요.
 
 </details>
 

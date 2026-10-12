@@ -23,7 +23,7 @@ if str(ROOT) not in sys.path:
 
 from providers.moodle_provider import MoodleTLSProvider
 from providers.moodle_session import LoginError, MoodleSession
-from providers.credentials import CredentialInputRequired, resolve, save
+from providers.credentials import CredentialInputRequired, load, resolve, save
 from storage.local_db import LocalDatabase
 from features.guidance import resource_unavailable_reason
 
@@ -147,14 +147,14 @@ def _resource_needs_data(db_path: Path, user_id: str, resource_ids: list[str]) -
         if item is None:
             return True
         if item.get('downloadStatus') == 'PROHIBITED':
-            continue
+            return True
         if item.get('downloadStatus') != 'DOWNLOADED' or not item.get('localPath') or not Path(item['localPath']).is_file():
             return True
     return False
 
 
 def _preflight_changed(state: dict[str, str], result: dict, *, needs_data: bool) -> bool:
-    if needs_data:
+    if needs_data or state.get('resource_response_version') != MoodleTLSProvider.RESOURCE_RESPONSE_VERSION:
         return True
     try:
         saved_courses = json.loads(state.get('course_ids', '[]'))
@@ -171,6 +171,7 @@ def _save_sync_state(db_path: Path, user_id: str, provider: MoodleTLSProvider) -
     state = {
         'course_ids': json.dumps(sorted(course['id'] for course in provider.get_courses(user_id)), ensure_ascii=False),
         'course_fingerprints': json.dumps(provider.activity_fingerprints(user_id), ensure_ascii=False, sort_keys=True),
+        'resource_response_version': MoodleTLSProvider.RESOURCE_RESPONSE_VERSION,
     }
     with closing(LocalDatabase(db_path)) as database:
         database.merge_sync_state(user_id, state)
@@ -192,21 +193,30 @@ def open_connection_terminal(command: list[str] | None = None) -> None:
     print('학교 연결 화면을 열었어요. 브라우저에서 입력을 마치면 안전하게 저장돼요.', flush=True)
 
 
-def _login_with_retries(base_url: str, requested_username: str | None = None) -> tuple[str, MoodleSession]:
+def _login_with_retries(base_url: str, requested_username: str | None = None, *, stored_only=False) -> tuple[str, MoodleSession]:
     """Login without ever returning the password to the caller."""
-    for attempt in range(1, 4):
-        username, password = resolve(requested_username, force_input=attempt > 1)
+    for attempt in range(1, 2 if stored_only else 4):
+        if stored_only:
+            try:
+                username, password = load()
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+                raise RuntimeError('저장된 학교 연결 정보가 없어요. 학교 연결을 다시 마쳐 주세요.') from error
+            if requested_username and username != requested_username:
+                raise RuntimeError('저장된 학교 계정이 달라요. 학교 연결을 다시 확인해 주세요.')
+        else:
+            username, password = resolve(requested_username, force_input=attempt > 1)
         print(f"학교 로그인 확인 중이에요… ({attempt}/3)", flush=True)
         session = MoodleSession(base_url)
         try:
             session.login(username, password)
         except LoginError:
-            if attempt == 3:
+            if stored_only or attempt == 3:
                 raise
             requested_username = username
             print("로그인이 되지 않았어요. 아이디나 비밀번호를 다시 확인할게요.", flush=True)
             continue
-        save(username, password)
+        if not stored_only:
+            save(username, password)
         return username, session
     raise AssertionError("unreachable")
 
@@ -215,10 +225,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sync KKU TLS data into the local SQLite database")
     parser.add_argument('--connect', action='store_true', help='Open a private native terminal for account connection')
     parser.add_argument('--metadata-only', action='store_true', help='Refresh records without downloading new file contents')
+    parser.add_argument('--academic-only', action='store_true', help='Always refresh assignment/watch status using saved credentials; skip notices and files')
     parser.add_argument('--ensure', action='store_true', help='Check course activity changes first and sync only when needed')
     parser.add_argument('--full', action='store_true', help='Skip the preflight and force a complete sync')
     parser.add_argument('--resource-id', action='append', default=[], help='With --ensure, force data refresh when this resource is not local')
     args = parser.parse_args()
+    if args.academic_only and (args.ensure or args.full or args.resource_id or args.connect):
+        parser.error('--academic-only는 다른 동기화 범위나 연결 모드와 함께 사용할 수 없습니다.')
     if args.ensure and args.full:
         parser.error('--ensure와 --full은 함께 사용할 수 없습니다.')
     smart_sync = args.ensure or not args.full
@@ -234,6 +247,7 @@ def main() -> None:
         username, session = _login_with_retries(
             os.environ.get("TLS_BASE_URL", "https://tls.kku.ac.kr"),
             os.environ.get("TLS_USERNAME"),
+            stored_only=args.academic_only,
         )
     except CredentialInputRequired as error:
         raise SystemExit(str(error) + '\n연결창 열기: ' + subprocess.list2cmdline([sys.executable, str(Path(__file__).resolve()), '--connect'])) from error
@@ -242,13 +256,21 @@ def main() -> None:
     user_id = os.environ.get("UNIVERSITY_AGENT_USER_ID", username)
     db_path = Path(os.environ.get("UNIVERSITY_AGENT_DB", Path.home() / ".university-agent" / "university.db"))
     file_root = db_path.parent / "files"
-    cached_resources = _cached_resources(db_path, user_id, file_root)
     started = monotonic()
     try:
         print("터틀넥이 학교 자료를 살펴볼 준비를 하고 있어요…", flush=True)
         print("연결됐어요. 이제 필요한 내용만 차근차근 가져올게요.", flush=True)
         provider = MoodleTLSProvider(session)
         provider.progress = lambda message: print(message, flush=True)
+        if args.academic_only:
+            print('과목별 과제와 강의 상태만 새로 확인할게요. 파일은 받지 않아요.', flush=True)
+            courses, assignments, lectures = provider.get_academic_snapshot(user_id)
+            persist(db_path, user_id, username, courses, assignments=assignments, lectures=lectures)
+            with closing(LocalDatabase(db_path)) as database:
+                database.merge_sync_state(user_id, {'academic_checked_at': datetime.now(timezone.utc).isoformat()})
+            print(f'최신 상태 확인 완료 · 과제 {len(assignments)}개 · 강의 {len(lectures)}개 · {monotonic() - started:.1f}초', flush=True)
+            return
+        cached_resources = _cached_resources(db_path, user_id, file_root)
         if smart_sync:
             saved_state = _saved_sync_state(db_path, user_id)
             if saved_state:
@@ -285,6 +307,7 @@ def main() -> None:
         resources = provider.get_resources(user_id, notices=notices, existing_resources=cached_resources,
                                            progress=lambda message: print(message, flush=True),
                                            download_new_files=not args.metadata_only,
+                                           resource_ids=set(args.resource_id) if args.resource_id else None,
                                            save_file=lambda item: store_resource(file_root, item))
         reused = sum(item.get('_reused', False) for item in resources)
         print(f"자료 {len(resources)}개를 확인했어요. 기존 파일 {reused}개는 다시 받지 않았어요. · {monotonic() - stage_started:.1f}초", flush=True)

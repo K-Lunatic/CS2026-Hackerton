@@ -30,6 +30,81 @@ from test_project import FakeTLSSession
 
 
 class SyncSafetyTests(unittest.TestCase):
+    def test_academic_only_fetches_fresh_status_not_files_and_preserves_full_sync_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'school.db'
+            db = LocalDatabase(path)
+            db.upsert_tls_snapshot('u', [], [], [], 'u', None)
+            db.merge_sync_state('u', {'course_fingerprints': 'old', 'course_ids': 'old'})
+            db.close()
+            with patch.object(sys, 'argv', ['sync_tls.py', '--academic-only']), \
+                 patch.dict(os.environ, {'UNIVERSITY_AGENT_DB': str(path), 'UNIVERSITY_AGENT_USER_ID': 'u'}), \
+                 patch.object(sync_tls, 'load', return_value=('u', 'fixture')), \
+                 patch.object(sync_tls, 'resolve', side_effect=AssertionError('no form')), \
+                 patch.object(sync_tls, '_cached_resources', side_effect=AssertionError('no file scan')), \
+                 patch.object(sync_tls, 'MoodleSession', return_value=FakeTLSSession()), \
+                 patch.object(FakeTLSSession, 'login', create=True), \
+                 patch.object(MoodleTLSProvider, 'preflight', side_effect=AssertionError('must refresh status')), \
+                 patch.object(MoodleTLSProvider, 'get_resources', side_effect=AssertionError('no files')), \
+                 patch.object(MoodleTLSProvider, 'get_notices', side_effect=AssertionError('no notices')), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                sync_tls.main()
+            with contextlib.closing(LocalDatabase(path, read_only=True)) as db:
+                self.assertTrue(db.get_assignments('u'))
+                self.assertTrue(db.get_lectures('u'))
+                state = db.get_sync_state('u')
+                self.assertIn('academic_checked_at', state)
+                self.assertEqual(state['course_fingerprints'], 'old')
+
+    def test_failed_academic_snapshot_does_not_replace_previous_status_or_stamp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'school.db'
+            sync_tls.persist(path, 'u', 'u', [{'id': 'c', 'name': '기존 과목'}], assignments=[
+                {'id': 'a', 'courseId': 'c', 'title': '기존 과제', 'dueAt': None, 'submissionStatus': 'SUBMITTED'}], lectures=[])
+            with patch.object(sys, 'argv', ['sync_tls.py', '--academic-only']), \
+                 patch.dict(os.environ, {'UNIVERSITY_AGENT_DB': str(path), 'UNIVERSITY_AGENT_USER_ID': 'u'}), \
+                 patch.object(sync_tls, 'load', return_value=('u', 'fixture')), \
+                 patch.object(sync_tls, 'MoodleSession', return_value=FakeTLSSession()), \
+                 patch.object(FakeTLSSession, 'login', create=True), \
+                 patch.object(MoodleTLSProvider, 'get_lectures', side_effect=URLError('network failure')), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    sync_tls.main()
+            with contextlib.closing(LocalDatabase(path, read_only=True)) as db:
+                self.assertEqual(db.get_assignments('u')[0]['title'], '기존 과제')
+                self.assertNotIn('academic_checked_at', db.get_sync_state('u'))
+
+    def test_resource_workers_overlap_in_one_course_and_filter_downloads(self):
+        counts = {'active': 0, 'peak': 0, 'bytes': []}
+        lock = threading.Lock()
+        class Session:
+            def fork(self): return Session()
+            def get(self, path):
+                if path == '/local/ubion/user/':
+                    return '<a href="/course/view.php?id=1">과목</a>'
+                return ''.join(f'<li class="activity"><a href="/mod/resource/view.php?id={i}">자료{i}.pdf</a>'
+                    + (' 다운로드 금지' if i == 6 else '') + '</li>' for i in range(1, 7))
+            def get_bytes(self, path, **kwargs):
+                with lock:
+                    counts['active'] += 1
+                    counts['peak'] = max(counts['peak'], counts['active'])
+                    counts['bytes'].append(path)
+                time.sleep(0.02)
+                with lock:
+                    counts['active'] -= 1
+                headers = Message()
+                headers['Content-Type'] = 'application/pdf'
+                return b'%PDF-fixture', SimpleNamespace(headers=headers, geturl=lambda: 'https://tls.kku.ac.kr/file.pdf')
+        with patch.object(MoodleTLSProvider, '_resource_download_path', side_effect=lambda path, *args: (path, None)):
+            provider = MoodleTLSProvider(Session())
+            items = provider.get_resources('u')
+            self.assertTrue(1 < counts['peak'] <= 4)
+            self.assertEqual([x['id'] for x in items], [f'tls-resource-{i}' for i in range(1, 7)])
+            self.assertEqual(items[-1]['downloadStatus'], 'PROHIBITED')
+            counts['bytes'].clear()
+            provider.get_resources('u', resource_ids={'tls-resource-3'})
+            self.assertEqual(counts['bytes'], ['/mod/resource/view.php?id=3'])
+
     def test_preflight_fingerprint_reuses_unchanged_activity_lists(self):
         session = FakeTLSSession()
         provider = MoodleTLSProvider(session)
@@ -37,11 +112,19 @@ class SyncSafetyTests(unittest.TestCase):
         state = {
             'course_ids': json.dumps(first['courseIds']),
             'course_fingerprints': json.dumps(first['fingerprints']),
+            'resource_response_version': MoodleTLSProvider.RESOURCE_RESPONSE_VERSION,
         }
         self.assertFalse(sync_tls._preflight_changed(state, first, needs_data=False))
         changed = dict(first, fingerprints={**first['fingerprints'], 'tls-course-1': 'changed'})
         self.assertTrue(sync_tls._preflight_changed(state, changed, needs_data=False))
         self.assertTrue(sync_tls._preflight_changed(state, first, needs_data=True))
+        self.assertTrue(sync_tls._preflight_changed({k: v for k, v in state.items() if k != 'resource_response_version'}, first, needs_data=False))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'school.db'
+            sync_tls.persist(path, 'u', 'u', provider.get_courses('u'), resources=[{
+                'id': 'blocked', 'courseId': 'tls-course-1', 'title': '자료', 'fileName': 'note.pdf',
+                'extension': 'pdf', 'remotePath': '/mod/ubfile/view.php?id=10', 'downloadStatus': 'PROHIBITED'}])
+            self.assertTrue(sync_tls._resource_needs_data(path, 'u', ['blocked']))
 
     def permitted_fixture(self):
         session = FakeTLSSession()

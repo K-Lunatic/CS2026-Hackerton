@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gzip
+import json
 import re
 import ssl
 import sys
@@ -106,7 +107,7 @@ class MoodleSession:
     def revalidate(self, path, cached):
         headers = {name: cached[key] for name, key in
                    (('If-None-Match', 'etag'), ('If-Modified-Since', 'lastModified')) if cached.get(key)}
-        return self.get_bytes(path, conditional=headers)
+        return self.get_bytes(path, conditional=headers, allowed_origin=urlsplit(self.base_url).hostname)
 
     @staticmethod
     def _decode_bytes(payload: bytes, response: Any) -> bytes:
@@ -121,9 +122,11 @@ class MoodleSession:
     def _decode(cls, response: Any) -> str:
         return cls._decode_bytes(response.read(), response).decode("utf-8", errors="replace")
 
-    def _request(self, path: str, *, data: bytes | None = None, referer: str | None = None, allowed_origin=None) -> tuple[str, Any]:
+    def _request(self, path: str, *, data: bytes | None = None, referer: str | None = None, allowed_origin=None, page_only=False) -> tuple[str, Any]:
         url = urljoin(f"{self.base_url}/", path.lstrip("/"))
         check_download_origin(url, allowed_origin)
+        if data is None:
+            check_download_url(url)
         headers = {
             "User-Agent": "UniversityAgent/0.1",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -136,12 +139,15 @@ class MoodleSession:
         response = self.opener.open(request, timeout=30)
         try:
             check_download_origin(response.geturl(), allowed_origin)
+            if data is None:
+                check_download_url(response.geturl())
             content_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower().strip()
             # File redirects are not HTML notices. Do not transfer an entire
             # cached PDF merely to look for a download prohibition in a page.
             binary_file = content_type.startswith(('application/pdf', 'application/octet-stream',
                 'application/msword', 'application/vnd.', 'application/x-hwp', 'image/', 'video/', 'audio/'))
-            html = '' if data is None and binary_file else self._decode(response)
+            binary_file |= content_type in ('application/zip', 'application/x-zip-compressed', 'application/x-7z-compressed', 'application/x-rar-compressed')
+            html = '' if data is None and (binary_file or (page_only and content_type not in ('text/html', 'application/xhtml+xml'))) else self._decode(response)
         finally:
             response.close()
         if self.logged_in and ("/login" in urlsplit(response.geturl()).path or re.search(r'name=["\']username["\']', html, re.I)):
@@ -172,6 +178,36 @@ class MoodleSession:
             raise LoginError("Call login() before get()")
         html, response = self._request(path, allowed_origin=allowed_origin)
         return html, response.geturl()
+
+    def get_page_info(self, path: str, *, allowed_origin=None):
+        if not self.logged_in:
+            raise LoginError('Call login() before get()')
+        html, response = self._request(path, allowed_origin=allowed_origin, page_only=True)
+        return html, response.geturl(), response.headers
+
+    def document_state(self, viewer_url):
+        """The viewer's read-only status request; never start file conversion/upload."""
+        if not self.logged_in:
+            raise LoginError('Call login() before get()')
+        check_download_origin(viewer_url, 'tls.kku.ac.kr')
+        check_download_url(viewer_url)
+        parts = urlsplit(viewer_url)
+        query = parse_qs(parts.query, keep_blank_values=True)
+        if (parts.path != '/local/ubdoc/' or parts.fragment or set(query) != {'id', 'tp', 'pg'} or
+            any(len(values) != 1 for values in query.values()) or not re.fullmatch(r'[1-9][0-9]*', query['id'][0]) or
+            query['tp'] != ['m'] or query['pg'] != ['ubfile']):
+            raise ValueError('문서 상태를 확인할 주소가 올바르지 않아요.')
+        fields = {key: values[0] for key, values in query.items()}
+        html, _ = self._request('/local/ubdoc/worker.php',
+            data=urlencode({**fields, 'job': 'checkState', 'item': '', 'fid': ''}).encode(),
+            referer=viewer_url, allowed_origin='tls.kku.ac.kr')
+        try:
+            value = json.loads(html)
+        except ValueError as error:
+            raise ValueError('학교의 문서 상태 응답을 읽지 못했어요.') from error
+        if not isinstance(value, dict):
+            raise ValueError('학교의 문서 상태 응답 형식이 달라요.')
+        return {key: value.get(key) for key in ('state_code', 'file_download')}
 
     def get_bytes(self, path: str, *, conditional=None, allowed_origin=None) -> tuple[bytes | None, Any]:
         if not self.logged_in:

@@ -14,6 +14,27 @@ from features.guidance import guidance_request
 
 
 class ConceptInsightTests(unittest.TestCase):
+    def test_mixed_record_never_reveals_blocked_or_other_course_concepts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sources = [{'resourceId': f'r{i}', 'courseId': f'c{i}', 'name': f'자료{i}', 'location': 'p.1', 'quote': f'원문{i}'} for i in (1, 2)]
+            analysis_records.save(Path(temp), 'student', sources, {}, 'concepts', {'concepts': [
+                {'concept': f'개념{i}', 'explanation': f'설명{i}', 'evidence': [source]}
+                for i, source in enumerate(sources, 1)]})
+            resources = [{'id': 'r1', 'courseId': 'c1'}, {'id': 'r2', 'courseId': 'c2', 'downloadStatus': 'PROHIBITED'}]
+            for scope in (None, {'c1'}):
+                result = build_insights(temp, 'student', resources, course_ids=scope)
+                self.assertEqual([c['concept'] for c in result['concepts']], ['개념1'])
+
+    def test_own_attachment_history_remains_available_in_its_course_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = {'resourceId': 'attachment-abc', 'courseId': 'user-attachment', 'name': '첨부', 'location': 'p.1', 'quote': '연결 리스트'}
+            analysis_records.save(Path(temp), 'student', [source], {}, 'concepts', {'concepts': [
+                {'concept': '리스트', 'explanation': '첨부 자료 설명', 'evidence': [source]}]})
+            self.assertEqual(build_insights(temp, 'student', [], course_ids={'user-attachment'})['total'], 1)
+            self.assertEqual(build_insights(temp, 'student', [], course_ids={'other'})['total'], 0)
+            self.assertEqual(build_insights(temp, 'student', [], course_ids=set())['total'], 0)
+            self.assertEqual(build_insights(temp, 'other', [])['total'], 0)
+
     def test_ranks_weak_concepts_and_keeps_course_scope(self):
         resources = [
             {"id": "r1", "courseId": "c1", "name": "배열.pdf"},
@@ -44,6 +65,9 @@ class ConceptInsightTests(unittest.TestCase):
             self.assertGreater(concept["weakness"], 0)
             self.assertEqual(concept["learningMaterial"], "같은 자료형을 연속 저장합니다.")
             self.assertEqual(concept["evidence"][0]["location"], "p.1")
+            blocked = [{**item, 'downloadStatus': 'PROHIBITED'} for item in resources]
+            for scope in (None, {'c1'}):
+                self.assertEqual(build_insights(root, 'student', blocked, course_ids=scope)['total'], 0)
 
     def test_guidance_routes_to_saved_concept_material(self):
         result = guidance_request("약한 개념을 먼저 복습할 학습 자료 보여줘")

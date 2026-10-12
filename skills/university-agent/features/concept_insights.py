@@ -35,19 +35,26 @@ def _add(bucket, concept, *, importance=0, weak=0, attempts=0, explanation="", e
         }
 
 
-def _record_sources(record, allowed, course_filter):
+def _source_allowed(source, allowed, course_ids, fallback_course=None):
+    return source.get('resourceId') in allowed or (
+        str(source.get('resourceId', '')).startswith('attachment-') and
+        (course_ids is None or source.get('courseId', fallback_course) in course_ids))
+
+
+def _record_sources(record, allowed, course_ids):
     raw_sources = record.get("sources", [])
     sources = [source for source in raw_sources if isinstance(source, dict)] if isinstance(raw_sources, list) else []
-    return [source for source in sources if not course_filter or source.get("resourceId") in allowed]
+    return [source for source in sources if _source_allowed(source, allowed, course_ids)]
 
 
 def build_insights(root, user, resources, *, course_ids=None, limit=20):
     """Return compact, source-backed learning cards; never invent explanations."""
     if type(limit) is not int or not 1 <= limit <= 50:
         raise ValueError("개념 우선순위는 1~50개까지 볼 수 있어요.")
-    root, course_filter = Path(root), course_ids is not None
-    course_ids = set(course_ids or ())
-    allowed = {item["id"] for item in resources if not course_ids or item.get("courseId") in course_ids}
+    root = Path(root)
+    course_ids = set(course_ids) if course_ids is not None else None
+    allowed = {item["id"] for item in resources if item.get('downloadStatus') != 'PROHIBITED' and
+               (course_ids is None or item.get("courseId") in course_ids)}
     bucket = defaultdict(lambda: {"importanceRaw": 0, "weakRaw": 0, "attempts": 0, "explanation": "", "evidence": {}})
 
     analysis_path = root / "analysis-records.db"
@@ -56,7 +63,7 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
             rows = db.execute("SELECT value FROM analyses WHERE user=? ORDER BY created DESC, id DESC", (user,)).fetchall()
         for (encoded,) in rows:
             record = _load(encoded, {})
-            sources = _record_sources(record, allowed, course_filter)
+            sources = _record_sources(record, allowed, course_ids)
             if not sources:
                 continue
             source_ids = {source.get("resourceId") for source in sources}
@@ -67,6 +74,9 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
             for concept in concepts:
                 if not isinstance(concept, dict):
                     continue
+                refs = concept.get('evidence', [])
+                if not refs or any(not isinstance(ref, dict) or ref.get('resourceId') not in source_ids for ref in refs):
+                    continue
                 _add(bucket, concept.get("concept"), importance=3, explanation=concept.get("explanation", ""), evidence=concept.get("evidence", []))
             for unit in units:
                 if not isinstance(unit, dict):
@@ -74,11 +84,17 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
                 for concept in unit.get("learning", []):
                     if not isinstance(concept, dict):
                         continue
+                    refs = concept.get('evidence', unit.get('sources', []))
+                    if not refs or any(not isinstance(ref, dict) or ref.get('resourceId') not in source_ids for ref in refs):
+                        continue
                     _add(bucket, concept.get("concept"), importance=3, explanation=concept.get("explanation", ""), evidence=concept.get("evidence", unit.get("sources", [])))
                 questions = unit.get("questions", []) if isinstance(unit.get("questions", []), list) else []
-                for question in questions + candidates:
-                    if isinstance(question, dict) and any(ref.get("resourceId") in source_ids for ref in question.get("evidence", []) if isinstance(ref, dict)):
+                for question in questions:
+                    if isinstance(question, dict) and question.get('evidence') and all(isinstance(ref, dict) and ref.get("resourceId") in source_ids for ref in question['evidence']):
                         _add(bucket, question.get("concept"), importance=2, evidence=question.get("evidence", []))
+            for question in candidates:
+                if isinstance(question, dict) and question.get('evidence') and all(isinstance(ref, dict) and ref.get('resourceId') in source_ids for ref in question['evidence']):
+                    _add(bucket, question.get('concept'), importance=2, evidence=question['evidence'])
 
     study_path = root / "study-sessions.db"
     if study_path.exists():
@@ -89,6 +105,8 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
                 rows = db.execute(f"SELECT state FROM {table} WHERE user=?", (user,)).fetchall()
                 for (encoded,) in rows:
                     state = _load(encoded, {})
+                    selection = state.get('selection', {})
+                    course_id = selection.get('courseId') if isinstance(selection, dict) else None
                     if table == "study_exams":
                         history_values = state.get("history", []) if isinstance(state.get("history", []), list) else []
                         questions = state.get("questions", []) if isinstance(state.get("questions", []), list) else []
@@ -97,7 +115,7 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
                             if not isinstance(question, dict):
                                 continue
                             refs = question.get("evidence", [])
-                            if course_filter and not any(ref.get("resourceId") in allowed for ref in refs if isinstance(ref, dict)):
+                            if not refs or not all(isinstance(ref, dict) and _source_allowed(ref, allowed, course_ids, course_id) for ref in refs):
                                 continue
                             result = history.get(question.get("id"), {})
                             weak = {"incorrect": 2, "partial": 1.5, "skipped": 1}.get(result.get("outcome"), 0)
@@ -109,6 +127,9 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
                         pairs = match.get("pairs", []) if isinstance(match, dict) and isinstance(match.get("pairs", []), list) else []
                         for pair in pairs:
                             if not isinstance(pair, dict):
+                                continue
+                            refs = pair.get('evidence', [])
+                            if not refs or not all(isinstance(ref, dict) and _source_allowed(ref, allowed, course_ids, course_id) for ref in refs):
                                 continue
                             if pair.get("id") in wrong:
                                 _add(bucket, pair.get("concept"), weak=1, attempts=1, explanation=pair.get("explanation", ""), evidence=pair.get("evidence", []))

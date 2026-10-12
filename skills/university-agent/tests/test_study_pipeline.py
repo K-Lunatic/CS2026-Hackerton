@@ -6,6 +6,7 @@ import test_exam_web
 from test_project import ProjectTestBase, snapshot, upsert
 from storage.local_db import LocalDatabase
 from features.study_pipeline import CHUNK_CHARS
+from features.study_pipeline import load_chunks, selection_plan
 
 
 class FilePipelineTests(ProjectTestBase):
@@ -32,6 +33,69 @@ class FilePipelineTests(ProjectTestBase):
         return self.session('pipeline').call({'action': 'request',
             'selection': {'courseId': 'course-1', 'allFiles': True},
             'settings': {'count': 4, 'delivery': 'web'}})
+
+    def test_budget_and_focus_are_prepared_once_and_candidate_review_is_batched(self):
+        focus = {'concepts': [{'concept': '정렬', 'priority': 80, 'weakness': 50, 'learningMaterial': 'x' * 10000}]}
+        with patch('features.study_pipeline.build_insights', return_value=focus) as insights:
+            prepared = self.request()
+            self.assertEqual(prepared['hostOnly']['settings']['count'], 2)
+            self.assertEqual(prepared['hostOnly']['examSettings']['count'], 4)
+            self.assertNotIn('learningMaterial', prepared['hostOnly']['learningFocus'][0])
+            self.session('pipeline').call({'action': 'status'})
+            for index in range(4):
+                question = self.candidate(prepared)
+                question['question'] += f' ({index + 1})'
+                prepared = self.extract_questions(self.session('pipeline'), prepared, [question])
+            self.session('pipeline').call({'action': 'catalog'})
+            self.assertEqual(insights.call_count, 1)
+        plan = prepared['hostOnly']['selectionPlan']
+        self.assertEqual(len(plan['candidateIds']), 4)
+        self.assertTrue(plan['semanticReviewRequired'])
+        result = self.session('pipeline').call({'action': 'candidate', 'candidateIds': plan['candidateIds']})
+        self.assertEqual(len(result['hostOnly']['questions']), 4)
+        for ids in ([], ['c1'] * 2, ['missing'], ['c1'] * 6):
+            with self.assertRaises(ValueError):
+                self.session('pipeline').call({'action': 'candidate', 'candidateIds': ids})
+
+    def test_twenty_question_budget_scales_with_files_without_losing_source(self):
+        state = {'settings': {'count': 20, 'choices': 4, 'difficulty': '보통', 'types': ['auto'] * 20}, 'selection': {'courseId': 'course-1'},
+                 'pipeline': {'files': [f'r{i}' for i in range(7)], 'units': [], 'candidates': []}}
+        text = 'x' * 24000
+        load_chunks(state, {'id': 'r0', 'title': '자료', 'extension': 'pdf',
+                            'contentKey': 'test', 'sections': [{'location': 'p.1', 'text': text}]})
+        self.assertEqual(state['pipeline']['candidateTarget'], 2)
+        self.assertEqual(''.join(s['text'] for part in state['pipeline']['chunks'] for s in part), text)
+
+    def test_small_cached_bank_does_not_cap_a_larger_exam(self):
+        prepared = self.request()
+        for i in range(4):
+            q = self.candidate(prepared)
+            q['question'] += str(i)
+            prepared = self.extract_questions(self.session('pipeline'), prepared, [q])
+        reused = self.session('same-count').call({'action': 'request',
+            'selection': {'courseId': 'course-1', 'allFiles': True}, 'settings': {'count': 4}})
+        self.assertTrue(reused['needsAssembly'])
+        larger = self.session('larger-count').call({'action': 'request',
+            'selection': {'courseId': 'course-1', 'allFiles': True}, 'settings': {'count': 20}})
+        self.assertTrue(larger['needsExtraction'])
+        self.assertEqual(larger['hostOnly']['settings']['count'], 8)
+
+    def test_python_selection_balances_files_deduplicates_and_reserves_types(self):
+        state = {'settings': {'count': 2, 'types': ['auto', 'code_fix']}, 'pipeline': {
+            'units': [{'id': 'u1', 'resourceId': 'r1'}, {'id': 'u2', 'resourceId': 'r2'}],
+            'candidates': [{'id': 'c1', 'unitId': 'u1', 'type': 'code_fix', 'concept': '코드', 'question': '고치기'},
+                           {'id': 'c2', 'unitId': 'u2', 'type': 'mcq', 'concept': '정렬', 'question': '조건'},
+                           {'id': 'c3', 'unitId': 'u2', 'type': 'mcq', 'concept': '정렬', 'question': '  조건  '}]}}
+        self.assertEqual(selection_plan(state)['candidateIds'], ['c2', 'c1'])
+        state['settings'] = {'count': 3, 'types': ['auto'] * 3}
+        plan = selection_plan(state)
+        self.assertEqual(len(plan['candidateIds']), 2)
+        self.assertEqual(plan['missingCount'], 1)
+        state['settings'] = {'count': 2, 'types': ['auto'] * 2}
+        state['pipeline']['candidates'] = [
+            {'id': f'c{i}', 'unitId': 'u1', 'type': 'code_predict', 'concept': '출력',
+             'question': '다음 코드의 출력은?', 'code': f'print({i})'} for i in (1, 2)]
+        self.assertEqual(selection_plan(state)['candidateIds'], ['c1', 'c2'])
 
     def candidate(self, prepared):
         q = self.question()

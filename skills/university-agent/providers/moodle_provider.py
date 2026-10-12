@@ -10,10 +10,14 @@ from pathlib import Path
 import mimetypes
 from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlsplit
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from concurrent.futures import ThreadPoolExecutor
 
-from providers.moodle_session import MoodleSession, DownloadRestricted, check_download_url, check_download_origin
+from providers.moodle_session import MoodleSession, LoginError, DownloadRestricted, check_download_url, check_download_origin
+
+
+class ResourceUnavailable(ValueError):
+    """The current response cannot establish a usable original; not a prohibition."""
 
 
 def validate_permission(permission, user_id, resource_id):
@@ -39,6 +43,35 @@ def permitted_download_url(viewer_url):
         raise ValueError('자료의 원래 주소를 확인하지 못해 가져오지 않았어요.')
     return 'https://tls.kku.ac.kr/local/ubdoc/download.php?' + urlencode({
         'id': query['id'][0], 'tp': 'm', 'pg': 'ubfile'})
+
+
+def _file_extension(name):
+    value = Path(name).suffix.lower().lstrip('.')
+    return value if re.fullmatch(r'[a-z0-9]{1,16}', value) and value not in ('html', 'htm', 'php') else ''
+
+
+def _header_filename(headers):
+    name = headers.get_filename()
+    # Some servers put raw UTF-8 into a legacy Latin-1 HTTP header.
+    if name and 'filename*=' not in headers.get('Content-Disposition', '').lower():
+        try:
+            name = name.encode('latin1').decode('utf-8')
+        except UnicodeError:
+            pass
+    return name
+
+
+def _resource_http_error(error):
+    code = error.code
+    error.close()
+    if code == 401:
+        raise LoginError('학교 로그인이 만료되어 자료 확인을 중단했어요.')
+    reason = {403: 'TLS 서버가 파일 다운로드를 거부했습니다. 파일 내용을 가져오지 않았습니다.',
+              404: '학교에서 자료를 찾지 못했어요. 삭제되거나 주소가 바뀌었을 수 있어요.',
+              410: '학교에서 더 이상 제공하지 않는 자료예요.',
+              429: '학교에서 잠시 요청을 제한했어요. 잠시 후 다시 확인해 주세요.'}.get(code,
+              '학교가 자료 요청을 처리하지 못했어요. 잠시 후 다시 확인해 주세요.')
+    return {'downloadStatus': 'PROHIBITED' if code == 403 else 'NOT_DOWNLOADED', 'downloadReason': reason}
 
 
 class _ViewerLinks(HTMLParser):
@@ -152,6 +185,8 @@ class _ActivityParser(HTMLParser):
 
 
 class MoodleTLSProvider:
+    RESOURCE_RESPONSE_VERSION = '2'
+
     def __init__(self, session: MoodleSession, progress=None):
         self.session = session
         self.progress = progress
@@ -216,30 +251,86 @@ class MoodleTLSProvider:
         return self._activity_links[external_id]
 
     def _resource_download_path(self, href, title, notices):
-        """Resolve only a visible ubdoc viewer to its matching download URL."""
+        """Inspect response/visible navigation, independent of course or filename."""
         if "/mod/ubfile/view.php" not in urlsplit(href).path:
             return href, None
-        if hasattr(self.session, 'get_page'):
-            html, page_url = self.session.get_page(href, allowed_origin='tls.kku.ac.kr')
-        else:
-            html, page_url = self.session.get(href), href
-        restriction = _download_restriction(_plain_text(html), title, notices)
-        if restriction:
-            raise DownloadRestricted(restriction)
-        parser = _ViewerLinks()
-        parser.feed(html)
+        path, issue, _ = self._resolve_resource_page(href, title, notices)
+        return path, issue
+
+    def _resolve_resource_page(self, href, title, notices, *, permitted=False, viewer_url=None):
         origin = getattr(self.session, 'base_url', 'https://tls.kku.ac.kr').rstrip('/') + '/'
-        observed = set()
-        for link in (page_url, *parser.links):
-            try:
-                observed.add(permitted_download_url(urljoin(origin, link)))
-            except (ValueError, DownloadRestricted):
-                continue
-        if len(observed) == 1:
-            return next(iter(observed)), None
-        if not observed:
-            return None, 'TLS 자료 화면에서 원본 다운로드 주소를 확인하지 못했어요.'
-        return None, 'TLS 자료의 원본 주소가 여러 개라 자동으로 선택하지 않았어요.'
+        current = urljoin(origin, href)
+        activity_id = parse_qs(urlsplit(current).query).get('id')
+        visited = set()
+        for _ in range(4):
+            check_download_origin(current, 'tls.kku.ac.kr')
+            check_download_url(current)
+            if current in visited:
+                return None, '자료의 보기 화면이 반복되어 주소 확인을 멈췄어요.', None
+            visited.add(current)
+            headers = {}
+            if hasattr(self.session, 'get_page_info'):
+                html, page_url, headers = self.session.get_page_info(current, allowed_origin='tls.kku.ac.kr')
+            elif hasattr(self.session, 'get_page'):
+                html, page_url = self.session.get_page(current, allowed_origin='tls.kku.ac.kr')
+            else:
+                html, page_url = self.session.get(href), current
+            check_download_origin(page_url, 'tls.kku.ac.kr')
+            check_download_url(page_url)
+            restriction = _download_restriction(_plain_text(html), title, notices)
+            if restriction and not permitted:
+                raise DownloadRestricted(restriction)
+            mime = headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
+            if mime in ('application/json', 'application/xml', 'text/xml') and 'attachment' not in headers.get('Content-Disposition', '').lower() and not urlsplit(page_url).path.startswith('/pluginfile.php/'):
+                raise ResourceUnavailable('학교에서 원본 대신 문서 정보 응답을 보내 파일로 저장하지 않았어요.')
+            direct_file = (mime and mime not in ('text/html', 'application/xhtml+xml')) or (
+                not mime and not html and urlsplit(page_url).path.startswith('/pluginfile.php/'))
+            if direct_file and not permitted:
+                return page_url, None, None
+            parser = _ViewerLinks()
+            parser.feed(html)
+            observed, children = set(), set()
+            for link in (page_url, *parser.links):
+                candidate = urljoin(page_url, link)
+                try:
+                    check_download_origin(candidate, 'tls.kku.ac.kr')
+                except DownloadRestricted:
+                    continue
+                if urlsplit(candidate).path in ('/local/ubdoc/', '/mod/ubfile/viewer.php'):
+                    check_download_url(candidate)
+                try:
+                    permitted_download_url(candidate)
+                except ValueError:
+                    parts = urlsplit(candidate)
+                    query = parse_qs(parts.query, keep_blank_values=True)
+                    if parts.path == '/mod/ubfile/viewer.php' and not parts.fragment and set(query) == {'id'} and query['id'] == activity_id:
+                        children.add(candidate)
+                else:
+                    observed.add(candidate)
+            if observed:
+                chosen = viewer_url if viewer_url in observed else next(iter(observed)) if len(observed) == 1 and viewer_url is None else None
+                if chosen is None:
+                    return None, '원본 주소가 여러 개이거나 선택한 주소를 확인하지 못해 가져오지 않았어요.', None
+                if hasattr(self.session, 'document_state'):
+                    try:
+                        state = self.session.document_state(chosen)
+                    except ValueError:
+                        raise ResourceUnavailable('학교의 문서 상태 응답을 확인하지 못했어요.') from None
+                    if str(state.get('state_code')) != '100':
+                        reason = '학교에서 문서를 찾지 못했어요.' if str(state.get('state_code')) == '201' else '학교의 문서 준비·변환이 끝나지 않았거나 지원하지 않는 형식이에요.'
+                        raise ResourceUnavailable(reason)
+                    allowed = state.get('file_download')
+                    if allowed in (0, '0', False) and not permitted:
+                        raise DownloadRestricted('학교 문서 보기에서 다운로드 금지가 확인되어 파일을 가져오지 않았습니다.')
+                    if allowed not in (0, '0', False, 1, '1', True) and not permitted:
+                        raise ResourceUnavailable('학교의 다운로드 허용 여부를 확인하지 못해 가져오지 않았어요.')
+                elif not permitted:
+                    raise ResourceUnavailable('학교의 다운로드 허용 여부를 확인하지 못해 가져오지 않았어요.')
+                return permitted_download_url(chosen), None, chosen
+            if len(children) != 1 or not (hasattr(self.session, 'get_page') or hasattr(self.session, 'get_page_info')):
+                return None, 'TLS 자료 화면에서 원본 다운로드 주소를 확인하지 못했어요.', None
+            current = next(iter(children))
+        return None, '자료의 보기 화면이 너무 많아 주소 확인을 멈췄어요.', None
 
     @staticmethod
     def _activity_fingerprint(html: str) -> str:
@@ -293,6 +384,18 @@ class MoodleTLSProvider:
                 status = "SUBMITTED" if "제출 완료" in text else "NOT_SUBMITTED" if re.search(r"제출 (?:안 함|하지 않음|되지 않음)", text) else "UNKNOWN"
                 result.append({"id": f"tls-assignment-{match.group(1)}", "externalId": match.group(1), "courseId": course["id"], "title": title or f"TLS assignment {match.group(1)}", "dueAt": due, "submissionStatus": status, "source": "tls"})
         return result
+
+    def _academic_items(self, user_id):
+        return ([('assignment', item) for item in self.get_assignments(user_id)] +
+                [('lecture', item) for item in self.get_lectures(user_id)])
+
+    def get_academic_snapshot(self, user_id):
+        items = self._parallel_courses('_academic_items', user_id)
+        if items is None:
+            items = self._academic_items(user_id)
+        return (self.get_courses(user_id),
+                [item for kind, item in items if kind == 'assignment'],
+                [item for kind, item in items if kind == 'lecture'])
 
     def get_lectures(self, user_id: str) -> list[dict[str, Any]]:
         parallel = self._parallel_courses('get_lectures', user_id)
@@ -352,141 +455,112 @@ class MoodleTLSProvider:
                       existing_resources: Mapping[str, dict[str, Any]] | None = None,
                       progress: Callable[[str], None] | None = None,
                       download_new_files: bool = True,
-                      save_file: Callable[[dict], dict] | None = None) -> list[dict[str, Any]]:
-        parallel = self._parallel_courses('get_resources', user_id, notices=notices,
-            existing_resources=existing_resources, progress=progress, download_new_files=download_new_files, save_file=save_file)
-        if parallel is not None:
-            return parallel
-        result: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        notices_by_course: dict[str, list[dict[str, Any]]] = {}
+                      save_file: Callable[[dict], dict] | None = None,
+                      resource_ids: set[str] | None = None) -> list[dict[str, Any]]:
+        jobs = []
+        seen = set()
+        notices_by_course = {}
         for notice in notices or []:
-            notices_by_course.setdefault(notice.get("courseId", ""), []).append(notice)
+            notices_by_course.setdefault(notice.get('courseId', ''), []).append(notice)
         for course in self.get_courses(user_id):
-            course_html = self._course_page(course)
             parser = _ActivityParser()
-            parser.feed(course_html)
+            parser.feed(self._course_page(course))
             for activity in parser.items:
-                href, title = activity["href"], activity["title"]
-                match = re.search(r"/mod/(?:resource|ubfile)/view\.php\?id=(\d+)", href)
-                if not match or match.group(1) in seen:
-                    continue
-                seen.add(match.group(1))
-                resource_id = match.group(1)
-                if progress:
-                    progress(f"{course['name']} · 자료 {len(result) + 1} 확인 중이에요…")
-                restriction = _download_restriction(activity["text"], title, notices_by_course.get(course["id"], []))
-                download_path = href
-                download_issue = None
-                if not restriction:
-                    try:
-                        check_download_url(href)
-                        download_path, download_issue = self._resource_download_path(
-                            href, title, notices_by_course.get(course["id"], []))
-                    except DownloadRestricted as error:
-                        restriction = str(error)
-                    except HTTPError as error:
-                        if error.code != 403:
-                            raise
-                        error.close()
-                        restriction = 'TLS 서버가 파일 다운로드를 거부했습니다. 파일 내용을 가져오지 않았습니다.'
-                if restriction:
-                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
-                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
-                                   "fileName": title or f"resource-{resource_id}", "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
-                                   "mimeType": None, "remotePath": href, "source": "tls",
-                                   "downloadStatus": "PROHIBITED", "downloadReason": restriction})
-                    continue
-                cached = (existing_resources or {}).get(resource_id)
-                reusable = bool(cached and cached.get("localPath") and Path(cached["localPath"]).is_file() and cached.get("remotePath") == href and cached.get("mimeType") not in {"text/html", "application/xhtml+xml"})
-                if reusable:
-                    reused = {"id": f"tls-resource-{resource_id}", "externalId": resource_id,
-                                   "courseId": course["id"], "title": title or cached.get("title", f"TLS resource {resource_id}"),
-                                   "fileName": cached.get("fileName") or title or f"resource-{resource_id}",
-                                   "extension": cached.get("extension", "unknown"), "mimeType": cached.get("mimeType"),
-                                   "remotePath": href, "localPath": cached["localPath"],
-                                   "downloadedAt": cached.get("downloadedAt"), "source": "tls",
-                                   "downloadStatus": "DOWNLOADED", '_reused': True}
-                    if not download_new_files or not hasattr(self.session, 'revalidate'):
-                        result.append(reused)
-                        continue
-                if not download_new_files:
-                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
-                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
-                                   "fileName": title or f"resource-{resource_id}",
-                                   "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
-                                   "mimeType": None, "remotePath": href, "source": "tls",
-                                   "downloadStatus": "NOT_DOWNLOADED",
-                                   "downloadReason": "이번에는 목록만 확인했어요. 파일이 필요하면 전체 새로고침을 요청해 주세요."})
-                    continue
-                if not download_path:
-                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
-                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
-                                   "fileName": title or f"resource-{resource_id}", "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
-                                   "mimeType": "text/html", "remotePath": href, "source": "tls",
-                                   "downloadStatus": "NOT_DOWNLOADED",
-                                   "downloadReason": download_issue or 'TLS 자료의 원본 다운로드 주소를 확인하지 못했어요.'})
-                    continue
-                try:
-                    content, response = self.session.revalidate(download_path, cached) if reusable else self.session.get_bytes(download_path)
-                except (HTTPError, DownloadRestricted) as error:
-                    if isinstance(error, HTTPError):
-                        if error.code != 403:
-                            raise
-                        error.close()
-                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
-                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
-                                   "fileName": title or f"resource-{resource_id}", "extension": Path(title).suffix.lower().lstrip(".") or "unknown",
-                                   "mimeType": None, "remotePath": href, "source": "tls",
-                                   "downloadStatus": "PROHIBITED", "downloadReason": str(error) if isinstance(error, DownloadRestricted) else "TLS 서버가 파일 다운로드를 거부했습니다. 파일 내용을 가져오지 않았습니다."})
-                    continue
-                if content is None and reusable:
-                    result.append(reused)
-                    continue
-                if _looks_like_viewer_page(content, response.headers.get("Content-Type", ""), response.geturl()):
-                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
-                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
-                                   "fileName": title or f"resource-{resource_id}", "extension": "unknown", "mimeType": response.headers.get("Content-Type"),
-                                   "remotePath": href, "source": "tls", "downloadStatus": "NOT_DOWNLOADED",
-                                   "downloadReason": "TLS가 다운로드 금지가 아닌 문서 뷰어 페이지를 반환해 원본 파일을 저장하지 못했습니다."})
-                    continue
-                final_path = unquote(urlsplit(response.geturl()).path)
-                mime_type = response.headers.get_content_type()
-                if mime_type in {"text/html", "application/xhtml+xml"}:
-                    result.append({"id": f"tls-resource-{resource_id}", "externalId": resource_id,
-                                   "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
-                                   "fileName": title or f"resource-{resource_id}", "extension": "unknown",
-                                   "mimeType": mime_type, "remotePath": href, "source": "tls",
-                                   "downloadStatus": "NOT_DOWNLOADED", "downloadReason": "TLS가 원본 파일 대신 HTML 문서 페이지를 반환해 파일로 저장하지 않았습니다."})
-                    continue
-                file_name = response.headers.get_filename() or Path(final_path).name
-                extension = Path(file_name).suffix.lower().lstrip(".")
-                if extension in {"html", "htm", "php"}:
-                    extension = ""
-                    if Path(title).suffix:
-                        file_name = Path(title).name
-                extension = extension or Path(title).suffix.lower().lstrip(".")
-                extension = extension or {
-                    "application/pdf": "pdf",
-                    "application/msword": "doc",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-                    "application/vnd.hancom.hwp": "hwp",
-                    "application/haansofthwp": "hwp",
-                    "application/vnd.ms-powerpoint": "ppt",
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-                    "text/plain": "txt",
-                }.get(mime_type, "")
-                if not extension and mime_type.startswith("text/"):
-                    extension = "txt"
-                if not extension or extension in {"html", "htm", "php"}:
-                    continue
-                file_name = file_name or f"resource-{match.group(1)}.{extension}"
-                if not Path(file_name).suffix:
-                    file_name = f"{file_name}.{extension}"
-                item = {"id": f"tls-resource-{resource_id}", "externalId": resource_id, "courseId": course["id"], "title": title or file_name, "fileName": file_name, "extension": extension, "mimeType": mime_type, "remotePath": href, "source": "tls", "downloadStatus": "NOT_DOWNLOADED", "_content": content,
-                        '_validators': {'etag': response.headers.get('ETag'), 'lastModified': response.headers.get('Last-Modified')}}
-                result.append(save_file(item) if save_file else item)
-        return result
+                match = re.search(r"/mod/(?:resource|ubfile)/view\.php\?id=(\d+)", activity['href'])
+                if match and match.group(1) not in seen:
+                    seen.add(match.group(1))
+                    jobs.append((course, activity, match.group(1)))
+
+        def collect(job):
+            course, activity, identifier = job
+            provider = MoodleTLSProvider(self.session.fork()) if hasattr(self.session, 'fork') else self
+            if progress:
+                progress(f"{course['name']} · {activity['title'] or '자료'} 확인 중이에요…")
+            return provider._get_resource(course, activity, identifier,
+                notices_by_course.get(course['id'], []), existing_resources,
+                download_new_files and (resource_ids is None or f'tls-resource-{identifier}' in resource_ids),
+                save_file)
+
+        # One flat pool also overlaps downloads within a single course.
+        if len(jobs) > 1 and hasattr(self.session, 'fork'):
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                return [item for item in pool.map(collect, jobs) if item is not None]
+        return [item for job in jobs if (item := collect(job)) is not None]
+
+    def _get_resource(self, course, activity, resource_id, notices, existing_resources, download_new_files, save_file):
+        href, title = activity['href'], activity['title']
+        record = {"id": f"tls-resource-{resource_id}", "externalId": resource_id,
+                  "courseId": course["id"], "title": title or f"TLS resource {resource_id}",
+                  "fileName": title or f"resource-{resource_id}", "extension": _file_extension(title) or "unknown",
+                  "mimeType": None, "remotePath": href, "source": "tls", "downloadStatus": "NOT_DOWNLOADED"}
+        restriction = _download_restriction(activity["text"], title, notices)
+        if restriction:
+            return {**record, 'downloadStatus': 'PROHIBITED', 'downloadReason': restriction}
+        try:
+            check_download_url(href)
+            download_path, download_issue = self._resource_download_path(href, title, notices)
+        except DownloadRestricted as error:
+            return {**record, 'downloadStatus': 'PROHIBITED', 'downloadReason': str(error)}
+        except HTTPError as error:
+            return {**record, **_resource_http_error(error)}
+        except ResourceUnavailable as error:
+            return {**record, 'downloadReason': str(error)}
+        except (URLError, TimeoutError):
+            return {**record, 'downloadReason': '학교와 연결이 끊기거나 응답이 늦어 이 자료를 확인하지 못했어요.'}
+        cached = (existing_resources or {}).get(resource_id)
+        reusable = bool(cached and cached.get("localPath") and Path(cached["localPath"]).is_file()
+            and cached.get("remotePath") == href and cached.get("mimeType") not in {"text/html", "application/xhtml+xml"})
+        if reusable:
+            reused = {**record, "title": title or cached.get("title", record['title']),
+                      "fileName": cached.get("fileName") or record['fileName'],
+                      "extension": cached.get("extension", "unknown"), "mimeType": cached.get("mimeType"),
+                      "localPath": cached["localPath"], "downloadedAt": cached.get("downloadedAt"),
+                      "downloadStatus": "DOWNLOADED", '_reused': True}
+            if not download_new_files or not hasattr(self.session, 'revalidate'):
+                return reused
+        if not download_path:
+            return {**record, 'mimeType': 'text/html',
+                    'downloadReason': download_issue or 'TLS 자료의 원본 다운로드 주소를 확인하지 못했어요.'}
+        if not download_new_files:
+            return {**record, "downloadReason": "이번에는 목록만 확인했어요. 필요한 자료를 요청하면 해당 파일만 받을게요."}
+        try:
+            content, response = self.session.revalidate(download_path, cached) if reusable else self.session.get_bytes(download_path, allowed_origin='tls.kku.ac.kr')
+        except DownloadRestricted as error:
+            return {**record, 'downloadStatus': 'PROHIBITED', 'downloadReason': str(error)}
+        except HTTPError as error:
+            return {**record, **_resource_http_error(error)}
+        except (URLError, TimeoutError):
+            return {**record, 'downloadReason': '자료를 받는 중 연결이 끊기거나 응답이 늦었어요. 잠시 후 다시 확인해 주세요.'}
+        if content is None and reusable:
+            return reused
+        if not content:
+            return {**record, 'downloadReason': '학교에서 빈 파일 응답을 보내 원본을 저장하지 않았어요.'}
+        mime_type = response.headers.get_content_type()
+        if _looks_like_viewer_page(content, mime_type, response.geturl()) or mime_type in {"text/html", "application/xhtml+xml"}:
+            return {**record, 'mimeType': mime_type,
+                    'downloadReason': '학교에서 원본 대신 문서 보기 또는 안내 화면을 보내 파일로 저장하지 않았어요.'}
+        final_path = unquote(urlsplit(response.geturl()).path)
+        file_name = _header_filename(response.headers) or Path(final_path).name
+        extension = _file_extension(file_name)
+        if not extension:
+            extension = (mimetypes.guess_extension(mime_type) or '').lstrip('.')
+            extension = extension or _file_extension(title)
+            if not extension and mime_type.startswith('text/'):
+                extension = 'txt'
+            if extension:
+                file_name = (Path(title).name if _file_extension(title) == extension else f"resource-{resource_id}.{extension}")
+        if not extension or extension in ('html', 'htm', 'php'):
+            return {**record, 'mimeType': mime_type, 'downloadReason': '원본 파일의 종류를 확인하지 못해 저장하지 않았어요.'}
+        signature = {'pdf': b'%PDF-', 'zip': b'PK',
+            'ppt': b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1', 'doc': b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1',
+            'hwp': b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1', 'pptx': b'PK\x03\x04',
+            'docx': b'PK\x03\x04', 'hwpx': b'PK\x03\x04'}.get(extension)
+        if signature and not content.startswith(signature):
+            return {**record, 'mimeType': mime_type, 'downloadReason': '파일로 표시됐지만 원본 형식과 내용이 달라 저장하지 않았어요.'}
+        item = {**record, "title": title or file_name, "fileName": file_name, "extension": extension,
+                "mimeType": mime_type, "_content": content,
+                '_validators': {'etag': response.headers.get('ETag'), 'lastModified': response.headers.get('Last-Modified')}}
+        return save_file(item) if save_file else item
 
 
     def download_permitted_resource(self, user_id, resource, permission, viewer_url=None):
@@ -508,27 +582,17 @@ class MoodleTLSProvider:
         activity = next((item for item in activities.items if urljoin(origin, item['href']) == source_url), None)
         if not activity or (activity['title'] and activity['title'] != resource['title']):
             raise ValueError('현재 수업에서 해당 자료를 찾지 못했어요.')
-        html, page_url = self.session.get_page(source_url, allowed_origin='tls.kku.ac.kr')
-        parser = _ViewerLinks()
-        parser.feed(html)
-        observed = set()
-        for link in [page_url, *[urljoin(page_url, href) for href in parser.links]]:
-            try:
-                permitted_download_url(link)
-            except (ValueError, DownloadRestricted):
-                continue
-            observed.add(link)
-        if viewer_url is None and len(observed) == 1:
-            viewer_url = next(iter(observed))
-        if viewer_url not in observed:
-            raise ValueError('이 자료의 주소를 하나로 확인하지 못해 가져오지 않았어요.')
-        content, response = self.session.get_bytes(permitted_download_url(viewer_url), allowed_origin='tls.kku.ac.kr')
+        download_path, issue, viewer_url = self._resolve_resource_page(
+            source_url, resource['title'], [], permitted=True, viewer_url=viewer_url)
+        if not download_path:
+            raise ValueError(issue or '이 자료의 주소를 하나로 확인하지 못해 가져오지 않았어요.')
+        content, response = self.session.get_bytes(download_path, allowed_origin='tls.kku.ac.kr')
         mime_type = response.headers.get_content_type()
         sample = content[:4096].lstrip().lower() if content else b''
         if not content or mime_type in ('text/html', 'application/xhtml+xml') or any(
                 marker in sample for marker in (b'<html', b'<!doctype', b'<form', b'<script', b'<body')):
             raise DownloadRestricted('원본 자료를 받지 못했어요. 이번에는 저장하지 않을게요.')
-        name = response.headers.get_filename() or resource['fileName']
+        name = _header_filename(response.headers) or resource['fileName']
         extension = Path(name).suffix.lower().lstrip('.')
         if not extension:
             extension = (mimetypes.guess_extension(mime_type) or '').lstrip('.')

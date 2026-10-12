@@ -2,6 +2,8 @@
 from pathlib import Path
 import shutil
 import sys
+import threading
+import time
 import unittest
 import zipfile
 from types import SimpleNamespace
@@ -13,6 +15,38 @@ from features.study_materials import _docx_sections, _hwpx_sections, _pdf_sectio
 
 
 class StudyMaterialsTests(ProjectTestBase):
+    def test_parallel_text_reads_are_bounded_ordered_and_never_open_prohibited_files(self):
+        resources = []
+        for i in range(5):
+            path = self.files / f'source-{i}.txt'
+            path.write_text(f'본문{i}', encoding='utf-8')
+            resources.append({'id': f'r{i}', 'courseId': 'course-1', 'title': f'자료{i}',
+                'fileName': path.name, 'extension': 'txt', 'localPath': str(path),
+                'downloadStatus': 'PROHIBITED' if i == 4 else 'DOWNLOADED'})
+        counts = {'active': 0, 'peak': 0}
+        lock = threading.Lock()
+        def read(path, extension, cache):
+            self.assertNotEqual(path.name, 'source-4.txt')
+            with lock:
+                counts['active'] += 1
+                counts['peak'] = max(counts['peak'], counts['active'])
+            time.sleep(0.02)
+            with lock:
+                counts['active'] -= 1
+            if path.name == 'source-1.txt':
+                raise ValueError('파일 손상')
+            return [{'location': '줄 1', 'text': path.read_text(encoding='utf-8')}]
+        courses = [{'id': 'course-1', 'name': '자료구조'}]
+        with patch('features.study_materials._read_sections', side_effect=read):
+            materials = study_materials(courses, resources, files_root=self.files)['data']['materials']
+        self.assertEqual(counts['peak'], 2)
+        self.assertEqual([m['title'] for m in materials], [r['title'] for r in resources])
+        self.assertEqual(materials[2]['sections'][0]['text'], '본문2')
+        self.assertIn('error', materials[1])
+        self.assertIn('error', materials[4])
+        with patch('features.study_materials._read_sections', side_effect=AssertionError('metadata must not read text')):
+            study_materials(courses, resources, files_root=self.files, include_ids=True, metadata_only=True)
+
     def test_attachment_format_invalidates_analysis_from_old_text_decoder(self):
         from features.study_pipeline import analysis_key
         path = self.files / 'lecture.txt'

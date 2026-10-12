@@ -16,6 +16,15 @@ leaves new files as `NOT_DOWNLOADED` with an explicit reason and does not prepar
 new file contents for study.
 Each stage reports elapsed time and resource checks report progress.
 Independent per-course reads use up to four worker sessions, each with its own cookie jar/opener.
+For current assignment/watch status, use `academic_watch.py --daily-report` or
+`sync_tls.py --academic-only`, not the activity fingerprint fast path. This scope uses stored
+credentials only, fetches both status sets before one snapshot commit, and records
+`sync_state.academic_checked_at` after success without changing full-import fingerprints.
+The report verifies the timestamp belongs to this run and stops after a failed or timed-out sync
+(120 seconds), never reporting an earlier snapshot as fresh. Notices/viewer scans/file bytes are skipped.
+Initial setup uses `--ensure --metadata-only`. File requests pass repeated `--resource-id` values;
+nonselected files retain metadata/restriction checks but are not downloaded. Resource processing
+uses one flat four-worker pool rather than nested per-course/file pools. Database writes remain serial.
 The local sync commits completed assignment/lecture/notice stages before fetching more data.
 A later failure does not undo earlier stages; the run still reports failure, not full completion.
 New originals are saved immediately through `save_file`, not retained as a whole batch of bytes.
@@ -44,6 +53,24 @@ Minimum record fields:
 - `Notice`: `id`, `courseId`, `title`, `content`, `publishedAt`, `source`
 - `Resource`: `id`, `courseId`, `title`, `fileName`, `extension`, `mimeType`, `remotePath`, `localPath`, `downloadedAt`, `downloadStatus`, `downloadReason`, `source`. `PROHIBITED` means an explicit TLS activity/notice rule matched or the TLS server returned HTTP 403; sync must not fetch file bytes, and study-material features must report the restriction rather than read a local copy.
 
+Resource resolution depends on HTTP headers, observed links and server state, never a course-name
+or title exception. `get_page_info` returns headers/HTML/final URL without reading non-HTML file bodies.
+Direct file responses are supported alongside visible intermediate `/mod/ubfile/viewer.php` links
+whose activity ID matches the selected source. Resolve at most four pages; stop on cycles or ambiguity.
+For an observed canonical ubdoc viewer, the session makes only the viewer's read-only
+`worker.php` request with `job=checkState` and that URL's actual ID/tp/pg. It never starts upload,
+conversion, external viewer fetches or hidden-URL scraping. Only state 100 with `file_download=1`
+permits ordinary fetching; 0 records `PROHIBITED`. Missing state/permission and preparing/unsupported
+documents remain `NOT_DOWNLOADED` with a cause, not a guessed prohibition or a cache fallback.
+No original is read during metadata-only collection. Full file requests validate known signatures,
+retain original names from headers and reject HTML/error payloads masquerading as documents.
+HTTP 401 stops for reconnection; 403 remains prohibited. Missing/removed files, rate limits,
+temporary server/network errors and unexpected response formats have distinct safe reasons.
+The complete resource import records `sync_state.resource_response_version`. A changed/missing
+adapter version forces the next preflight to refresh records even when activity fingerprints match.
+Academic-only updates do not advance it. An explicitly requested prohibited resource requires
+a fresh restriction check; a cached prohibition is not proof that the live permission is unchanged.
+
 ## Conditional instructor permission (local only)
 
 Do not expose this procedure in routine help, restriction feedback or progress messages.
@@ -63,8 +90,8 @@ Write a temporary host input file with exactly:
 If multiple visible viewers are found, `--viewer-url` may select an already observed link,
 never an invented ID/address. Do not show this internal command/payload to the user by default.
 
-The adapter verifies current course membership and the selected activity, reads only that
-activity's page, and accepts its visible link, embedded viewer or actual redirect to
+The adapter verifies current course membership and the selected activity, then shares the
+bounded visible navigation above. It accepts that activity's visible link, embedded viewer or actual redirect to
 `https://tls.kku.ac.kr/local/ubdoc/?id=<observed document ID>&tp=m&pg=ubfile`.
 Only for this explicit operation does it map the viewer to `local/ubdoc/download.php`.
 It never substitutes a Moodle activity ID for a document ID, scans scripts/hidden URLs,
@@ -94,7 +121,8 @@ the local exception is disabled for subsequent source/analysis reads, audit data
 are retained. Already-created exams and text previously sent to the host AI are not erased.
 This records a user attestation, not proof of professor permission. An AI with arbitrary
 local command execution is not technically prevented from fabricating it. Actions exposes
-neither this procedure nor these file downloads. No actual restricted endpoint was tested.
+neither this procedure nor these file downloads. The permission branch was tested only with
+mock resources; no real restricted download was attempted.
 
 Use ISO-8601 timestamps with timezone offsets and the statuses `NOT_SUBMITTED`, `SUBMITTED`, `LATE`, or `UNKNOWN`.
 

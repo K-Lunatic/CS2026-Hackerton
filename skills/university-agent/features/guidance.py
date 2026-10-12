@@ -8,7 +8,8 @@ from features.deadlines import format_deadline
 
 def resource_unavailable_reason(item):
     reason = str(item.get('downloadReason') or '')
-    if '뷰어' in reason or 'HTML' in reason:
+    # Older imports mislabeled viewer failures as prohibited; do not call them a ban.
+    if ('뷰어' in reason or 'HTML' in reason) and not any(word in reason for word in ('금지', '거부', '제한')):
         return '자료를 보는 화면만 열려 원본 파일은 받지 못했어요.'
     if reason.startswith('TLS 서버가'):
         return '학교에서 이 자료의 내려받기를 막아 두어 제외했어요.'
@@ -16,6 +17,29 @@ def resource_unavailable_reason(item):
         return '다운로드 금지 자료라 이번에는 읽지 않고 제외했어요.'
     if '목록만' in reason:
         return '이번에는 자료 목록만 확인했어요. 원본은 아직 받지 않았어요.'
+    causes = (
+        ('찾지 못', '학교에서 자료를 찾지 못했어요. 삭제되거나 주소가 바뀌었을 수 있어요.'),
+        ('더 이상 제공', '학교에서 더 이상 제공하지 않는 자료예요.'),
+        ('요청을 제한', '학교가 잠시 요청을 제한했어요. 잠시 후 다시 확인해 주세요.'),
+        ('요청을 처리', '학교가 자료 요청을 처리하지 못했어요. 잠시 후 다시 확인해 주세요.'),
+        ('연결이 끊', '학교와 연결이 끊기거나 응답이 늦어 자료를 받지 못했어요.'),
+        ('문서 준비', '학교에서 문서를 준비 중이거나 문서 보기에서 지원하지 않는 형식이에요.'),
+        ('허용 여부', '다운로드 허용 여부를 확인하지 못해 자료를 받지 않았어요.'),
+        ('문서 상태 응답', '학교가 보내준 문서 상태를 읽지 못해 자료를 받지 않았어요.'),
+        ('종류를 확인', '원본 파일의 종류를 확인하지 못해 저장하지 않았어요.'),
+        ('형식과 내용이 달라', '파일로 표시됐지만 실제 내용이 원본 형식과 달라 저장하지 않았어요.'),
+        ('빈 파일', '학교에서 빈 파일 응답을 보내 저장하지 않았어요.'),
+        ('반복', '자료의 보기 화면이 반복되어 주소 확인을 멈췄어요.'),
+        ('여러 개', '원본 주소가 여러 개라 자동으로 선택하지 않았어요.'),
+        ('원본 다운로드 주소', '자료 화면에서 원본 파일 주소를 확인하지 못했어요.'),
+        ('문서 보기', '학교에서 원본 대신 자료를 보는 화면을 보내 파일을 저장하지 않았어요.'),
+        ('문서 정보 응답', '학교에서 원본 대신 문서 정보를 보내 파일로 저장하지 않았어요.'),
+        ('뷰어', '자료를 보는 화면만 열려 원본 파일은 받지 못했어요.'),
+        ('HTML', '자료를 보는 화면만 열려 원본 파일은 받지 못했어요.'),
+    )
+    for marker, message in causes:
+        if marker in reason:
+            return message
     return '원본 파일은 아직 받지 못했어요.'
 
 

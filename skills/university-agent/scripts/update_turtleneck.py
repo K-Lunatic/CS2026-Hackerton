@@ -104,12 +104,12 @@ def check(*, force: bool = False) -> dict[str, str | bool]:
             "message": f"터틀넥 {remote_version} 버전이 있어요." if newer else f"터틀넥 {local_version} 버전이 최신이에요."}
 
 
-def apply_update() -> dict[str, str | bool]:
-    package = package_root()
+def apply_update(*, force: bool = False) -> dict[str, str | bool]:
+    installed_package = package_root()
     target = skill_root()
-    if package is None or development_checkout(package):
+    if installed_package is None or development_checkout(installed_package):
         return {"status": "SKIPPED", "message": "개발 중인 Git 저장소는 자동으로 덮어쓰지 않아요. 최신 dev를 확인해 주세요."}
-    state = check(force=True)
+    state = check(force=force)
     if state.get("status") != "UPDATE_AVAILABLE":
         return state
     try:
@@ -117,8 +117,8 @@ def apply_update() -> dict[str, str | bool]:
         with tempfile.TemporaryDirectory() as folder:
             archive_path = Path(folder) / "turtleneck.zip"
             archive_path.write_bytes(archive)
-            with zipfile.ZipFile(archive_path) as package:
-                package.extractall(folder)
+            with zipfile.ZipFile(archive_path) as bundle:
+                bundle.extractall(folder)
             extracted = next(Path(folder).glob(f"{REPO.rsplit('/', 1)[1]}-*/skills/university-agent"), None)
             if extracted is None:
                 raise ValueError("업데이트 파일 구조를 확인하지 못했어요.")
@@ -127,10 +127,13 @@ def apply_update() -> dict[str, str | bool]:
             shutil.copytree(staging, target, dirs_exist_ok=True)
             source_plugin = extracted.parents[1] / "plugin.json"
             if source_plugin.is_file():
-                shutil.copy2(source_plugin, package / "plugin.json")
+                shutil.copy2(source_plugin, installed_package / "plugin.json")
+            source_claude = extracted.parents[1] / '.claude-plugin/plugin.json'
+            if source_claude.is_file() and (installed_package / '.claude-plugin/plugin.json').is_file():
+                shutil.copy2(source_claude, installed_package / '.claude-plugin/plugin.json')
         return {"status": "UPDATED", "message": f"터틀넥 {state['remoteVersion']} 버전으로 업데이트했어요."}
-    except (OSError, ValueError, zipfile.BadZipFile, URLError) as error:
-        return {"status": "FAILED", "message": f"업데이트하지 못했어요. 기존 버전은 그대로 유지했어요. ({error})"}
+    except (OSError, ValueError, zipfile.BadZipFile, URLError):
+        return {"status": "FAILED", "message": "업데이트를 끝내지 못했어요. 설치본을 다시 확인해 주세요. 로그인·학습 데이터는 변경하지 않았어요."}
 
 
 def main() -> int:
@@ -138,7 +141,7 @@ def main() -> int:
     parser.add_argument("--auto", action="store_true", help="새 버전이면 설치된 패키지만 업데이트")
     parser.add_argument("--force", action="store_true", help="캐시를 무시하고 버전 확인")
     args = parser.parse_args()
-    result = apply_update() if args.auto else check(force=args.force)
+    result = apply_update(force=args.force) if args.auto else check(force=args.force)
     print(result["message"])
     return 0 if result["status"] not in {"FAILED", "UNAVAILABLE"} else 1
 

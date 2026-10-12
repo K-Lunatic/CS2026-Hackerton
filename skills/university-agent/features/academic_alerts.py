@@ -101,6 +101,45 @@ def fingerprint(data: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def format_daily_report(provider, user_id, checked_at, *, now=None):
+    now = (now or datetime.now(SEOUL)).astimezone(SEOUL)
+    courses = {item['id']: item['name'] for item in provider.get_courses(user_id)}
+    grouped = {}
+    for item in provider.get_assignments(user_id):
+        if item.get('source') != 'tls':
+            continue
+        status = item.get('submissionStatus', 'UNKNOWN')
+        due = deadline(item.get('dueAt'))
+        labels = []
+        if status == 'NOT_SUBMITTED':
+            labels.append('미제출')
+        elif status == 'UNKNOWN':
+            labels.append('제출 상태 확인 필요')
+        if due and due < now:
+            labels.append('이미 마감')
+        elif due and due <= now + timedelta(days=7):
+            labels.append('7일 이내 마감')
+        if labels:
+            state = {'SUBMITTED': '제출 완료', 'LATE': '지각 제출 완료', 'NOT_SUBMITTED': '미제출'}.get(status, '확인 불가')
+            grouped.setdefault(item.get('courseId'), []).append(
+                f"- [{', '.join(labels)}] {_clean(item['title'])} · 마감: {format_deadline(item.get('dueAt'))} · 제출: {state}")
+    for item in provider.get_lectures(user_id):
+        if item.get('source') != 'tls' or item.get('completed') in (True, 1):
+            continue
+        completed = item.get('completed')
+        state = '미완료' if completed in (False, 0) else '시청 상태 확인 필요'
+        progress = item.get('watchProgress')
+        progress_text = f' · 시청률 {float(progress):g}%' if progress is not None else ''
+        grouped.setdefault(item.get('courseId'), []).append(
+            f"- [강의] {_clean(item['title'])} · 마감: {format_deadline(item.get('availableUntil'))} · 시청: {state}{progress_text}")
+    lines = [f"터틀넥 학사 확인 · {format_deadline(checked_at)} (Asia/Seoul)"]
+    for course_id in sorted(grouped, key=lambda key: courses.get(key, '')):
+        lines.extend(['', courses.get(course_id, '과목 확인 필요'), *grouped[course_id]])
+    if not grouped:
+        lines.append('미제출·마감 관련 과제와 미완료 강의가 없어요.')
+    return '\n'.join(lines)
+
+
 def notice_ids(data: dict[str, Any]) -> list[str]:
     return [str(item["id"]) for item in data.get("notices", [])]
 

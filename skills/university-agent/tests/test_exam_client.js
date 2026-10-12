@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../assets/exam.js'), 'utf8').split('const SVG')[0];
 const token = 'x'.repeat(43);
 for (const blocked of [false, true]) {
-  const context = {document: {}, location: {hash: '#' + token},
+  const context = {document: {documentElement: {dataset: {}}}, location: {hash: '#' + token},
     sessionStorage: {getItem() { if (blocked) throw Error('Storage disabled'); return ''; },
       setItem(key, value) { if (blocked) throw Error('Storage disabled'); assert.equal(value, token); }},
     history: {replaceState() { context.location.hash = ''; }}};
@@ -30,10 +30,10 @@ async function checkReview() {
     totalPoints: 20, drafts: {q1: '1', q2: '당시 답'}, questions: [
       {id: 'q1', type: 'mcq', responseFormat: 'choice', question: '선택', points: 10, options: ['가', '나']},
       {id: 'q2', type: 'essay', typeLabel: '서술형', responseFormat: 'text', question: '설명', points: 10, options: []}]};
-  const context = {document: {getElementById(id) { if (!elements.has(id)) elements.set(id, element('existing')); return elements.get(id); },
+  const context = {document: {documentElement: {dataset: {}}, getElementById(id) { if (!elements.has(id)) elements.set(id, element('existing')); return elements.get(id); },
       createElement: element, createElementNS(_, tag) { return element(tag); }}, location: {hash: '#' + token},
     sessionStorage: {getItem() { return ''; }, setItem() {}}, history: {replaceState() {}},
-    window: {addEventListener() {}}, setInterval() { polls++; },
+    window: {addEventListener() {}}, clearInterval() {}, setInterval() { polls++; },
     fetch: async () => { requests++; return {ok: true, json: async () => review}; }};
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(require('node:path').join(__dirname, '../assets/exam.js'), 'utf8'), context);
@@ -75,10 +75,10 @@ async function checkPolling() {
   const exam = {readOnly: false, status: 'question', examId: 'same', title: '시험', revision: 0,
     totalPoints: 10, drafts: {}, questions: [{id: 'q1', type: 'mcq', responseFormat: 'choice', question: '문제', points: 10, options: ['가','나']}]};
   let requests = 0, finish;
-  const context = {document: {getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
+  const context = {document: {documentElement: {dataset: {}}, getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
       createElement: element, createElementNS: element}, location: {hash: '#' + token},
     sessionStorage: {getItem() { return ''; }, setItem() {}}, history: {replaceState() {}},
-    window: {addEventListener() {}}, setTimeout(fn) { callbacks.push(fn); },
+    window: {addEventListener() {}}, clearInterval() {}, setTimeout(fn) { callbacks.push(fn); },
     fetch: async () => {
       requests++;
       if (requests === 1) return {ok:true, json: async () => exam};

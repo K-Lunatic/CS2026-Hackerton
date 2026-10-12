@@ -70,7 +70,7 @@ def prepare(only: str | None = None) -> int:
         print(f'{label}를 준비할게요.', flush=True)
         try:
             if service == 'tls':
-                result = subprocess.run([sys.executable, str(ROOT / 'scripts/sync_tls.py'), '--ensure'])
+                result = subprocess.run([sys.executable, str(ROOT / 'scripts/sync_tls.py'), '--ensure', '--metadata-only'])
                 ready = result.returncode == 0 and status()['tls']['status'] == 'READY'
             else:
                 from session_store import load

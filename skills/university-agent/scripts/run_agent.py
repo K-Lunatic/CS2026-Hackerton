@@ -219,7 +219,7 @@ def _checkpoint_command(text: str, *, checkpoint_json: str | None = None) -> dic
             "data": {"performed": False},
             "answer": (
                 f"체크포인트를 저장하지 않았습니다. {exc} "
-                "ChatGPT/Codex가 현재 대화에서 확인되는 내용을 한국어로 정리해 전달해야 합니다."
+                "현재 대화의 AI가 확인되는 내용을 한국어로 정리해 전달해야 합니다."
             ),
         }
 

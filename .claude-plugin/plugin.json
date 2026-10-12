@@ -1,0 +1,7 @@
+{
+  "name": "university-agent",
+  "version": "0.5.2",
+  "description": "터틀넥: TLS·에타 연결, 과제·시간표·강의평과 자료 기반 웹 시험지",
+  "author": {"name": "K-Lunatic"},
+  "repository": "https://github.com/K-Lunatic/CS2026-Hackerton"
+}

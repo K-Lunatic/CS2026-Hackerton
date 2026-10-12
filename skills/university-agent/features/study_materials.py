@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -20,6 +22,7 @@ try:
 except ImportError:
     PdfReader = None
 
+_SWIFT_LOCK = Lock()
 
 def _normalize(value: str) -> str:
     return "".join(char for char in unicodedata.normalize("NFKC", value).casefold() if char.isalnum())
@@ -153,8 +156,10 @@ def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path) -> dict[str,
                 pass
         if not pages and swift:
             try:
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                result = subprocess.run([swift, "-module-cache-path", str(cache_dir), str(script), str(path)], capture_output=True, text=True, encoding='utf-8', timeout=120)
+                # Swift shares a compiler cache; portable readers can run independently.
+                with _SWIFT_LOCK:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    result = subprocess.run([swift, "-module-cache-path", str(cache_dir), str(script), str(path)], capture_output=True, text=True, encoding='utf-8', timeout=120)
                 if result.returncode == 0:
                     decoded = json.loads(result.stdout)
                     pages = decoded.get(str(path), [])
@@ -216,6 +221,28 @@ def _read_sections(path: Path, extension: str, cache_root: Path):
     if sections and sum(len(section['text']) for section in sections) <= 10_000_000:
         material_cache.put(cache_root, 'text', '', identifier, sections)
     return sections
+
+
+def _read_many(selected, resolved, cache_root):
+    eligible = [item for item in selected if item['id'] in resolved and item['extension'].lower() not in ('hwp', 'doc', 'ppt')]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        # Two-file batches bound both worker count and retained full text.
+        for offset in range(0, len(eligible), 2):
+            pending = []
+            for item in eligible[offset:offset + 2]:
+                path = resolved[item['id']]
+                try:
+                    material_cache.fingerprint(cache_root, path)
+                    value = pool.submit(_read_sections, path, item['extension'].lower(), cache_root)
+                except Exception as error:
+                    value = error
+                pending.append((item['id'], value))
+            for identifier, value in pending:
+                try:
+                    sections = value if isinstance(value, Exception) else value.result()
+                except Exception as error:
+                    sections = error
+                yield identifier, sections
 
 
 def original_files(courses, resources, *, files_root, course_query='', resource_query='', resource_id=''):
@@ -324,6 +351,7 @@ def study_materials(
         except (OSError, ValueError):
             errors[item["id"]] = "로컬 파일이 없습니다. TLS 동기화를 다시 실행해 주세요."
 
+    prepared = _read_many(selected, resolved, files_root.parent / 'cache') if not metadata_only and len(resolved) > 1 else None
     materials = []
     remaining = max_chars
     for item in selected:
@@ -344,7 +372,14 @@ def study_materials(
                     raise ValueError('내부 자료 확인에는 ID가 필요합니다.')
                 materials.append(material)
                 continue
-            sections = _read_sections(path, extension, files_root.parent / 'cache')
+            # Shared-profile legacy converters stay on the serial path.
+            if prepared is not None and extension not in ('hwp', 'doc', 'ppt'):
+                identifier, sections = next(prepared)
+                assert identifier == item['id']
+                if isinstance(sections, Exception):
+                    raise sections
+            else:
+                sections = _read_sections(path, extension, files_root.parent / 'cache')
         except RuntimeError as exc:
             material['error'] = str(exc)
             materials.append(material)

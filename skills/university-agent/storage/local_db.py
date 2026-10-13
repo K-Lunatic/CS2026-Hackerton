@@ -235,6 +235,28 @@ class LocalDatabase:
         rows = self.connection.execute("SELECT l.id, l.external_id AS externalId, l.course_id AS courseId, l.title, l.duration_seconds AS durationSeconds, l.available_from AS availableFrom, l.available_until AS availableUntil, p.watched_seconds AS watchedSeconds, p.watch_progress AS watchProgress, p.completed, l.source FROM lectures l JOIN lecture_progress p ON p.lecture_id=l.id AND p.user_id=? JOIN enrollments e ON e.course_id=l.course_id AND e.user_id=? ORDER BY l.title", (user_id, user_id))
         return [dict(row, completed=bool(row["completed"])) for row in rows]
 
+    def get_lecture_audio(self, user_id):
+        if not self.connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lecture_audio'").fetchone():
+            return []
+        rows = self.connection.execute(
+            'SELECT a.lecture_id AS lectureId, a.source_key AS sourceKey, a.local_path AS localPath, '
+            'a.content_hash AS contentHash, a.saved_at AS savedAt FROM lecture_audio a '
+            'JOIN lectures l ON l.id=a.lecture_id JOIN enrollments e ON e.course_id=l.course_id AND e.user_id=a.user_id '
+            'JOIN lecture_progress p ON p.lecture_id=a.lecture_id AND p.user_id=a.user_id '
+            'WHERE a.user_id=? AND p.completed=1', (user_id,))
+        return [dict(row) for row in rows]
+
+    def save_lecture_audio(self, user_id, item):
+        if not any(lecture['id'] == item['lectureId'] and lecture['completed'] is True
+                   for lecture in self.get_lectures(user_id)):
+            raise ValueError('현재 사용자의 시청 완료 강의에만 음성을 보관해요.')
+        with self.connection:
+            self.connection.execute(
+                'INSERT INTO lecture_audio(user_id,lecture_id,source_key,local_path,content_hash,saved_at) '
+                'VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,lecture_id) DO UPDATE SET '
+                'source_key=excluded.source_key,local_path=excluded.local_path,content_hash=excluded.content_hash,saved_at=excluded.saved_at',
+                (user_id, item['lectureId'], item['sourceKey'], item['localPath'], item['contentHash'], item['savedAt']))
+
     def get_todos(self, user_id: str) -> list[dict[str, Any]]:
         courses = {course["id"]: {"courseId": course["id"], "courseName": course["name"], "items": []} for course in self.get_courses(user_id)}
         for item in self.get_assignments(user_id):

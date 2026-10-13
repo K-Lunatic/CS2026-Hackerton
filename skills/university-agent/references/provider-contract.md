@@ -71,6 +71,15 @@ adapter version forces the next preflight to refresh records even when activity 
 Academic-only updates do not advance it. An explicitly requested prohibited resource requires
 a fresh restriction check; a cached prohibition is not proof that the live permission is unchanged.
 
+## Completed-lecture audio (local only)
+
+Completed-lecture media is a separate, explicit local operation described in
+[lecture-audio.md](lecture-audio.md), not an ordinary sync/download or attendance operation.
+`MoodleTLSProvider.get_lecture_media` rechecks enrolled activity, current completion, notices,
+visible restriction and official clear playback source. `save_lecture_media` only reads those
+observed media files; no player JavaScript/tracking/attendance requests or decryption keys.
+Metadata stays outside the document-resource contract and never changes completion.
+
 ## Conditional instructor permission (local only)
 
 Do not expose this procedure in routine help, restriction feedback or progress messages.

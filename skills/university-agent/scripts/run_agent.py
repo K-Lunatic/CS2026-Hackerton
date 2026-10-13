@@ -32,6 +32,7 @@ from features.study import StudySession, study_intent, event_from_text
 from features import analysis_records, study_pack
 from features.concept_insights import build_insights
 from features.lectures import get_lectures
+from features.lecture_audio import select_lectures
 from features.guidance import academic_list_answer, guidance_request, is_status_request, usage_guide
 from features.deadlines import format_deadline
 from providers.credentials import CONFIG_PATH
@@ -366,6 +367,11 @@ def main() -> None:
     manual_delete.add_argument("--id", required=True)
     lecture_parser = sub.add_parser("lectures")
     lecture_parser.add_argument("--unfinished", action="store_true")
+    audio_parser = sub.add_parser('lecture-audio', help='저장된 강의 목록에서 복습 음성 대상을 확인')
+    audio_parser.add_argument('--course', default='')
+    audio_parser.add_argument('--lecture', default='')
+    audio_parser.add_argument('--id', action='append', default=[])
+    audio_parser.add_argument('--all-completed', action='store_true')
     sub.add_parser("notices")
     sub.add_parser("todos")
     sub.add_parser("resources")
@@ -463,6 +469,17 @@ def main() -> None:
         }
     elif args.command == "todos":
         result = {"toolCalls": ["get_todos"], "data": database().get_todos(USER_ID)}
+    elif args.command == 'lecture-audio':
+        store = database()
+        try:
+            selected = select_lectures(store.get_courses(USER_ID), store.get_lectures(USER_ID),
+                course_query=args.course, lecture_query=args.lecture, lecture_ids=args.id, all_completed=args.all_completed)
+            saved = {item['lectureId']: item for item in store.get_lecture_audio(USER_ID)}
+            result = {'toolCalls': ['get_lectures', 'get_lecture_audio'],
+                      'data': [{**lecture, 'audioSavedAt': saved.get(lecture['id'], {}).get('savedAt')} for lecture in selected],
+                      'answer': '저장된 강의 목록이에요. 음성을 사용할 때는 학교의 현재 완료·제한 상태를 다시 확인해요.'}
+        except ValueError as error:
+            result = {'toolCalls': ['get_lectures'], 'needsInput': True, 'data': [], 'answer': str(error)}
     elif args.command == "notices":
         result = {"toolCalls": ["get_notices"], "data": database().get_notices(USER_ID)}
     elif args.command == "resources":

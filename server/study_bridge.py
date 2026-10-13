@@ -82,7 +82,7 @@ def save_generated_exam(data_dir, db_path, user: str, conversation: str, payload
         raise ValueError("새 문제를 만들지 못했어요.")
     exam_id = secrets.token_hex(12)
     saved = {
-        "phase": "question", "selection": {}, "settings": cfg, "sources": source_pool,
+        "phase": "question", "webStarted": False, "selection": {}, "settings": cfg, "sources": source_pool,
         "questions": questions, "index": 0, "history": [], "hinted": False,
         "hintedIds": [], "examId": exam_id, "drafts": {}, "draftRevision": 0,
     }

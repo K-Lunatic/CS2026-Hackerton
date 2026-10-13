@@ -496,7 +496,7 @@ class Gateway:
         conversation = self._mobile_conversation(ticket)
         current = study_bridge.session(self.data_dir, self.db_path, self.take(self.study_links, ticket)['user'], conversation)
         try:
-            action = {'/api/exam': 'web_status', '/api/draft': 'draft', '/api/submit': 'web_submit', '/api/confusion': 'confusion_toggle', '/api/focus': 'question_focus'}.get('/' + tail)
+            action = {'/api/exam': 'web_status', '/api/history': 'exam_history', '/api/start': 'start_exam', '/api/retry': 'shuffle_exam', '/api/draft': 'draft', '/api/submit': 'web_submit', '/api/confusion': 'confusion_toggle', '/api/focus': 'question_focus'}.get('/' + tail)
             if not action:
                 return 404, {'error': '지원하지 않는 요청입니다.'}, 'application/json', []
             if env['REQUEST_METHOD'] == 'GET':

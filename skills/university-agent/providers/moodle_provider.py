@@ -424,6 +424,52 @@ class MoodleTLSProvider:
                 result.append({"id": f"tls-lecture-{vod_id}", "externalId": vod_id, "courseId": course["id"], "title": title or f"TLS lecture {vod_id}", "durationSeconds": playtime, "watchedSeconds": round(playtime * progress / 100), "watchProgress": progress, "completed": complete, "availableFrom": start, "availableUntil": end, "source": "tls"})
         return result
 
+    def get_lecture_media(self, user_id, lecture, notices=None, *, video=False):
+        """Fresh completion/permission checks, without any player or attendance writes."""
+        from providers.lecture_media import media_plan
+        if lecture.get('source') != 'tls' or lecture.get('completed') is not True:
+            raise ResourceUnavailable('끝까지 본 강의만 음성을 가져올 수 있어요. 시청 기록은 바꾸지 않아요.')
+        identifier = str(lecture.get('externalId', ''))
+        if not re.fullmatch(r'[1-9][0-9]*', identifier) or lecture.get('id') != 'tls-lecture-' + identifier:
+            raise ResourceUnavailable('선택한 강의를 확인하지 못했어요.')
+        course = next((item for item in self.get_courses(user_id) if item['id'] == lecture['courseId']), None)
+        if course is None:
+            raise ResourceUnavailable('현재 수강 중인 과목의 강의가 아니에요.')
+        parser = _ActivityParser()
+        parser.feed(self._course_page(course))
+        title = next((title for href, title in self._course_activity_links(course)
+                      if re.search(r'/mod/vod/view\.php\?id=' + identifier + r'(?:&|$)', href)), None)
+        activity = next((item for item in parser.items
+                         if re.search(r'/mod/vod/view\.php\?id=' + identifier + r'(?:&|$)', item['href'])), None)
+        if not activity or title != lecture['title']:
+            raise ResourceUnavailable('강의 정보가 바뀌었어요. 학교 목록을 새로 확인해 주세요.')
+        if notices is None:
+            reader = MoodleTLSProvider(self.session)
+            reader._courses = [course]
+            reader._course_pages = self._course_pages.copy()
+            notices = reader.get_notices(user_id)
+        issue = _download_restriction(activity['text'], lecture['title'], notices or [], videos=True)
+        if issue:
+            raise DownloadRestricted('이 강의는 다운로드가 제한되어 음성을 가져오지 않았어요.')
+        viewer, final = self.session.get_page('/mod/vod/viewer.php?id=' + identifier,
+                                             allowed_origin=urlsplit(self.session.base_url).hostname)
+        if '/login' in urlsplit(final).path:
+            raise LoginError('학교 연결이 만료됐어요. 다시 연결해 주세요.')
+        if _find_number(viewer, 'is_complete') != 1:
+            raise ResourceUnavailable('학교에서 아직 시청 완료로 확인되지 않았어요. 음성은 가져오지 않았어요.')
+        if _download_restriction(_plain_text(viewer), lecture['title'], []):
+            raise DownloadRestricted('이 강의는 다운로드가 제한되어 음성을 가져오지 않았어요.')
+        if re.search(r'\b(?:allow_?download|file_download)\s*[:=]\s*[\"\']?(?:0|false)\b|\bdrm\s*:', viewer, re.I):
+            raise DownloadRestricted('보호되거나 저장이 제한된 영상이라 음성을 가져오지 않았어요.')
+        sources = re.findall(r'\bsources\s*:\s*\[\s*\{\s*file\s*:\s*([\"\'])(.*?)\1', viewer, re.S)
+        if len(sources) != 1:
+            raise ResourceUnavailable('이 강의의 실제 재생 주소를 확인하지 못했어요.')
+        return media_plan(self.session, unescape(sources[0][1]).replace('\\/', '/'), video=video)
+
+    def save_lecture_media(self, plan, target, progress=None):
+        from providers.lecture_media import download_media
+        return download_media(self.session, plan, target, progress)
+
     def get_notices(self, user_id: str) -> list[dict[str, Any]]:
         parallel = self._parallel_courses('get_notices', user_id)
         if parallel is not None:
@@ -609,7 +655,7 @@ class MoodleTLSProvider:
                 '_content': content, '_viewerUrl': viewer_url}
 
 
-def _download_restriction(activity_text: str, title: str, notices: list[dict[str, Any]]) -> str | None:
+def _download_restriction(activity_text: str, title: str, notices: list[dict[str, Any]], *, videos=False) -> str | None:
     patterns = (
         r"(?:다운로드|다운받|내려받|저장)\s*(?:은|는|이|가|을|를)?\s*(?:금지|불가|제한|할\s*수\s*없|허용되지\s*않|하지\s*마|지\s*마|하면\s*안)",
         r"(?:금지|불가|제한)\s*(?:된|되어)?\s*(?:다운로드|저장)",
@@ -634,7 +680,8 @@ def _download_restriction(activity_text: str, title: str, notices: list[dict[str
         if not restricted(notice_text):
             continue
         notice_compact = re.sub(r"\s+", "", notice_text).casefold()
-        broad_rule = re.search(r"(?:모든|전체|전부)\s*(?:강의|수업)?\s*(?:자료|파일)|(?:강의|수업)(?:자료|파일)\s*(?:모두|전체|전부)", notice_text)
+        kinds = '자료|파일|동영상|영상' if videos else '자료|파일'
+        broad_rule = re.search(rf"(?:모든|전체|전부)\s*(?:강의|수업)?\s*(?:{kinds})|(?:강의|수업)(?:{kinds})\s*(?:모두|전체|전부)", notice_text)
         if (normalized_title and normalized_title in notice_compact) or broad_rule:
             return "과목 공지에 해당 자료의 다운로드 제한이 있어 파일을 가져오지 않았습니다."
     return None

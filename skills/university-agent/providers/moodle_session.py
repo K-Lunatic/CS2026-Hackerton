@@ -53,8 +53,10 @@ def check_download_origin(url, origin):
         return
     try:
         parts = urlsplit(url)
-        allowed = (parts.scheme == 'https' and parts.hostname == origin and
-                   parts.port in (None, 443) and not parts.username and not parts.password)
+        expected = urlsplit('https://' + origin)
+        allowed = (parts.scheme == 'https' and parts.hostname == expected.hostname and
+                   (parts.port or 443) == (expected.port or 443) and
+                   not parts.username and not parts.password)
     except ValueError:
         allowed = False
     if not allowed:
@@ -209,14 +211,14 @@ class MoodleSession:
             raise ValueError('학교의 문서 상태 응답 형식이 달라요.')
         return {key: value.get(key) for key in ('state_code', 'file_download')}
 
-    def get_bytes(self, path: str, *, conditional=None, allowed_origin=None) -> tuple[bytes | None, Any]:
+    def get_bytes(self, path: str, *, conditional=None, allowed_origin=None, max_bytes=None) -> tuple[bytes | None, Any]:
         if not self.logged_in:
             raise LoginError("Call login() before get_bytes()")
         url = urljoin(f"{self.base_url}/", path.lstrip("/"))
         check_download_url(url)
         check_download_origin(url, allowed_origin)
         try:
-            request = Request(url, headers={"User-Agent": "UniversityAgent/0.1", "Accept-Encoding": "gzip, deflate", **(conditional or {})})
+            request = Request(url, headers={"User-Agent": "UniversityAgent/0.1", "Accept-Encoding": "identity" if max_bytes is not None else "gzip, deflate", **(conditional or {})})
             request.allowed_origin = allowed_origin
             response = self.opener.open(request, timeout=30)
         except HTTPError as error:
@@ -234,6 +236,14 @@ class MoodleSession:
             check_download_origin(response.geturl(), allowed_origin)
             if "/login" in urlsplit(response.geturl()).path:
                 raise LoginError("TLS session expired; sign in again")
-            return self._decode_bytes(response.read(), response), response
+            payload = response.read() if max_bytes is None else response.read(max_bytes + 1)
+            if max_bytes is not None and len(payload) > max_bytes:
+                raise ValueError('영상 조각이 너무 커서 가져오기를 멈췄어요.')
+            if max_bytes is not None and response.headers.get('Content-Encoding', '').lower() not in ('', 'identity'):
+                raise ValueError('영상 응답 형식이 달라 가져오기를 멈췄어요.')
+            payload = self._decode_bytes(payload, response)
+            if max_bytes is not None and len(payload) > max_bytes:
+                raise ValueError('영상 조각이 너무 커서 가져오기를 멈췄어요.')
+            return payload, response
         finally:
             response.close()

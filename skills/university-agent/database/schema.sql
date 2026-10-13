@@ -107,6 +107,17 @@ CREATE TABLE IF NOT EXISTS notices (
   UNIQUE (source, external_id)
 );
 
+-- Audio is a private derived file, not a TLS resource or a completion update.
+CREATE TABLE IF NOT EXISTS lecture_audio (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  lecture_id TEXT NOT NULL REFERENCES lectures(id) ON DELETE CASCADE,
+  source_key TEXT NOT NULL,
+  local_path TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  saved_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, lecture_id)
+);
+
 CREATE TABLE IF NOT EXISTS resources (
   id TEXT PRIMARY KEY,
   external_id TEXT NOT NULL,

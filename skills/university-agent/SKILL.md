@@ -44,6 +44,11 @@ For any future user input, follow [references/form-pattern.md](references/form-p
 
 ## Commands
 
+For completed-lecture audio/review requests, read [references/lecture-audio.md](references/lecture-audio.md).
+Use its local runner with stored credentials, never play the lecture or call attendance/progress endpoints.
+Audio extraction exists; timestamped transcription, AI review and targeted frames are a documented next-stage
+design, not implemented capabilities. Never claim an audio file was transcribed or semantically reviewed.
+
 ### Immediate account connection
 
 When the user requests account connection, or a lookup reports missing credentials, run `python3 scripts/sync_tls.py --connect` from this skill directory (Windows: the available Python executable, e.g. `py -3`). Resolve the skill path; do not assume the host's current directory. Use the required local write/desktop approval. This opens a one-use local browser form; never collect credentials in chat or forward them through a model-visible PTY. Do not stop at another confirmation question after an authorized connection request. The launcher returning means the browser form opened, NOT login/sync success. After the user completes the form, verify local context before reporting success. If browser launch is denied/unavailable, fall back to the user's separate local terminal and keep the same secret-storage rules.

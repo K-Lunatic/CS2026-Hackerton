@@ -293,14 +293,22 @@ def summary(state):
     review = [{'concept': h['concept'], 'sources': h['evidence']} for h in history if h['outcome'] != 'correct' or h['hintUsed']]
     answer = f"여기까지 {len(history)}문제를 진행했고 {remaining}문제가 남았어요." if remaining else '풀이를 마쳤어요.'
     answer += ' 아래 개념을 자료에서 다시 확인해 보세요.' if review else ' 복습이 필요한 기록은 없어요.'
-    total_points = sum(q.get('points', 10) for q in state.get('questions', []))
-    raw_score = sum(h.get('score', 0) for h in history)
     return {'status': 'finished', 'results': history,
             'counts': {label: sum(h['outcome'] == label for h in history) for label in ('correct', 'incorrect', 'partial', 'skipped', 'revealed')},
             'selfCorrect': sum(h['outcome'] == 'correct' and not h['hintUsed'] for h in history),
-            'score': round(raw_score / total_points * 100, 2) if total_points else 0,
+            'score': score_percent(state),
             'totalPoints': 100,
             'remaining': remaining, 'review': review, 'answer': answer}
+
+
+def score_percent(state):
+    """Normalize legacy and current raw scores to the public 0–100 scale."""
+    questions = state.get('questions', [])
+    total_points = sum(q.get('points', 10) for q in questions)
+    raw_score = sum(h.get('score', 0) for h in state.get('history', []))
+    if not total_points:
+        return 0
+    return min(100, max(0, round(raw_score / total_points * 100, 2)))
 
 
 class StudySession:
@@ -414,9 +422,7 @@ class StudySession:
         saved = {k: v for k, v in state.items() if k != 'pipeline'}
         title = ' / '.join(dict.fromkeys(s['name'] for s in state.get('sources', [])))
         questions = state.get('questions', [])
-        total_points = sum(q.get('points', 10) for q in questions)
-        raw_score = sum(h.get('score', 0) for h in state.get('history', []))
-        score = round(raw_score / total_points * 100, 2) if state['phase'] == 'finished' and total_points else 0 if state['phase'] == 'finished' else None
+        score = score_percent(state) if state['phase'] == 'finished' else None
         db.execute('INSERT INTO study_exams VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user,exam_id) DO UPDATE SET phase=excluded.phase,score=excluded.score,state=excluded.state WHERE study_exams.state != excluded.state',
             (self.user, state['examId'], conversation or self.conversation, datetime.now(timezone.utc).isoformat(),
              title, len(state['questions']), state['phase'], score, json.dumps(saved, ensure_ascii=False, separators=(',', ':'))))
@@ -440,9 +446,7 @@ class StudySession:
                 saved = json.loads(row[6])
                 if row[4] == 'finished' and saved.get('questions'):
                     questions = saved['questions']
-                    total_points = sum(q.get('points', 10) for q in questions)
-                    raw_score = sum(h.get('score', 0) for h in saved.get('history', []))
-                    score = round(raw_score / total_points * 100, 2) if total_points else 0
+                    score = score_percent(saved)
             except (TypeError, ValueError, KeyError):
                 pass
             exams.append(dict(zip(('examId', 'createdAt', 'title', 'questionCount', 'status', 'score'), row[:5] + (score,))))
@@ -498,7 +502,7 @@ class StudySession:
         settings_value = {**source.get('settings', {}), 'count': count,
                           'types': [question['type'] for question in questions],
                           'mode': 'quiz', 'delivery': 'web'}
-        return {'phase': 'question', 'settings': settings_value,
+        return {'phase': 'question', 'settings': settings_value, 'webStarted': False,
                 'selection': dict(source.get('selection', {})), 'sources': list(source.get('sources', [])),
                 'questions': questions, 'index': 0, 'history': [], 'hinted': False,
                 'hintedIds': [], 'examId': secrets.token_hex(12), 'drafts': {},
@@ -649,7 +653,7 @@ class StudySession:
         questions = [{**question, 'id': f'q{index}'} for index, question in enumerate(chosen['questions'], 1)]
         settings_value = {**payload.get('settings', {}), 'count': len(questions),
                           'types': [question.get('type', 'auto') for question in questions], 'mode': 'quiz', 'delivery': 'web'}
-        state.clear(); state.update({'phase': 'question', 'settings': settings_value,
+        state.clear(); state.update({'phase': 'question', 'settings': settings_value, 'webStarted': False,
             'selection': dict(payload.get('selection', {})), 'sources': list(payload.get('sources', [])),
             'questions': questions, 'index': 0, 'history': [], 'hinted': False, 'hintedIds': [],
             'examId': secrets.token_hex(12), 'drafts': {}, 'draftRevision': 0,
@@ -772,7 +776,7 @@ class StudySession:
             db.execute('CREATE TABLE IF NOT EXISTS study_match_history (user TEXT, match_id TEXT, source_exam_id TEXT, conversation TEXT, created_at TEXT, phase TEXT, pair_count INTEGER, attempts INTEGER, state TEXT, PRIMARY KEY(user,match_id))')
             db.execute('CREATE TABLE IF NOT EXISTS study_exam_collections (user TEXT, collection_id TEXT, conversation TEXT, created_at TEXT, state TEXT, PRIMARY KEY(user,collection_id))')
             self._ensure_context_notes(db)
-            read_only = self.exam_id is not None or event.get('action') in ('list_context_notes', 'catalog', 'unit', 'candidate', 'exam_review', 'match_status', 'sets_status')
+            read_only = self.exam_id is not None or event.get('action') in ('list_context_notes', 'catalog', 'unit', 'candidate', 'exam_review', 'exam_history', 'match_status', 'sets_status')
             db.execute('BEGIN' if read_only else 'BEGIN IMMEDIATE')
             if event.get('action') in ('save_context_note', 'list_context_notes'):
                 return self.context_note_event(db, event)
@@ -934,9 +938,9 @@ class StudySession:
             if not items:
                 state.update(phase='finished', questions=[], history=[], shortageReason=event['data']['shortageReason'])
                 return {'status': 'insufficient', 'answer': '읽은 자료로 근거 있는 문제를 만들 수 없습니다. 다른 자료를 선택하거나 파일을 첨부해주세요.', 'reason': event['data']['shortageReason']}
-            state.update(phase='question', questions=items, index=0, history=[], hinted=False, hintedIds=[], examId=secrets.token_hex(12), drafts={}, draftRevision=0)
+            state.update(phase='question', webStarted=False, questions=items, index=0, history=[], hinted=False, hintedIds=[], examId=secrets.token_hex(12), drafts={}, draftRevision=0)
             return {**current(state), 'shortageReason': event['data'].get('shortageReason', '')}
-        elif action in ('web_status', 'draft', 'web_submit'):
+        elif action in ('web_status', 'start_exam', 'draft', 'web_submit'):
             return self.web_event(state, event)
         elif action in ('answer', 'submit', 'grade_batch', 'hint', 'skip', 'reveal', 'grade', 'next', 'stop', 'status'):
             return self.practice(state, event)
@@ -1078,10 +1082,19 @@ class StudySession:
     def web_event(self, state, event):
         if state.get('settings', {}).get('delivery') != 'web' or not state.get('questions'):
             raise ValueError('delivery: web으로 생성한 시험지가 필요합니다.')
-        if event['action'] == 'web_status':
-            if not event.get('readOnly') and state['phase'] == 'question':
+        started = state.get('webStarted', True)
+        if event['action'] == 'start_exam':
+            if event.get('examId') != state.get('examId') or state['phase'] != 'question':
+                raise ValueError('시험지가 바뀌었어요. 새로고침 후 다시 시작해주세요.')
+            if not started:
+                state['webStarted'] = True
+                self._touch_web_clock(state)
+        elif event['action'] == 'web_status':
+            if not event.get('readOnly') and started and state['phase'] == 'question':
                 self._touch_web_clock(state)
         else:
+            if not started:
+                raise ValueError('시험 시작 버튼을 먼저 눌러주세요.')
             if event.get('examId') != state.get('examId') or state['phase'] != 'question':
                 raise ValueError('이미 제출했거나 시험지가 바뀌었어요. 새로고침해주세요.')
             if type(event.get('revision')) is not int or event['revision'] != state.get('draftRevision', 0):
@@ -1106,9 +1119,11 @@ class StudySession:
                 self._touch_web_clock(state, freeze=True)
                 state['questionTimes'] = self._question_times(state)
                 state.update(phase='grading', drafts=answers, pendingGrades=pending, batchFeedback=[], batchGradeId=secrets.token_hex(12))
-        result = {'status': state['phase'], 'examId': state['examId'], 'title': ' / '.join(dict.fromkeys(s['name'] for s in state['sources'])),
-                  'questions': [{**{k: q[k] for k in ('id', 'type', 'typeLabel', 'responseFormat', 'question', 'options', 'code', 'language', 'points')}, 'blocks': q.get('blocks', [])} for q in state['questions']],
-                  'drafts': state.get('drafts', {}), 'confusedIds': state.get('confusedIds', []),
+        started = state.get('webStarted', True)
+        result = {'status': state['phase'] if started else 'ready', 'examId': state['examId'], 'title': ' / '.join(dict.fromkeys(s['name'] for s in state['sources'])),
+                  'webStarted': started, 'questionCount': len(state['questions']),
+                  'questions': [{**{k: q[k] for k in ('id', 'type', 'typeLabel', 'responseFormat', 'question', 'options', 'code', 'language', 'points')}, 'blocks': q.get('blocks', [])} for q in state['questions']] if started else [],
+                  'drafts': state.get('drafts', {}) if started else {}, 'confusedIds': state.get('confusedIds', []),
                   'totalPoints': 100}
         result.update(self._web_clock(state))
         result['questionTimes'] = state.get('questionTimes', {})

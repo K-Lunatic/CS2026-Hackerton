@@ -43,7 +43,7 @@ class ExamWebTests(ProjectTestBase):
             'types': [{'type': t, 'reason': '탐색 조건을 확인한다'} for t in dict.fromkeys(q['type'] for q in questions)],
             'questions': questions, 'shortageReason': '이 부분의 근거 있는 후보만 저장'}})
 
-    def make_exam(self, time_limit=None):
+    def make_exam(self, time_limit=None, start=True):
         session = self.session('exam')
         exam_settings = {'count': 6, 'choices': 3, 'delivery': 'web'}
         if time_limit is not None:
@@ -64,7 +64,36 @@ class ExamWebTests(ProjectTestBase):
             questions.append(q)
         self.extract_questions(session, prepared, questions)
         session.call({'action': 'assemble', 'candidateIds': [f'c{i}' for i in range(1, 7)]})
+        if start:
+            exam = session.call({'action': 'web_status'})
+            session.call({'action': 'start_exam', 'examId': exam['examId']})
         return session
+
+    def test_exam_hides_questions_and_starts_clock_only_after_button(self):
+        s = self.make_exam(start=False)
+        ready = s.call({'action': 'web_status'})
+        self.assertEqual(ready['status'], 'ready')
+        self.assertFalse(ready['webStarted'])
+        self.assertEqual(ready['questionCount'], 6)
+        self.assertEqual(ready['questions'], [])
+        with self.assertRaisesRegex(ValueError, '시작 버튼'):
+            s.call({'action': 'draft', 'examId': ready['examId'], 'revision': 0, 'answers': {}})
+        started = s.call({'action': 'start_exam', 'examId': ready['examId']})
+        self.assertEqual(started['status'], 'question')
+        self.assertTrue(started['webStarted'])
+        self.assertEqual(len(started['questions']), 6)
+        self.assertIsInstance(started['elapsedSeconds'], int)
+
+    def test_exam_history_lists_saved_exam_and_retry_keeps_original(self):
+        s = self.make_exam()
+        original = s.call({'action': 'web_status'})
+        history = s.call({'action': 'exam_history'})
+        self.assertTrue(any(item['examId'] == original['examId'] for item in history['exams']))
+        retry = s.call({'action': 'shuffle_exam', 'examId': original['examId']})
+        self.assertNotEqual(retry['examId'], original['examId'])
+        history = s.call({'action': 'exam_history'})
+        self.assertGreaterEqual(len(history['exams']), 2)
+        self.assertTrue(any(item['examId'] == original['examId'] for item in history['exams']))
 
     def test_web_all_types_drafts_ai_grades_and_no_answer_leaks(self):
         s = self.make_exam()
@@ -133,6 +162,16 @@ class ExamWebTests(ProjectTestBase):
         self.assertEqual(result['score'], 87.5)
         self.assertEqual(result['totalPoints'], 100)
 
+    def test_legacy_scores_are_normalized_and_capped_for_history(self):
+        from features.study import score_percent, summary
+        state = {'questions': [{'points': 10}, {'points': 10}], 'history': [
+            {'score': 116.67, 'outcome': 'correct', 'hintUsed': False, 'concept': 'A', 'evidence': []}]}
+        self.assertEqual(score_percent(state), 100)
+        state['history'][0]['score'] = 116.67
+        state['questions'][0]['points'] = 100
+        state['questions'][1]['points'] = 100
+        self.assertEqual(summary(state)['score'], 58.34)
+
     def test_ordering_question_preserves_blocks_and_accepts_numbered_order(self):
         s = self.session('ordering')
         prepared = s.call({'action': 'request', 'selection': {'courseId': 'course-1'},
@@ -142,6 +181,8 @@ class ExamWebTests(ProjectTestBase):
                  blocks=['범위 확인', '중간값 계산', '왼쪽 또는 오른쪽 선택'],
                  answer=json.dumps([0, 1, 2], ensure_ascii=False), rubric=['올바른 절차'])
         self.extract_questions(s, prepared, [q]); s.call({'action': 'assemble', 'candidateIds': ['c1']})
+        public = s.call({'action': 'web_status'})
+        s.call({'action': 'start_exam', 'examId': public['examId']})
         public = s.call({'action': 'web_status'})
         self.assertEqual(public['questions'][0]['responseFormat'], 'ordering')
         self.assertEqual(public['questions'][0]['blocks'], q['blocks'])
@@ -228,6 +269,8 @@ class ExamWebTests(ProjectTestBase):
         self.assertTrue(shuffled['needsWeb'])
         self.assertEqual(shuffled['total'], 4)
         self.assertNotEqual(shuffled['examId'], original['examId'])
+        current = s.call({'action': 'web_status'})
+        s.call({'action': 'start_exam', 'examId': current['examId']})
         current = s.call({'action': 'web_status'})
         self.assertEqual(len(current['questions']), 4)
         self.assertTrue({q['question'] for q in current['questions']} <= {q['question'] for q in original['questions']})
@@ -452,6 +495,8 @@ class ExamWebTests(ProjectTestBase):
         self.assertTrue(prepared['needsAssembly'])
         self.assertEqual(prepared['reusedFiles'], 1)
         s.call({'action': 'assemble', 'candidateIds': ['c1']})
+        prepared_exam = s.call({'action': 'web_status'})
+        s.call({'action': 'start_exam', 'examId': prepared_exam['examId']})
         with self.assertRaisesRegex(ValueError, '시험지가 바뀌었어요'):
             s.call({'action': 'web_submit', 'examId': old['examId'], 'revision': 0, 'answers': {'q1': '오래된 답'}})
         self.assertEqual(s.call({'action': 'web_status'})['drafts'], {})

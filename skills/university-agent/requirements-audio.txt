@@ -1,0 +1,3 @@
+# Optional: installed only when lecture audio is requested and ffmpeg is absent.
+# Bundles a local FFmpeg executable for macOS and Windows.
+imageio-ffmpeg>=0.6,<1

@@ -218,6 +218,8 @@ class FilePipelineTests(ProjectTestBase):
         self.assertEqual(unit['types'][0]['type'], 'mcq')
         session.call({'action': 'assemble', 'candidateIds': ['c1', 'c2', 'c3', 'c4']})
         public = session.call({'action': 'web_status'})
+        session.call({'action': 'start_exam', 'examId': public['examId']})
+        public = session.call({'action': 'web_status'})
         self.assertEqual(len(public['questions']), 4)
         self.assertNotIn('rubric', json.dumps(public))
         with sqlite3.connect(self.db_path.parent / 'study-sessions.db') as db:
@@ -336,6 +338,7 @@ class FilePipelineTests(ProjectTestBase):
             old['largeOriginal'] = 'x' * 1000000
             state['pipeline'] = old
             db.execute('UPDATE study_sessions SET state=?', (json.dumps(state),))
+        session.call({'action': 'start_exam', 'examId': state['examId']})
         session.call({'action': 'draft', 'examId': state['examId'], 'revision': 0, 'answers': {}})
         with sqlite3.connect(path) as db:
             small = db.execute('SELECT state FROM study_sessions').fetchone()[0]

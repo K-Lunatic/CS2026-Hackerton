@@ -57,6 +57,11 @@ def create_exam_server(session, port=0, view='exam'):
                     self.send(200, session.call({'action': 'web_status'}))
                 except ValueError as exc:
                     self.send(409, {'error': str(exc)})
+            elif self.path == '/api/history':
+                try:
+                    self.send(200, session.call({'action': 'exam_history'}))
+                except ValueError as exc:
+                    self.send(409, {'error': str(exc)})
             elif self.path == '/api/match' and view == 'match':
                 try:
                     self.send(200, session.call({'action': 'match_status'}))
@@ -74,7 +79,7 @@ def create_exam_server(session, port=0, view='exam'):
             if not self.authorized():
                 return
             allowed_paths = {
-                'exam': ('/api/draft', '/api/submit', '/api/confusion', '/api/focus'),
+                'exam': ('/api/start', '/api/retry', '/api/draft', '/api/submit', '/api/confusion', '/api/focus'),
                 'match': ('/api/match',),
                 'sets': ('/api/sets/select',),
             }[view]
@@ -87,7 +92,15 @@ def create_exam_server(session, port=0, view='exam'):
                     raise ValueError('답안 형식이나 크기를 확인해주세요.')
                 data = json.loads(self.rfile.read(size))
                 if view == 'exam':
-                    if self.path == '/api/confusion':
+                    if self.path == '/api/start':
+                        if not isinstance(data, dict) or set(data) != {'examId'}:
+                            raise ValueError('시험 시작 형식을 확인해주세요.')
+                        action = 'start_exam'
+                    elif self.path == '/api/retry':
+                        if not isinstance(data, dict) or set(data) != {'examId'}:
+                            raise ValueError('다시 풀 시험을 확인해주세요.')
+                        action = 'shuffle_exam'
+                    elif self.path == '/api/confusion':
                         if not isinstance(data, dict) or set(data) != {'examId', 'questionId', 'confused'}:
                             raise ValueError('헷갈린 문항 표시 형식을 확인해주세요.')
                         action = 'confusion_toggle'

@@ -20,7 +20,7 @@ const MARK = {
   incorrect: 'M49 6 C38 22 24 40 9 55',
 };
 const GLYPH = {correct: '○', partial: '△', incorrect: '／'};
-let exam, drafts = {}, revision = 0, timer, clockTimer, clockBaseElapsed = null, clockSyncedAt = 0, focusRequest = Promise.resolve(), focusedQuestionId = '', saving = Promise.resolve(), submitting = false, dirty = false, editVersion = 0;
+let exam, drafts = {}, revision = 0, timer, clockTimer, clockBaseElapsed = null, clockSyncedAt = 0, focusRequest = Promise.resolve(), focusedQuestionId = '', saving = Promise.resolve(), submitting = false, dirty = false, editVersion = 0, starting = false;
 function node(tag, text, className) {
   const el = document.createElement(tag);
   if (text !== undefined) el.textContent = text;
@@ -28,6 +28,7 @@ function node(tag, text, className) {
   return el;
 }
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
+function historyError(message) { $('history-error').textContent = message; $('history-error').hidden = !message; }
 async function api(path, data) {
   const response = await fetch(API_ROOT + path, {method: data ? 'POST' : 'GET', headers: {'X-Exam-Token': token, 'Content-Type': 'application/json'}, body: data ? JSON.stringify(data) : undefined});
   const result = await response.json();
@@ -59,7 +60,8 @@ function chosen(q) {
 function progress() {
   const count = exam.questions.filter(answered).length;
   if (exam.readOnly) { $('progress').textContent = '지난 시험과 당시 답안을 보고 있어요'; return; }
-  $('progress').textContent = exam.status === 'question' ? exam.questions.length + '문항 중 ' + count + '문항에 답했어요'
+  $('progress').textContent = exam.webStarted === false ? exam.questionCount + '문항을 준비했어요'
+    : exam.status === 'question' ? exam.questions.length + '문항 중 ' + count + '문항에 답했어요'
     : exam.status === 'grading' ? '채점을 기다리고 있어요' : '채점이 끝났어요';
 }
 function formatDuration(seconds) {
@@ -277,12 +279,18 @@ function render(data) {
   drafts = Object.fromEntries(data.questions.map(q => [q.id, data.drafts[q.id] || '']));
   const finished = data.status === 'finished', feedback = Object.fromEntries((data.feedback || []).map(item => [item.questionId, item]));
   $('title').textContent = data.title; document.title = data.title + ' 연습 시험';
-  $('total').textContent = '수업자료에서 만든 연습 시험 ' + data.questions.length + '문항, 100점 만점이에요. 실제 학교 시험이나 예상 기출이 아니에요.';
-  $('phase').textContent = {question: '시험 진행 중', grading: '채점 기다리는 중', finished: '채점 완료'}[data.status] || data.status;
-  $('exam').classList.toggle('answering', data.status === 'question' && !data.readOnly);
+  $('total').textContent = '수업자료에서 만든 연습 시험 ' + (data.questionCount || data.questions.length) + '문항, 100점 만점이에요. 실제 학교 시험이나 예상 기출이 아니에요.';
+  const ready = data.webStarted === false;
+  $('phase').textContent = ready ? '시작 전' : ({question: '시험 진행 중', grading: '채점 기다리는 중', finished: '채점 완료'}[data.status] || data.status);
+  $('exam').classList.toggle('answering', data.status === 'question' && !data.readOnly && !ready);
+  $('start-panel').hidden = !ready;
+  $('start').disabled = starting;
+  $('questions').hidden = ready;
+  $('nav').hidden = ready;
+  $('time-panel').hidden = ready;
   $('questions').replaceChildren(...data.questions.map((q, i) => questionItem(q, i, feedback[q.id])));
   $('nav').replaceChildren(...data.questions.map((q, i) => omrRow(q, i, feedback[q.id])));
-  $('submit-area').hidden = data.status !== 'question' || data.readOnly;
+  $('submit-area').hidden = ready || data.status !== 'question' || data.readOnly;
   if (data.status !== 'question') $('saved').textContent = '';
   resetConfirm(); progress();
   $('notice').hidden = data.status === 'question';
@@ -315,6 +323,34 @@ function render(data) {
     }
   }
 }
+function historyStatus(item) {
+  return {finished: '채점 완료', grading: '채점 대기 중', question: '진행 중'}[item.status] || item.status;
+}
+function renderHistory(data) {
+  const items = data.exams || [];
+  $('history-list').replaceChildren(...(items.length ? items.map(item => {
+    const row = node('li', undefined, 'history-item');
+    const title = node('strong', item.title, 'history-title');
+    const detail = node('span', historyStatus(item) + ' · ' + item.questionCount + '문항' + (item.score === null || item.score === undefined ? '' : ' · ' + item.score + '점'), 'history-detail');
+    const date = node('time', String(item.createdAt || '').slice(0, 10), 'history-date');
+    const button = node('button', '다시 풀기', 'button'); button.type = 'button';
+    button.addEventListener('click', async () => {
+      button.disabled = true; historyError('새 시험지를 준비하고 있어요…');
+      try {
+        await api('/api/retry', {examId: item.examId});
+        $('history-panel').hidden = true;
+        render(await api('/api/exam'));
+        historyError('');
+      } catch (e) { historyError(e.message); button.disabled = false; }
+    });
+    row.append(node('div', undefined, 'history-copy')); row.firstChild.append(title, detail, date); row.append(button); return row;
+  }) : [node('li', '아직 저장된 시험이 없어요.', 'history-empty')]));
+}
+async function openHistory() {
+  $('history-panel').hidden = false; historyError('불러오는 중…');
+  try { renderHistory(await api('/api/history')); historyError(''); }
+  catch (e) { historyError(e.message); }
+}
 function resetConfirm() {
   $('confirm-text').hidden = true; $('cancel').hidden = true;
   $('submit').textContent = '답안 제출하기'; delete $('submit').dataset.armed;
@@ -342,6 +378,15 @@ async function submit() {
 }
 $('submit').addEventListener('click', submit);
 $('cancel').addEventListener('click', resetConfirm);
+$('history-toggle').addEventListener('click', openHistory);
+$('history-close').addEventListener('click', () => { $('history-panel').hidden = true; });
+$('start').addEventListener('click', async () => {
+  if (starting || !exam || exam.webStarted !== false) return;
+  starting = true; $('start').disabled = true; document.body.classList.add('busy'); error('');
+  try { render(await api('/api/start', {examId: exam.examId})); }
+  catch (e) { error(e.message); $('start').disabled = false; }
+  finally { starting = false; document.body.classList.remove('busy'); }
+});
 window.addEventListener('beforeunload', event => {
   if (exam?.status === 'question' && dirty) { event.preventDefault(); event.returnValue = ''; }
 });

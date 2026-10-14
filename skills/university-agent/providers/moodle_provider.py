@@ -145,7 +145,7 @@ class _ActivityParser(HTMLParser):
     """Collect each resource activity's visible text before fetching its file."""
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.items: list[dict[str, str]] = []
+        self.items: list[dict[str, Any]] = []
         self.current: dict[str, Any] | None = None
         self.li_depth = 0
         self.anchor_text: list[str] = []
@@ -156,7 +156,9 @@ class _ActivityParser(HTMLParser):
         if tag == "li":
             classes = (values.get("class") or "").split()
             if self.current is None and "activity" in classes:
-                self.current = {"href": "", "title": "", "text": []}
+                kind = next((value.removeprefix("modtype_") for value in classes
+                             if value.startswith("modtype_")), "")
+                self.current = {"href": "", "title": "", "text": [], "type": kind}
                 self.li_depth = 1
             elif self.current is not None:
                 self.li_depth += 1
@@ -182,6 +184,76 @@ class _ActivityParser(HTMLParser):
             self.current["text"].append(data)
             if self.in_anchor:
                 self.anchor_text.append(data)
+
+
+class _SectionOverviewParser(HTMLParser):
+    """Read visible section summaries while leaving nested activities to their own parsers."""
+    _VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.overviews: list[dict[str, str]] = []
+        self.section: dict[str, Any] | None = None
+        self.li_stack: list[tuple[bool, bool]] = []
+        self.tags: list[tuple[str, bool]] = []
+        self.hidden_depth = 0
+        self.activity_depth = 0
+
+    @staticmethod
+    def _hidden(values: dict[str, str | None]) -> bool:
+        classes = (values.get("class") or "").split()
+        style = (values.get("style") or "").replace(" ", "").lower()
+        return ("hidden" in values or values.get("aria-hidden") == "true" or
+                any(value in classes for value in ("hidden", "d-none", "accesshide", "sr-only")) or
+                bool(re.search(r"display:none|visibility:hidden", style)))
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        classes = (values.get("class") or "").split()
+        if tag == "li":
+            is_section = "section" in classes and self.section is None
+            is_activity = "activity" in classes and self.section is not None
+            self.li_stack.append((is_section, is_activity))
+            if is_section:
+                self.section = {"id": values.get("id") or "", "name": values.get("aria-label") or "", "parts": []}
+            if is_activity:
+                self.activity_depth += 1
+        hidden = self._hidden(values) or tag in {"script", "style", "noscript", "template"}
+        if tag not in self._VOID:
+            self.tags.append((tag, hidden))
+            if hidden:
+                self.hidden_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        for index in range(len(self.tags) - 1, -1, -1):
+            if self.tags[index][0] == tag:
+                removed = self.tags[index:]
+                del self.tags[index:]
+                self.hidden_depth -= sum(hidden for _, hidden in removed)
+                break
+        if tag != "li" or not self.li_stack:
+            return
+        is_section, is_activity = self.li_stack.pop()
+        if is_activity:
+            self.activity_depth -= 1
+        if is_section and self.section is not None:
+            name = " ".join(str(self.section["name"]).split())
+            text = " ".join("".join(self.section["parts"]).split())
+            if name and text.startswith(name):
+                text = text[len(name):].strip(" :·-—")
+            if len(text) >= 12:
+                self.overviews.append({"id": str(self.section["id"]), "name": name or "강의 개요", "text": text})
+            self.section = None
+
+    def handle_data(self, data: str) -> None:
+        if self.section is not None and not self.hidden_depth and self.activity_depth == 0:
+            self.section["parts"].append(data)
+
+
+def _section_overviews(html: str) -> list[dict[str, str]]:
+    parser = _SectionOverviewParser()
+    parser.feed(html)
+    return parser.overviews
 
 
 class _CourseStructureParser(HTMLParser):
@@ -555,8 +627,61 @@ class MoodleTLSProvider:
         parser.feed(html)
         activities = [{key: item.get(key, "") for key in ("href", "title", "text")}
                       for item in parser.items]
-        payload = json.dumps(activities, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        payload = json.dumps({"activities": activities, "overviews": _section_overviews(html)},
+                             ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _overview_content(html: str) -> str:
+        patterns = (
+            r'<(?:div|section)[^>]+class=["\'][^"\']*activity-description[^"\']*["\'][^>]*>(.*?)</(?:div|section)>',
+            r'<(?:div|section)[^>]+class=["\'][^"\']*no-overflow[^"\']*["\'][^>]*>(.*?)</(?:div|section)>',
+            r'<(?:div|section)[^>]+class=["\'][^"\']*generalbox[^"\']*["\'][^>]*>(.*?)</(?:div|section)>',
+        )
+        for pattern in patterns:
+            content = _match_text(html, pattern)
+            if len(content) >= 12:
+                return content
+        return ""
+
+    def _course_overviews(self, course: dict[str, Any], html: str) -> list[dict[str, Any]]:
+        """Collect section summaries and text activities that can contain schedules."""
+        candidates = list(_section_overviews(html))
+        activities = _ActivityParser()
+        activities.feed(html)
+        schedule_words = re.compile(r"개요|일정|시험|평가|수업|강의계획|주차|과제|출석", re.I)
+        for activity in activities.items:
+            kind = str(activity.get("type") or "")
+            title = " ".join(str(activity.get("title") or "").split())
+            text = " ".join(str(activity.get("text") or "").split())
+            if kind == "label":
+                content = text
+            elif kind in {"page", "book"} and activity.get("href") and schedule_words.search(title):
+                content = self._overview_content(self.session.get(activity["href"]))
+            else:
+                continue
+            if len(content) >= 12:
+                candidates.append({"id": activity.get("href") or title, "name": title or "강의 개요", "text": content})
+
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in candidates:
+            content = " ".join(str(item.get("text") or "").split())
+            key = re.sub(r"\s+", "", content).casefold()
+            if len(content) < 12 or key in seen:
+                continue
+            seen.add(key)
+            source_id = hashlib.sha256((str(item.get("id") or "") + content).encode("utf-8")).hexdigest()[:20]
+            records.append({
+                "id": f"tls-overview-{course['externalId']}-{source_id}",
+                "externalId": source_id,
+                "courseId": course["id"],
+                "title": (item.get("name") or "강의 개요") if str(item.get("name") or "").endswith("개요") else f"{item.get('name') or '강의'} 개요",
+                "content": content,
+                "publishedAt": "1970-01-01T00:00:00+09:00",
+                "source": "tls-overview",
+            })
+        return records
 
     def preflight(self, user_id: str, course_ids: set[str] | None = None) -> dict[str, Any]:
         """Fetch only course activity lists to detect additions before a full sync."""
@@ -694,6 +819,7 @@ class MoodleTLSProvider:
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
         for course in self.get_courses(user_id):
+            course_html = self._course_page(course)
             for href, title in self._course_activity_links(course):
                 match = re.search(r"/mod/ubboard/view\.php\?id=(\d+)", href)
                 if not match or "공지" not in title or match.group(1) in seen:
@@ -712,6 +838,7 @@ class MoodleTLSProvider:
                     content = _match_text(detail, r'<div[^>]+class=["\'][^"\']*text_to_html[^"\']*["\'][^>]*>(.*?)</div>')
                     text = _plain_text(detail)
                     result.append({"id": f"tls-notice-{article.group(2)}", "externalId": article.group(2), "courseId": course["id"], "title": article_title or f"TLS notice {article.group(2)}", "content": content, "publishedAt": _find_datetime(text, ("작성일", "게시일", "등록일")) or "1970-01-01T00:00:00+09:00", "source": "tls"})
+            result.extend(self._course_overviews(course, course_html))
         return result
 
     def get_resources(self, user_id: str, notices: list[dict[str, Any]] | None = None,

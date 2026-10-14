@@ -317,7 +317,7 @@ def _ask(
         store = database()
         data = get_current_context(store, USER_ID, lambda: list_bookmarks(store, USER_ID))
         return {"toolCalls": ["get_current_context"], "data": data, "answer": format_current_context(data)}
-    if re.search(r"공지", text):
+    if re.search(r"공지|시험\s*(?:일정|범위)|(?:강의|수업)\s*계획|주차별\s*일정", text):
         store = database()
         data = store.get_notices(USER_ID)
         return {"toolCalls": ["get_notices"], "data": data, "answer": academic_list_answer(store, USER_ID, "notices", data)}

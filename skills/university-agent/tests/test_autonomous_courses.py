@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from providers.moodle_provider import MoodleTLSProvider, parse_autonomous_courses, parse_course_structure
+from providers.moodle_provider import MoodleTLSProvider, _section_overviews, parse_autonomous_courses, parse_course_structure
 
 
 PAGE = """
@@ -74,6 +74,16 @@ class AutonomousCourseTests(unittest.TestCase):
         self.assertEqual(blueprint["sections"][0]["activities"][0]["name"], "과목공지")
         self.assertEqual(blueprint["sections"][1]["activities"][0]["type"], "quiz")
         self.assertEqual(blueprint["sections"][1]["activities"][0]["externalId"], "799872")
+
+    def test_section_summary_is_kept_for_schedule_lookup(self):
+        html = '''
+        <ul><li id="section-1" class="section" aria-label="자료구조">
+          <h3>자료구조</h3><div class="summary">중간고사 일정: 2026-10-20 13:00, 범위는 1~5주차입니다.</div>
+          <ul><li class="activity label modtype_label"><div>수업 개요: 시험 전까지 Queue를 복습하세요.</div></li></ul>
+        </li></ul>'''
+        records = _section_overviews(html)
+        self.assertEqual(records[0]["name"], "자료구조")
+        self.assertIn("중간고사 일정", records[0]["text"])
 
 
 if __name__ == "__main__":

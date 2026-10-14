@@ -127,9 +127,9 @@ class LocalDatabase:
             course_marks = ",".join("?" for _ in course_ids)
             if notice_ids:
                 marks = ",".join("?" for _ in notice_ids)
-                db.execute(f"DELETE FROM notices WHERE source='tls' AND course_id IN ({course_marks}) AND id NOT IN ({marks})", [*course_ids, *notice_ids])
+                db.execute(f"DELETE FROM notices WHERE source IN ('tls', 'tls-overview') AND course_id IN ({course_marks}) AND id NOT IN ({marks})", [*course_ids, *notice_ids])
             else:
-                db.execute(f"DELETE FROM notices WHERE source='tls' AND course_id IN ({course_marks})", course_ids)
+                db.execute(f"DELETE FROM notices WHERE source IN ('tls', 'tls-overview') AND course_id IN ({course_marks})", course_ids)
         if resources is not None and course_ids:
             resource_ids = [item["id"] for item in resources]
             course_marks = ",".join("?" for _ in course_ids)

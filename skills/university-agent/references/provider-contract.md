@@ -52,7 +52,7 @@ Minimum record fields:
 - `Course`: `id`, `name`, optional `professor`, `semester`
 - `Assignment`: `id`, `courseId`, `title`, `dueAt`, `submissionStatus`, `source`
 - `Lecture`: `id`, `courseId`, `title`, `durationSeconds`, `watchedSeconds`, `watchProgress`, `completed`, optional `availableFrom`, `availableUntil`, `source`
-- `Notice`: `id`, `courseId`, `title`, `content`, `publishedAt`, `source`
+- `Notice`: `id`, `courseId`, `title`, `content`, `publishedAt`, `source`. `tls-overview` records are visible course-section summaries and text activities used for schedule and scope lookup.
 - `Resource`: `id`, `courseId`, `title`, `fileName`, `extension`, `mimeType`, `remotePath`, `localPath`, `downloadedAt`, `downloadStatus`, `downloadReason`, `source`. `PROHIBITED` means an explicit TLS activity/notice rule matched or the TLS server returned HTTP 403; sync must not fetch file bytes, and study-material features must report the restriction rather than read a local copy.
 - `AutonomousCourse`: `id`, optional `externalId`, `name`, `visibility`, `category`, `period`, `role`, `status`, `ownerControlsVisible`, `ownerRoleVerified`, `source`. The list comes from the read-only `/local/ubeclass/my.php` table; visible owner controls are evidence only, so `ownerRoleVerified` remains false until a separate role contract exists.
 - `CourseStructure`: `source`, `sections[]`; each section has `id`, `name`, and `activities[]`; each activity has `id`, `externalId`, `type`, and `name`. It is a read-only blueprint from an observed `/course/view.php?id=...` page, not a remote course update.

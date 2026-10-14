@@ -58,7 +58,8 @@ IMAGE_SUFFIXES = {'.gif', '.jpe', '.jpeg', '.jpg', '.png', '.svg', '.svgz'}
 def study_intent(text):
     exam_context = re.search(r'(?:중간고사|기말고사|시험|손코딩|시험\s*(?:시간|방식|정보)|출제\s*(?:방식|경향)|(?:주요|핵심)\s*(?:내용|포인트))', text)
     note_cue = re.search(r'(?:하셨|말씀|알려|들었|이래|라고|저장|기억|참고)', text)
-    if exam_context and note_cue:
+    schedule_lookup = re.search(r'시험\s*(?:일정|범위)|(?:강의|수업)\s*계획|주차별\s*일정', text)
+    if exam_context and note_cue and not schedule_lookup:
         return 'save_context_note'
     if re.search(r'(?:저장한|기록한|등록한).*(?:시험|출제|학습).*(?:정보|내용|메모).*(?:보여|확인|알려)|시험\s*정보.*(?:보여|확인|목록)', text):
         return 'list_context_notes'

@@ -152,6 +152,7 @@ class ProjectTests(ProjectTestBase):
         self.assertEqual(self.cli('ask', '--text', '미제출 과제 알려줘')['toolCalls'], ['get_unsubmitted_assignments'])
         self.assertEqual(self.cli('ask', '--text', '미시청 강의 보여줘')['toolCalls'], ['get_unwatched_lectures'])
         self.assertEqual(self.cli('ask', '--text', '공지 알려줘')['toolCalls'], ['get_notices'])
+        self.assertEqual(self.cli('ask', '--text', '시험 일정 알려줘')['toolCalls'], ['get_notices'])
         self.assertEqual(self.cli('ask', '--text', 'PDF 자료 보여줘')['toolCalls'], ['get_resources'])
 
     def test_manual_assignment_lifecycle_and_tls_resync(self):
@@ -296,6 +297,19 @@ class ProjectTests(ProjectTestBase):
         self.assertIn('과목 공지', prohibited[1]['downloadReason'])
         self.assertIn('서버가 파일 다운로드를 거부', prohibited[2]['downloadReason'])
         self.assertEqual(session.byte_requests, ['/mod/resource/view.php?id=5', '/mod/resource/view.php?id=8'])
+
+    def test_course_overview_and_label_are_available_with_notices(self):
+        session = FakeTLSSession()
+        session.pages['/course/view.php?id=1'] = '''
+        <ul><li id="section-1" class="section" aria-label="자료구조">
+          <h3>자료구조</h3><div class="summary">중간고사 일정: 2026-10-20 13:00, 범위는 1~5주차입니다.</div>
+          <ul><li class="activity label modtype_label"><div>시험 전 Queue를 복습하세요.</div></li></ul>
+        </li></ul>'''
+        records = MoodleTLSProvider(session).get_notices('u')
+        overviews = [item for item in records if item['source'] == 'tls-overview']
+        self.assertEqual(len(overviews), 2)
+        self.assertTrue(any('중간고사 일정' in item['content'] for item in overviews))
+        self.assertTrue(any('Queue' in item['content'] for item in overviews))
 
     def test_allowed_ubfile_viewer_redirects_to_observed_download(self):
         session = FakeTLSSession()

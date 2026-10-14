@@ -44,7 +44,11 @@ def skill_root() -> Path:
 
 
 def package_root() -> Path | None:
-    return find_package_root(skill_root())
+    root = find_package_root(skill_root())
+    if root is not None:
+        return root
+    # Older local installs contain only skills/university-agent, not plugin.json.
+    return skill_root() if (skill_root() / "SKILL.md").is_file() else None
 
 
 def development_checkout(root: Path | None) -> bool:
@@ -87,9 +91,9 @@ def _recent_cache(path: Path) -> dict | None:
 
 def check(*, force: bool = False) -> dict[str, str | bool]:
     root = package_root()
-    if root is None or not (root / "plugin.json").is_file():
+    if root is None:
         return {"status": "UNAVAILABLE", "message": "설치된 터틀넥 버전을 확인할 수 없어요."}
-    local = _read_plugin(root / "plugin.json")
+    local = _read_plugin(root / "plugin.json") if (root / "plugin.json").is_file() else {}
     local_version = str(local.get("version", "0.0.0"))
     cache = None if force else _recent_cache(_cache_path())
     if cache:

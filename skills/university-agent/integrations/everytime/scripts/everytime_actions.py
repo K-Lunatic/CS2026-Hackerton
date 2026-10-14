@@ -12,6 +12,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+import sys
+SKILL_ROOT = Path(__file__).resolve().parents[3]
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+from features.secret_boundary import redact_output
+
 from everytime import Client, EverytimeError, PUBLIC_URL, parse_timetable, xml_response
 from everytime_cache import LocalCache
 from session_store import load, save
@@ -388,18 +394,18 @@ def main() -> int:
     try:
         if args.list_actions:
             result = FIELDS
-            print(json.dumps({key: sorted(value) for key, value in result.items()}, ensure_ascii=False, indent=2))
+            print(json.dumps(redact_output({key: sorted(value) for key, value in result.items()}), ensure_ascii=False, indent=2))
             return 0
         if args.apply and not args.confirm:
             raise EverytimeError("적용하려면 사용자가 승인한 미리보기의 --confirm 값을 지정해 주세요.")
         spec = validate(json.loads(args.prepare.read_text(encoding="utf-8"))) if args.prepare else None
         client = Client(load())
         result = prepare(spec, client=client, db=args.db) if args.prepare else apply(args.apply, args.confirm, client=client, db=args.db)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(redact_output(result), ensure_ascii=False, indent=2))
         return 0 if result["status"] in {"PREPARED", "APPLIED"} else 1
     except (EverytimeError, OSError, ValueError, RuntimeError, sqlite3.Error) as error:
         message = str(error) if isinstance(error, EverytimeError) else "입력 파일·저장 위치·로그인 연결을 확인해 주세요."
-        print(json.dumps({"source": "everytime", "partial": True, "message": message}, ensure_ascii=False))
+        print(json.dumps(redact_output({"source": "everytime", "partial": True, "message": message}), ensure_ascii=False))
         return 1
 
 

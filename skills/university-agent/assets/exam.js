@@ -43,14 +43,34 @@ function focusQuestion(q) {
 function orderingValue(q) {
   try { const value = JSON.parse(drafts[q.id] || '[]'); return Array.isArray(value) ? value : []; } catch (_) { return []; }
 }
+function multiChoiceValue(q) {
+  try { const value = JSON.parse(drafts[q.id] || '[]'); return Array.isArray(value) ? value : []; } catch (_) { return []; }
+}
 const answered = q => {
+  if (q.responseFormat === 'multi_choice') return multiChoiceValue(q).length > 0;
   if (q.responseFormat !== 'ordering') return Boolean((drafts[q.id] || '').trim());
   const value = orderingValue(q);
   return value.length === q.blocks.length && new Set(value).size === q.blocks.length && value.every(item => Number.isInteger(item) && item >= 0 && item < q.blocks.length);
 };
 function displayAnswer(q, text) {
+  if (q.responseFormat === 'multi_choice') {
+    try { return JSON.parse(text || '[]').map(index => q.options[index - 1] || '알 수 없는 선택지').join(', '); } catch (_) { return '선택하지 않았어요.'; }
+  }
   if (q.responseFormat !== 'ordering') return text;
   try { return JSON.parse(text || '[]').map(index => q.blocks[index] || '알 수 없는 블록').join(' → '); } catch (_) { return '아직 순서를 정하지 않았어요.'; }
+}
+function loadQuestionImages(q, box) {
+  if (!Array.isArray(q.images)) return;
+  q.images.forEach(image => {
+    const figure = node('figure', undefined, 'question-image'), img = node('img');
+    img.alt = image.alt || '문항 이미지'; figure.append(img); box.append(figure);
+    const params = new URLSearchParams({examId: exam.examId, questionId: q.id, index: String(image.index)});
+    fetch(API_ROOT + '/api/image?' + params, {headers: {'X-Exam-Token': token}}).then(response => {
+      if (!response.ok) throw new Error('image');
+      return response.blob();
+    }).then(blob => { img.src = URL.createObjectURL(blob); })
+      .catch(() => { figure.replaceChildren(node('figcaption', '문항 이미지를 불러오지 못했어요.')); });
+  });
 }
 // A saved choice is an option number or the option text.
 function chosen(q) {
@@ -150,11 +170,17 @@ function options(q, feedback) {
     const row = node(answering ? 'label' : 'div', undefined, 'option');
     if (answering) {
       const input = node('input');
-      input.type = 'radio'; input.name = 'answer-' + q.id; input.value = String(n + 1); input.checked = chosen(q) === n + 1;
-      input.addEventListener('change', () => setDraft(q, input.value));
+      input.type = q.responseFormat === 'multi_choice' ? 'checkbox' : 'radio'; input.name = 'answer-' + q.id; input.value = String(n + 1);
+      input.checked = q.responseFormat === 'multi_choice' ? multiChoiceValue(q).includes(n + 1) : chosen(q) === n + 1;
+      input.addEventListener('change', () => {
+        if (q.responseFormat !== 'multi_choice') return setDraft(q, input.value);
+        const values = multiChoiceValue(q).filter(value => value !== n + 1);
+        if (input.checked) values.push(n + 1);
+        values.sort((a, b) => a - b); setDraft(q, JSON.stringify(values));
+      });
       row.append(input);
     } else {
-      if (chosen(q) === n + 1) row.classList.add('is-mine');
+      if ((q.responseFormat === 'multi_choice' ? multiChoiceValue(q).includes(n + 1) : chosen(q) === n + 1)) row.classList.add('is-mine');
       if (feedback && option === feedback.answer) row.classList.add('is-answer');
     }
     row.append(node('span', String(n + 1), 'bubble'), node('span', option, 'option-text'));
@@ -208,9 +234,9 @@ function answerInput(q, index) {
 function result(q, feedback) {
   const box = node('div', undefined, 'result'), list = node('dl');
   box.append(node('p', OUTCOME[feedback.outcome] + ' ' + feedback.score + '/' + feedback.points + '점', 'outcome'));
-  if (q.responseFormat !== 'choice') define(list, '내 답', answered(q) ? displayAnswer(q, drafts[q.id]) : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : '');
+  if (q.responseFormat !== 'choice' && q.responseFormat !== 'multi_choice') define(list, '내 답', answered(q) ? displayAnswer(q, drafts[q.id]) : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : '');
   else if (!chosen(q)) define(list, '내 답', '답을 고르지 않았어요.');
-  if (q.responseFormat !== 'choice') define(list, '모범 답안', feedback.answer, q.responseFormat === 'code' ? 'code' : '');
+  if (q.responseFormat !== 'choice' && q.responseFormat !== 'multi_choice') define(list, '모범 답안', feedback.answer, q.responseFormat === 'code' ? 'code' : '');
   define(list, '해설', feedback.explanation);
   box.append(list);
   if (feedback.criteria.length) {
@@ -233,16 +259,17 @@ function questionItem(q, index, feedback) {
   item.id = 'q-' + index;
   item.addEventListener('pointerdown', () => focusQuestion(q)); item.addEventListener('focusin', () => focusQuestion(q));
   if (feedback) num.append(mark(feedback.outcome, index));
-  if (q.responseFormat !== 'choice') text.append(node('span', '[' + q.typeLabel + ']', 'kind'), ' ');
+  if (q.responseFormat !== 'choice' && q.responseFormat !== 'multi_choice') text.append(node('span', '[' + q.typeLabel + ']', 'kind'), ' ');
   text.append(q.question, ' ', node('span', '[' + q.points + '점]', 'points'));
   if (Number.isFinite(Number(exam.questionTimes?.[q.id]))) text.append(' ', node('span', '[풀이 ' + formatDuration(exam.questionTimes[q.id]) + ']', 'question-time'));
   const head = node('div', undefined, 'question-head'); head.append(text, confusionButton(q)); body.append(head);
+  const imageBox = node('div', undefined, 'question-images'); body.append(imageBox); loadQuestionImages(q, imageBox);
   if (q.code) { const pre = node('pre', q.code); if (q.language) pre.dataset.language = q.language; body.append(pre); }
-  if (q.responseFormat === 'choice') body.append(options(q, feedback));
+  if (q.responseFormat === 'choice' || q.responseFormat === 'multi_choice') body.append(options(q, feedback));
   else if (exam.status === 'question' && !exam.readOnly) body.append(answerInput(q, index));
   if (feedback) body.append(result(q, feedback));
   else if (exam.status !== 'question' || exam.readOnly) {
-    if (q.responseFormat !== 'choice') { const list = node('dl'); define(list, '내 답', answered(q) ? displayAnswer(q, drafts[q.id]) : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : ''); body.append(list); }
+    if (q.responseFormat !== 'choice' && q.responseFormat !== 'multi_choice') { const list = node('dl'); define(list, '내 답', answered(q) ? displayAnswer(q, drafts[q.id]) : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : ''); body.append(list); }
     body.append(node('p', exam.readOnly ? '당시 저장된 답안이에요.' : '채점을 기다리고 있어요.', 'pending'));
   }
   item.append(num, body);
@@ -254,11 +281,11 @@ function omrRow(q, index, feedback) {
   link.href = '#q-' + index; link.id = 'jump-' + index; link.setAttribute('aria-label', (index + 1) + '번 문항으로 이동');
   link.addEventListener('click', () => focusQuestion(q));
   row.append(link);
-  if (q.responseFormat === 'choice') {
+  if (q.responseFormat === 'choice' || q.responseFormat === 'multi_choice') {
     // The paper's radio buttons are the accessible control; these bubbles mirror them.
     const bubbles = node('div', undefined, 'bubbles'); bubbles.setAttribute('aria-hidden', 'true');
     q.options.forEach((_, n) => {
-      const bubble = node(answering ? 'button' : 'span', String(n + 1), 'omr-bubble' + (chosen(q) === n + 1 ? ' filled' : ''));
+      const bubble = node(answering ? 'button' : 'span', String(n + 1), 'omr-bubble' + ((q.responseFormat === 'multi_choice' ? multiChoiceValue(q).includes(n + 1) : chosen(q) === n + 1) ? ' filled' : ''));
       if (answering) {
         bubble.type = 'button'; bubble.tabIndex = -1;
         bubble.addEventListener('click', () => {

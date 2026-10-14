@@ -17,6 +17,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import HTTPCookieProcessor, build_opener
 
+SKILL_ROOT = Path(__file__).resolve().parents[3]
+import sys
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+from features.secret_boundary import redact_output
+
 from session_store import browser_cookie_jar, save
 from everytime import Client, initialize
 
@@ -208,7 +214,7 @@ def main() -> int:
         parser.error("--timeout은 30초 이상이어야 합니다.")
     jar = connect(args.timeout)
     result = initialize(client=Client(jar), max_age=0)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(redact_output(result), ensure_ascii=False, indent=2))
     return 1 if result["partial"] else 0
 
 

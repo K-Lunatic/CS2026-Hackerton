@@ -77,7 +77,13 @@ claude plugin install university-agent@kku-university-agent-local
 호출합니다. 이 경우 플러그인 자동 업데이트 대신 폴더를 다시 복사해 갱신합니다.
 [Claude 설치 규칙](https://code.claude.com/docs/en/plugin-marketplaces)과 [실행 지침](skills/university-agent/references/claude-code.md)을 참고하세요.
 
-로컬 시험 서버나 Actions 연결을 실행할 때는 `University Agent.command`(macOS) 또는 `University Agent.bat`(Windows)를 더블클릭하세요. 실행할 때 터틀넥 버전도 확인하고, 설치된 패키지에서 새 버전이 발견되면 자동으로 업데이트합니다. 개발 중인 Git 저장소는 자동으로 덮어쓰지 않습니다.
+로컬 시험 서버나 Actions 연결을 실행할 때는 `University Agent.command`(macOS) 또는 `University Agent.bat`(Windows)를 더블클릭하세요. 실행할 때 터틀넥 버전은 확인하지만 코드를 자동으로 교체하지는 않습니다. 개발 중인 Git 저장소는 자동으로 덮어쓰지 않습니다.
+
+### 공개 저장소 사용 범위
+
+이 저장소에는 학교의 공개 기본 주소와 일반적인 요청 경로가 포함될 수 있지만, 계정 비밀번호·세션 쿠키·OAuth 비밀값·개인 강좌 ID·원본 강의자료는 포함하지 않습니다. 본인 계정과 본인이 접근 권한을 가진 자료에만 사용하고, 학교나 에브리타임의 이용 정책을 우회하거나 과도한 요청을 보내지 마세요. `.mbz`, `.tpack`, 데이터베이스와 다운로드 파일은 저장소에 커밋하지 않습니다.
+
+보안 문제는 공개 이슈가 아니라 [보안 안내](SECURITY.md)에 따라 비공개로 알려 주세요.
 
 ### 2. 처음 한 번 연결
 
@@ -97,6 +103,22 @@ claude plugin install university-agent@kku-university-agent-local
 
 명령어를 외울 필요는 없습니다. 원하는 일을 말하면 필요한 선택만 안내합니다. 진행 기록을 최종 저장하거나 불러올 때는 화면에 안내된 확인 명령을 직접 보내야 합니다.
 
+TLS 자율강좌의 관찰된 설정 저장 양식으로 안전한 설정만 바로 바꿀 수도 있습니다. 강좌 ID와 필드 값은 매번 로그인 후 실제 양식에서 확인하며, 비밀번호·쿠키·보안키는 출력하지 않습니다.
+
+```bash
+python3 scripts/run_agent.py tls-course-update \
+  --course-url 'https://tls.kku.ac.kr/course/view.php?id=<내 자율강좌 ID>' \
+  --set numsections=8
+# 활동 추가 양식과 저장 경로를 읽기 전용으로 확인 (활동 생성 없음)
+python3 scripts/run_agent.py tls-activity-inspect --course-id '<내 자율강좌 ID>'
+# 여러 토픽의 활동을 한 계획으로 확인 (기본은 저장하지 않음)
+python3 scripts/run_agent.py tls-activity-control \
+  --course-id '<내 자율강좌 ID>' --plan '<로컬 활동 계획.json>'
+# 계획을 확인한 뒤에만 실제 저장
+python3 scripts/run_agent.py tls-activity-control \
+  --course-id '<내 자율강좌 ID>' --plan '<로컬 활동 계획.json>' --apply
+```
+
 ## 무엇을 해주나요?
 
 | 기능 | 사용 예시 | 얻는 결과 |
@@ -112,6 +134,9 @@ claude plugin install university-agent@kku-university-agent-local
 | 강의 음원 | “이미 본 강의의 음성만 가져와줘” | 시청 완료·제한을 재확인하고 로컬 오디오 보관; 대리 시청 없음 |
 | 학습 팩 | “학습 자료를 다른 기기로 옮겨줘” | 분석 결과·문제 세트·풀이 기록만 묶어 이동 |
 | 에브리타임 | “내 시간표와 자료구조 강의평 보여줘” | 로컬에 저장한 시간표·선택한 강의평 조회 |
+
+TLS 자율강좌의 자료·활동 메뉴는 실제 화면에서 확인한 유형과 저장 양식만 사용합니다. 세부 목록은
+[TLS 활동 엔드포인트 기록](skills/university-agent/references/tls-activity-endpoints.md)에 정리되어 있습니다.
 
 ## 터틀넥이 편한 이유
 
@@ -202,6 +227,55 @@ python3 scripts/run_agent.py study-pack import --input ~/Desktop/data-structures
 </details>
 
 <details>
+<summary><strong>TLS 자율강좌 백업 흐름</strong></summary>
+
+자율강좌는 계정당 하나만 터틀넥 관리 대상으로 삼고, 강좌명·토픽명·시험 활동명은 중립적인
+표현만 허용합니다. 운영자 화면에서 만든 백업을 로컬로 내려받아 구조를 검사한 뒤, 저장된
+Moodle XML 문항을 기존 토픽의 새 퀴즈 활동으로 조립할 수 있습니다.
+
+```text
+백업 생성(운영자 화면) → 로컬 다운로드 → 구조 검사 → 시험 XML 생성
+→ 새 퀴즈 활동을 로컬 .mbz에 조립 → 복구 화면에서 목적지·중복 확인
+```
+
+로컬 조립 명령은 외부 요청을 보내지 않습니다.
+
+```bash
+python3 scripts/run_agent.py tls-backup-assemble \
+  --template '<기존 .mbz>' --questions '<시험 Moodle XML>' \
+  --section '자료구조' --quiz-name '자료구조 · 모의시험' --output '<새 .mbz>'
+```
+
+기존 백업을 완전히 비우고 현재 로컬 TLS 수강 과목별 토픽만 다시 만들 때는 다음 명령을 사용합니다.
+과목을 지정하지 않으면 이 기기의 TLS 수강 목록을 사용합니다.
+
+```bash
+python3 scripts/run_agent.py tls-backup-rebuild \
+  --template '<기존 .mbz>' --output '<깨끗한 .mbz>'
+```
+
+백업을 실제 강좌에 연결할 때도 먼저 계획 단계로 대상과 구조를 확인합니다. `--apply`는 복구 마법사를
+진행하고, `--execute`를 함께 쓸 때만 확인된 자율강좌의 기존 내용을 비운 뒤 복구합니다. 역할·등록은 보존하며,
+TLS 커스텀 강좌 형식이 토픽 이름을 적용하지 않으면 성공으로 처리하지 않고 멈춥니다.
+
+```bash
+python3 scripts/run_agent.py tls-backup-restore \
+  --backup '<깨끗한 .mbz>' \
+  --course-url 'https://tls.kku.ac.kr/course/view.php?id=<내 자율강좌 ID>'
+
+# 최종 복구(대상·백업 검증 후 기존 내용 교체)
+python3 scripts/run_agent.py tls-backup-restore \
+  --backup '<깨끗한 .mbz>' \
+  --course-url 'https://tls.kku.ac.kr/course/view.php?id=<내 자율강좌 ID>' \
+  --apply --execute
+```
+
+이미지 문항은 Moodle 파일 연결을 먼저 구성해야 하므로 자동 조립에서 중단합니다. 토픽명·활동 본문은
+현재 계정에서 편집 양식이 확인된 뒤에만 자동 수정하며, 확인되지 않은 주소를 추측해 저장하지 않습니다.
+
+</details>
+
+<details>
 <summary><strong>읽을 수 있는 자료와 다운로드 제한</strong></summary>
 
 - PDF, PPT/PPTX, HWP/HWPX, DOC/DOCX, TXT/MD와 Java·Python·C/C++ 등 텍스트·코드 파일을 지원합니다.
@@ -262,7 +336,7 @@ python3 scripts/setup_turtleneck.py --watch-uninstall
 <details>
 <summary><strong>버전 업데이트와 실행 환경</strong></summary>
 
-터틀넥은 신뢰한 저장소의 패키지 버전을 주기적으로 확인합니다. 설치된 패키지에 새 버전이 있으면 사용자 데이터와 별도로 코드만 교체하며, Git으로 직접 관리하는 개발 저장소는 자동 업데이트하지 않습니다.
+터틀넥은 신뢰한 저장소의 패키지 버전을 주기적으로 확인합니다. 새 버전 확인은 자동으로 수행하지만 코드 교체는 자동으로 하지 않습니다. 업데이트 내용을 확인한 뒤 `python3 scripts/update_turtleneck.py --apply`를 직접 실행하세요. Git으로 직접 관리하는 개발 저장소는 자동 업데이트하지 않습니다.
 
 Python이 없는 일반 사용자는 실행기를 더블클릭하면 됩니다. 실행기는 기존 Python을 먼저 사용하고, 없을 때는 공식 `uv` 실행기를 통해 관리형 Python을 준비합니다. 사용자 비밀번호와 학교 DB는 실행 환경 설치 위치와 분리되어 있습니다.
 

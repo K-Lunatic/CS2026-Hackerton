@@ -65,6 +65,15 @@ def _cache_path() -> Path:
     return Path(os.environ.get("UNIVERSITY_AGENT_UPDATE_CACHE", Path.home() / ".university-agent" / "update-check.json"))
 
 
+def _extract_archive(bundle: zipfile.ZipFile, target: Path) -> None:
+    root = target.resolve()
+    for member in bundle.infolist():
+        destination = (root / member.filename).resolve()
+        if destination != root and root not in destination.parents:
+            raise ValueError("업데이트 압축 파일의 경로를 확인하지 못했어요.")
+        bundle.extract(member, root)
+
+
 def _recent_cache(path: Path) -> dict | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -118,7 +127,7 @@ def apply_update(*, force: bool = False) -> dict[str, str | bool]:
             archive_path = Path(folder) / "turtleneck.zip"
             archive_path.write_bytes(archive)
             with zipfile.ZipFile(archive_path) as bundle:
-                bundle.extractall(folder)
+                _extract_archive(bundle, Path(folder))
             extracted = next(Path(folder).glob(f"{REPO.rsplit('/', 1)[1]}-*/skills/university-agent"), None)
             if extracted is None:
                 raise ValueError("업데이트 파일 구조를 확인하지 못했어요.")
@@ -137,11 +146,14 @@ def apply_update(*, force: bool = False) -> dict[str, str | bool]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="터틀넥 버전 확인 및 안전한 자동 업데이트")
-    parser.add_argument("--auto", action="store_true", help="새 버전이면 설치된 패키지만 업데이트")
+    parser = argparse.ArgumentParser(description="터틀넥 버전 확인 및 명시적 업데이트")
+    parser.add_argument("--auto", action="store_true", help="새 버전 확인만 수행")
+    parser.add_argument("--apply", action="store_true", help="확인된 새 버전을 명시적으로 적용")
     parser.add_argument("--force", action="store_true", help="캐시를 무시하고 버전 확인")
     args = parser.parse_args()
-    result = apply_update(force=args.force) if args.auto else check(force=args.force)
+    if args.auto and args.apply:
+        parser.error("--auto와 --apply는 함께 사용할 수 없습니다.")
+    result = apply_update(force=args.force) if args.apply else check(force=args.force)
     print(result["message"])
     return 0 if result["status"] not in {"FAILED", "UNAVAILABLE"} else 1
 

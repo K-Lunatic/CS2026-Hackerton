@@ -224,9 +224,12 @@ def _read_sections(path: Path, extension: str, cache_root: Path):
 
 
 def _read_many(selected, resolved, cache_root):
-    eligible = [item for item in selected if item['id'] in resolved and item['extension'].lower() not in ('hwp', 'doc', 'ppt')]
+    # Keep the pool small: readers retain full extracted text until the caller
+    # applies the requested character limit.
+    eligible = [item for item in selected if item['id'] in resolved]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        # Two-file batches bound both worker count and retained full text.
+        # Two-file batches also cover legacy Office converters. PDFKit itself
+        # remains protected by _SWIFT_LOCK, while portable readers run freely.
         for offset in range(0, len(eligible), 2):
             pending = []
             for item in eligible[offset:offset + 2]:
@@ -372,8 +375,7 @@ def study_materials(
                     raise ValueError('내부 자료 확인에는 ID가 필요합니다.')
                 materials.append(material)
                 continue
-            # Shared-profile legacy converters stay on the serial path.
-            if prepared is not None and extension not in ('hwp', 'doc', 'ppt'):
+            if prepared is not None:
                 identifier, sections = next(prepared)
                 assert identifier == item['id']
                 if isinstance(sections, Exception):

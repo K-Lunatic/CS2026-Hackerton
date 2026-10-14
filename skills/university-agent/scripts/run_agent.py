@@ -35,6 +35,19 @@ from features.lectures import get_lectures
 from features.lecture_audio import select_lectures
 from features.guidance import academic_list_answer, guidance_request, is_status_request, usage_guide
 from features.deadlines import format_deadline
+from features.moodle_xml import MoodleXmlError, export_saved_exam, reference_to_xml
+from features.autonomous_course_policy import AutonomousCoursePolicyError, verify_course_reference
+from scripts.assemble_moodle_backup import MoodleBackupAssemblyError, assemble_backup
+from scripts.rebuild_moodle_backup import MoodleBackupRebuildError, rebuild_backup
+from scripts.restore_moodle_backup import MoodleBackupRestoreError, restore_backup
+from scripts.update_autonomous_course import CourseUpdateError, update_course_settings
+from scripts.update_autonomous_section import SectionUpdateError, update_section_name
+from scripts.inspect_tls_activity_forms import inspect_forms
+from scripts.control_tls_activities import ActivityControlError, control_activities
+from scripts.control_tls_quiz_questions import QuizQuestionError, control_questions, inspect_question_forms
+from providers.moodle_session import LoginError
+from providers.forms import FormUnavailable
+from features.secret_boundary import redact_output
 from providers.credentials import CONFIG_PATH
 from storage.local_db import LocalDatabase
 
@@ -396,6 +409,50 @@ def main() -> None:
     past_exams = sub.add_parser('exam-history', help='보관된 시험 목록')
     past_exams.add_argument('--offset', type=int, default=0)
     past_exams.add_argument('--limit', type=int, default=20)
+    moodle_xml = sub.add_parser('tls-quiz-xml', help='저장된 시험지를 Moodle XML로 내보내기')
+    moodle_xml.add_argument('--exam-id', required=True)
+    moodle_xml.add_argument('--output', type=Path, required=True)
+    moodle_xml.add_argument('--category', default='$course$/top/터틀넥')
+    reference_xml = sub.add_parser('reference-xml', help='사용자 참고자료를 로컬 Moodle XML로 보관')
+    reference_xml.add_argument('--input', type=Path, required=True)
+    reference_xml.add_argument('--output', type=Path, required=True)
+    reference_xml.add_argument('--category', default='$course$/top/터틀넥')
+    backup_assemble = sub.add_parser('tls-backup-assemble', help='검증된 로컬 Moodle 백업에 시험 활동을 추가')
+    backup_assemble.add_argument('--template', type=Path, required=True)
+    backup_assemble.add_argument('--questions', type=Path, required=True)
+    backup_assemble.add_argument('--section', required=True)
+    backup_assemble.add_argument('--quiz-name', required=True)
+    backup_assemble.add_argument('--output', type=Path, required=True)
+    backup_rebuild = sub.add_parser('tls-backup-rebuild', help='수강 과목 기준으로 기존 Moodle 백업을 비우고 토픽을 재구성')
+    backup_rebuild.add_argument('--template', type=Path, required=True)
+    backup_rebuild.add_argument('--subject', action='append', default=[], help='직접 지정할 과목명; 생략하면 로컬 TLS 수강 목록 사용')
+    backup_rebuild.add_argument('--output', type=Path, required=True)
+    backup_restore = sub.add_parser('tls-backup-restore', help='검증된 백업을 지정한 소유 자율강좌로 복구')
+    backup_restore.add_argument('--backup', type=Path, required=True)
+    backup_restore.add_argument('--course-url', required=True)
+    backup_restore.add_argument('--apply', action='store_true', help='파일을 TLS 복구 마법사에 전송')
+    backup_restore.add_argument('--execute', action='store_true', help='기존 강좌 내용을 삭제 후 복구')
+    autonomous_verify = sub.add_parser('autonomous-course-verify', help='지정한 TLS 자율강좌 주소를 로컬 수강 목록과 대조')
+    autonomous_verify.add_argument('--url', required=True)
+    course_update = sub.add_parser('tls-course-update', help='관찰된 TLS 강좌 설정 저장 엔드포인트로 안전한 설정 수정')
+    course_update.add_argument('--course-url', required=True)
+    course_update.add_argument('--set', dest='settings', action='append', default=[], metavar='FIELD=VALUE')
+    section_update = sub.add_parser('tls-section-update', help='화면에서 확인한 TLS 토픽 편집 링크로 이름 수정')
+    section_update.add_argument('--course-url', required=True)
+    section_update.add_argument('--section', required=True)
+    section_update.add_argument('--name', required=True)
+    activity_inspect = sub.add_parser('tls-activity-inspect', help='TLS 활동 추가 양식을 읽기 전용으로 점검')
+    activity_inspect.add_argument('--course-id', required=True)
+    activity_control = sub.add_parser('tls-activity-control', help='TLS 활동 여러 개를 한 계획으로 점검·저장')
+    activity_control.add_argument('--course-id', required=True)
+    activity_control.add_argument('--plan', required=True, type=Path)
+    activity_control.add_argument('--apply', action='store_true', help='계획을 실제 TLS에 저장')
+    quiz_question_inspect = sub.add_parser('tls-quiz-question-inspect', help='실제 TLS 퀴즈 문항 양식을 읽기 전용으로 점검')
+    quiz_question_inspect.add_argument('--quiz-id', required=True)
+    quiz_question_control = sub.add_parser('tls-quiz-question-control', help='실제 TLS 퀴즈 문제은행 문항을 계획대로 점검·저장')
+    quiz_question_control.add_argument('--quiz-id', required=True)
+    quiz_question_control.add_argument('--plan', required=True, type=Path)
+    quiz_question_control.add_argument('--apply', action='store_true', help='계획을 실제 TLS에 저장')
     study_parser = sub.add_parser("study-materials", help="다운로드한 과목 자료를 학습 자료 생성용으로 읽기")
     study_parser.add_argument("--course", default="", help="과목명 또는 일부")
     study_parser.add_argument("--resource", default="", help="자료 제목 또는 파일명 일부")
@@ -522,6 +579,115 @@ def main() -> None:
         store = database()
         result = StudySession(DB_PATH.parent / 'study-sessions.db', USER_ID, 'history', store,
             DB_PATH.parent / 'files').call({'action': 'exam_history', 'offset': args.offset, 'limit': args.limit})
+    elif args.command == 'tls-quiz-xml':
+        try:
+            result = {'toolCalls': ['export_moodle_xml'], 'data': export_saved_exam(
+                DB_PATH.parent / 'study-sessions.db', USER_ID, args.exam_id, args.output,
+                category=args.category,
+            ), 'answer': '저장된 시험지를 Moodle XML로 내보냈어요. TLS 업로드 전 문항 유형 변환 내역을 확인하세요.'}
+        except MoodleXmlError as error:
+            result = {'toolCalls': ['export_moodle_xml'], 'data': None,
+                      'error': {'code': 'MOODLE_XML_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'reference-xml':
+        try:
+            result = {'toolCalls': ['export_reference_xml'], 'data': reference_to_xml(
+                args.input, args.output, category=args.category,
+            ), 'answer': '사용자 참고자료를 문제 문항이 아닌 로컬 보관용 Moodle XML로 저장했어요. TLS에는 자동 업로드하지 않습니다.'}
+        except MoodleXmlError as error:
+            result = {'toolCalls': ['export_reference_xml'], 'data': None,
+                      'error': {'code': 'MOODLE_REFERENCE_XML_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'tls-backup-assemble':
+        try:
+            result = {'toolCalls': ['assemble_moodle_backup'], 'data': assemble_backup(
+                args.template, args.questions, args.output, section_name=args.section, quiz_name=args.quiz_name,
+            ), 'answer': '검증된 로컬 백업에 시험 활동을 추가했어요. TLS에 반영하기 전 복구 화면의 대상과 중복 여부를 확인하세요.'}
+        except (MoodleBackupAssemblyError, ValueError, OSError) as error:
+            result = {'toolCalls': ['assemble_moodle_backup'], 'data': None,
+                      'error': {'code': 'MOODLE_BACKUP_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'tls-backup-rebuild':
+        try:
+            subjects = args.subject or [course['name'] for course in database().get_courses(USER_ID)]
+            result = {'toolCalls': ['rebuild_moodle_backup'], 'data': rebuild_backup(
+                args.template, args.output, subjects,
+            ), 'answer': '내 수강 과목 기준으로 기존 활동·파일·문제은행을 비운 로컬 백업을 만들었어요. TLS 복구 전 대상과 토픽 수를 확인하세요.'}
+        except (MoodleBackupRebuildError, ValueError, OSError) as error:
+            result = {'toolCalls': ['rebuild_moodle_backup'], 'data': None,
+                      'error': {'code': 'MOODLE_BACKUP_REBUILD_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'tls-backup-restore':
+        try:
+            data = restore_backup(args.backup, args.course_url, apply=args.apply, execute=args.execute)
+            result = {'toolCalls': ['restore_moodle_backup'], 'data': data,
+                      'answer': ('백업을 검증하고 내 소유 자율강좌를 비운 뒤 과목 토픽만 복구했어요.'
+                                 if args.execute else
+                                 '백업과 대상 자율강좌를 확인했어요. 실제 복구 전 계획만 만들었습니다.')}
+        except (MoodleBackupRestoreError, LoginError, ValueError, OSError) as error:
+            result = {'toolCalls': ['restore_moodle_backup'], 'data': None,
+                      'error': {'code': 'MOODLE_BACKUP_RESTORE_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'autonomous-course-verify':
+        try:
+            data = verify_course_reference(database().get_courses(USER_ID), args.url)
+            result = {'toolCalls': ['verify_autonomous_course'], 'data': data,
+                      'answer': ('주소와 이 기기의 TLS 강좌 정보가 일치했어요. 운영자 권한 확인 전에는 업로드하지 않습니다.'
+                                 if data['verified'] else data['reason'])}
+        except AutonomousCoursePolicyError as error:
+            result = {'toolCalls': ['verify_autonomous_course'], 'data': None,
+                      'error': {'code': 'AUTONOMOUS_COURSE_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'tls-course-update':
+        try:
+            updates = {}
+            for item in args.settings:
+                if '=' not in item:
+                    raise CourseUpdateError('--set은 FIELD=VALUE 형식이어야 해요.')
+                name, value = item.split('=', 1)
+                updates[name] = value
+            data = update_course_settings(args.course_url, updates)
+            result = {'toolCalls': ['update_autonomous_course'], 'data': data,
+                      'answer': 'TLS 강좌 설정을 저장하고 다시 확인했어요.'}
+        except (CourseUpdateError, LoginError, ValueError, OSError) as error:
+            result = {'toolCalls': ['update_autonomous_course'], 'data': None,
+                      'error': {'code': 'AUTONOMOUS_COURSE_UPDATE_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'tls-section-update':
+        try:
+            data = update_section_name(args.course_url, args.section, args.name)
+            result = {'toolCalls': ['update_autonomous_section'], 'data': data,
+                      'answer': 'TLS 토픽 이름을 저장하고 다시 확인했어요.'}
+        except (SectionUpdateError, LoginError, ValueError, OSError) as error:
+            result = {'toolCalls': ['update_autonomous_section'], 'data': None,
+                      'error': {'code': 'AUTONOMOUS_SECTION_UPDATE_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'tls-activity-inspect':
+        try:
+            result = {'toolCalls': ['inspect_tls_activity_forms'], 'data': inspect_forms(args.course_id),
+                      'answer': 'TLS 활동 추가 양식을 읽기 전용으로 확인했어요. 아직 활동을 만들거나 저장하지 않았습니다.'}
+        except (FormUnavailable, LoginError, ValueError, OSError) as error:
+            result = {'toolCalls': ['inspect_tls_activity_forms'], 'data': None,
+                      'error': {'code': 'TLS_ACTIVITY_FORM_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'tls-activity-control':
+        try:
+            result = {'toolCalls': ['control_tls_activities'], 'data': control_activities(
+                args.course_id, args.plan, apply=args.apply),
+                'answer': ('TLS 활동 계획을 확인하고 저장했어요.' if args.apply else
+                           'TLS 활동 계획을 확인했어요. 아직 저장하지 않았습니다.')}
+        except (ActivityControlError, FormUnavailable, LoginError, ValueError, OSError) as error:
+            result = {'toolCalls': ['control_tls_activities'], 'data': None,
+                      'error': {'code': 'TLS_ACTIVITY_CONTROL_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'tls-quiz-question-inspect':
+        try:
+            result = {'toolCalls': ['inspect_tls_quiz_question_forms'], 'data': inspect_question_forms(args.quiz_id),
+                      'answer': '현재 TLS 퀴즈에서 실제로 제공하는 문항 양식과 전달 인자를 읽기 전용으로 확인했어요.'}
+        except (QuizQuestionError, LoginError, ValueError, OSError) as error:
+            result = {'toolCalls': ['inspect_tls_quiz_question_forms'], 'data': None,
+                      'error': {'code': 'TLS_QUIZ_QUESTION_FORM_INVALID', 'message': str(error)}, 'answer': str(error)}
+    elif args.command == 'tls-quiz-question-control':
+        try:
+            data = control_questions(args.quiz_id, args.plan, apply=args.apply)
+            attached = args.apply and all(item.get('attached') is True for item in data['questions'])
+            result = {'toolCalls': ['control_tls_quiz_questions'], 'data': data,
+                'answer': ('TLS 퀴즈에 문항을 저장하고 편집 화면 연결까지 확인했어요.' if attached else
+                           'TLS 문제은행에 문항을 저장했지만 퀴즈 연결은 확인되지 않았어요. 연결 경로를 추가로 확인해야 합니다.' if args.apply else
+                           'TLS 문제은행 문항 계획과 전달 인자를 확인했어요. 아직 저장하지 않았습니다.')}
+        except (QuizQuestionError, LoginError, ValueError, OSError) as error:
+            result = {'toolCalls': ['control_tls_quiz_questions'], 'data': None,
+                      'error': {'code': 'TLS_QUIZ_QUESTION_CONTROL_INVALID', 'message': str(error)}, 'answer': str(error)}
     elif args.command == "study-materials":
         if not 1000 <= args.max_chars <= 80000:
             parser.error("--max-chars는 1000~80000 사이여야 합니다.")
@@ -574,7 +740,7 @@ def main() -> None:
             result = {"toolCalls": ["study"], "status": "error", "error": {"code": "STUDY_INVALID", "message": str(exc)}, "answer": str(exc)}
     if args.command not in ("ask", "study"):
         result = with_next_commands(result)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(redact_output(result), ensure_ascii=False, indent=2))
     if DB is not None:
         DB.close()
     if "error" in result:

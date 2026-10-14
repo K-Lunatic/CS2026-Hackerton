@@ -43,7 +43,7 @@ class ExamWebTests(ProjectTestBase):
             'types': [{'type': t, 'reason': '탐색 조건을 확인한다'} for t in dict.fromkeys(q['type'] for q in questions)],
             'questions': questions, 'shortageReason': '이 부분의 근거 있는 후보만 저장'}})
 
-    def make_exam(self, time_limit=None, start=True):
+    def make_exam(self, time_limit=None, start=True, images=False):
         session = self.session('exam')
         exam_settings = {'count': 6, 'choices': 3, 'delivery': 'web'}
         if time_limit is not None:
@@ -61,6 +61,10 @@ class ExamWebTests(ProjectTestBase):
             if kind == 'trace_table':
                 q.update(typeLabel='탐색 과정 표 작성', responseFormat='text')
             q.update(rubric=['정렬 조건', '탐색 범위 변화'], keywords=['정렬', '절반'])
+            if images and index == 1:
+                image = self.files / 'diagram.png'
+                image.write_bytes(b'fake-png')
+                q['images'] = [{'path': str(image), 'alt': '탐색 그림'}]
             questions.append(q)
         self.extract_questions(session, prepared, questions)
         session.call({'action': 'assemble', 'candidateIds': [f'c{i}' for i in range(1, 7)]})
@@ -68,6 +72,21 @@ class ExamWebTests(ProjectTestBase):
             exam = session.call({'action': 'web_status'})
             session.call({'action': 'start_exam', 'examId': exam['examId']})
         return session
+
+    def test_exam_images_are_private_and_served_through_tokenized_endpoint(self):
+        s = self.make_exam(images=True)
+        public = s.call({'action': 'web_status'})
+        self.assertEqual(public['questions'][0]['images'], [{'index': 0, 'alt': '탐색 그림'}])
+        self.assertNotIn(str(self.files), json.dumps(public, ensure_ascii=False))
+        server, url = create_exam_server(s)
+        worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        base, token = url.split('#')
+        query = '?examId=' + public['examId'] + '&questionId=q1&index=0'
+        with urlopen(Request(base + 'api/image' + query, headers={'X-Exam-Token': token}), timeout=3) as response:
+            self.assertEqual(response.read(), b'fake-png')
+        with self.assertRaises(HTTPError):
+            urlopen(Request(base + 'api/image' + query), timeout=3)
 
     def test_exam_hides_questions_and_starts_clock_only_after_button(self):
         s = self.make_exam(start=False)

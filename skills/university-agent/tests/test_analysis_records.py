@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from features import analysis_records, material_cache
@@ -49,6 +50,17 @@ class AnalysisRecordsTest(unittest.TestCase):
             if os.name != 'nt':  # Windows ctime is creation time, not the POSIX change-time signal.
                 os.utime(path, ns=(timestamp, timestamp))
             self.assertNotEqual(material_cache.fingerprint(directory, path), digest)
+
+    def test_parallel_cache_writes_are_serialized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def write(index):
+                material_cache.put(root, 'text', 'fixture-user', f'key-{index}', {'value': index})
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(write, range(20)))
+            self.assertEqual(material_cache.get(root, 'text', 'fixture-user', 'key-19'), {'value': 19})
 
     def test_revisions_private_readonly_and_restrictions(self):
         with tempfile.TemporaryDirectory() as directory:

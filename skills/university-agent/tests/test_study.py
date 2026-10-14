@@ -56,7 +56,7 @@ class StudyFlowTests(ProjectTestBase):
         self.assertEqual(event_from_text('운영체제 시험 준비해야 하는데', [])['settings']['mode'], 'concepts')
         self.assertEqual(event_from_text('객관식 문제 만들어줘', [])['settings']['types'], ['mcq'] * 10)
         self.assertEqual(event_from_text('모든 유형을 섞어서 문제 만들어줘', [])['settings']['types'],
-                         ['mcq', 'short', 'essay', 'code_fix', 'code_output', 'ordering', 'mcq', 'short', 'essay', 'code_fix'])
+                         ['mcq', 'short', 'essay', 'truefalse', 'code_fix', 'code_output', 'ordering', 'numerical', 'match', 'multianswer'])
         self.assertEqual(event_from_text('50분 시간 제한으로 문제 만들어줘', [])['settings']['timeLimitMinutes'], 50)
         self.assertEqual(study_intent('자료구조 객관식 5문제 만들어줘'), 'request')
         self.assertEqual(study_intent('자료구조 주요 내용 학습시켜줘'), 'request')

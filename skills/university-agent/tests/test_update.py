@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import sys
+from contextlib import redirect_stdout
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -62,6 +63,23 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual((target / 'SKILL.md').read_text(), 'new skill')
             for path in ('plugin.json', '.claude-plugin/plugin.json'):
                 self.assertEqual(json.loads((root / path).read_text())['version'], '0.5.0')
+
+    def test_archive_paths_cannot_escape_staging_directory(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as bundle:
+            bundle.writestr('../outside.txt', 'must not be written')
+        with tempfile.TemporaryDirectory() as folder:
+            with zipfile.ZipFile(io.BytesIO(archive.getvalue())) as bundle:
+                with self.assertRaises(ValueError):
+                    update_turtleneck._extract_archive(bundle, Path(folder))
+            self.assertFalse((Path(folder).parent / 'outside.txt').exists())
+
+    def test_auto_only_checks_and_apply_is_explicit(self):
+        with patch.object(update_turtleneck, 'check', return_value={'status': 'CURRENT', 'message': '최신'}) as check, \
+             patch.object(update_turtleneck, 'apply_update', side_effect=AssertionError('unexpected apply')):
+            with patch.object(sys, 'argv', ['update_turtleneck.py', '--auto']), redirect_stdout(io.StringIO()):
+                self.assertEqual(update_turtleneck.main(), 0)
+            check.assert_called_once_with(force=False)
 
     def test_claude_package_matches_shared_skill_and_codex_version(self):
         repo = ROOT.parents[1]

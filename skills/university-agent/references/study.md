@@ -61,10 +61,21 @@
 저장된 설명·근거가 있는 학습 자료를 먼저 사용자에게 보여주고, 문제 풀이 선택은 그다음에
 제안한다. 준비용 문구만 평문으로 답하거나 hostOnly를 사용자에게 노출하지 않는다.
 
-호스트 AI는 SOURCE만으로 근거 있는 문항을 만들고, 부족하면 적은 문항과
+호스트 AI는 각 SOURCE만으로 근거 있는 문항을 만들고, 부족하면 적은 문항과
 `shortageReason`을 제공한다. 각 문항은 `id`, `type`, `question`, `options`(객관식만),
 `answer`, `explanation`, `concept`, `hint`, `rubric`, 단답형 `acceptedAnswers`,
-`evidence`를 포함한다. `evidence`는
+선택적인 `images`(기기 안에 있는 이미지의 `path`와 `alt`), `evidence`를 포함한다.
+`images`는 Moodle XML을 만들 때 외부 주소가 아니라 XML 첨부 파일로 포함되며, 경로가 실제 파일이 아니면 내보내지 않는다.
+문항 유형은 로컬 시험지에서 `mcq`, `short`, `essay`, `truefalse`, `code_fix`, `code_output`, `ordering`을
+기본 제공한다. TLS 문제은행으로 내보낼 때는 현재 학교 TLS에서 확인된
+`multichoice`, `multichoiceset`, `truefalse`, `calculatedmulti`, `calculated`, `calculatedsimple`,
+`randomsamatch`, `multianswer`, `essay`, `numerical`, `shortanswer`, `match`, `description`을 유지한다.
+실제 TLS에 저장할 수 있는 문항 양식과 전달 인자는 `tls-quiz-question-inspect`로 읽기 전용 확인하고,
+확인된 필드만 계획 파일로 `tls-quiz-question-control`에 넘긴다. 세션·쿠키·보호 필드는 실행기가 자동으로
+채우며 계획 파일이나 AI 결과에 넣지 않는다. TLS마다 설치된 문항 플러그인이 다를 수 있으므로 확인 결과
+`available: false`인 유형은 저장하지 않는다.
+
+`evidence`는
 `[{"resourceId":"...","location":"슬라이드 1","quote":"원문의 연속 구절"}]`이다.
 `generate` 이벤트에 `requestId`와 AI JSON을 제출한다. 코드가 ID 중복, 유형,
 선택지 수·중복, 정답 선택지 존재, 인용이 선택 범위에 실제 있는지 검사한다.
@@ -87,7 +98,19 @@
 만들지 않는다. 시험 정보와 차시 메모가 충돌하면 사용자가 지정한 현재 요청과 실제 자료를
 우선한다.
 
-새 quiz는 아래 파일별 extract → assemble 흐름을 사용한다. 조합 결과의 `needsWeb`를 받으면
+새 quiz는 파일별 extract → assemble 흐름을 사용한다. 파일을 읽을 때는 서로 독립된 최대 2개 조각이
+`hostOnly.requests`에 함께 내려온다. 호스트는 각 요청의 `requestId`, `SOURCE`, `schema`, `settings`,
+`examSettings`, `studyContext`, `learningFocus`, `instruction`을 섞지 않고 독립적으로 처리한 뒤,
+모든 결과를 `extract_batch`의 `batchRequestId`와 `items: [{requestId, data}]`로 한 번에 제출한다.
+한 조각만 처리할 수 있는 호스트는 기존 `extract` 이벤트를 사용할 수 있지만, 다음 조각이 남아 있으면
+반환된 요청을 끝까지 처리해야 한다. 파일 읽기와 분석 결과는 사용자별 로컬 캐시에 저장되며, 내용이 바뀌지
+않은 자료는 다시 읽거나 분석하지 않는다.
+
+조합 단계는 저장된 후보의 구조·근거만 확인하며 AI에 후보를 다시 생성·재분석시키지 않는다.
+`selectionPlan`은 파일·개념·유형을 분산하는 Python 제안이고, 호스트는 의미·정답·중복을 검토한 뒤
+기존 `candidateIds`를 선택한다. 조합 시 `generate`가 실행되어도 새 AI 요청이 아니라 코드 측 형식 확인이다.
+
+조합 결과의 `needsWeb`를 받으면
 실행기가 자동으로 `scripts/exam_web.py --conversation <id>`를 지속 실행한다. 반환된
 `webUrl`을 사용자에게 제공하고, `webOpened: true`일 때 서버를 다시 실행하지 않는다.
 채팅에 문제를 대신 나열하지 않는다. 브라우저 실행 실패는 URL로 안내하고 서버 실패는
@@ -127,7 +150,9 @@ TLS/에타의 계정·쿠키·DB를 통합하지 않는다. 실행기는 에타�
  "text":"<읽은 후기 원문>"}
 ```
 
-`kind`는 `everytime_review`, `student_report`, `instructor_transcript`만 허용한다.
+`kind`는 `everytime_review`, `student_report`, `ai_evaluation`, `internet_evaluation`,
+`instructor_transcript`, `instructor_notice`로 분리한다. 서로 다른 출처의 평가를 한 문장으로
+섞지 말고, AI 평가는 판단 보조로만 보관한다.
 사용자 경험담은 `source`에 “사용자의 이번 학기 수강 경험”, `location`에 대화 위치를 적는다.
 후기는 항목당 2000자·총 8000자, 참고 자료는 총 20개 이하다. 원문·부정문·상충하는 후기를
 보존하고 필요하면 근거를 선별하되 요약을 원문으로 위장하지 않는다.
@@ -153,6 +178,12 @@ TLS 자료와 함께 독립된 본문으로 분석하고 8000자씩 분할한다
 채점 완료/완료된 과거 시험의 `referenceUse`로 다시 확인할 수 있다.
 후기만 바뀌면 기존 파일 분석을 재사용해 후보 조합만 바꾼다. 전사문이 바뀌면 해당 전사문만
 다시 분석하며 다른 강의 자료를 재분석하지 않는다.
+
+파일별 `learning` 항목에는 선택적으로 `importanceBySource`를 저장한다.
+각 항목은 `sourceKind`, `score`(0~100), `reason`, `referenceIds`를 가지며 에타 강의평,
+AI 평가, 인터넷 평가, 교수 전사문·공지의 중요도를 별도 카드로 유지한다. AI 평가는 공식
+시험 정보나 정답 근거가 아니다. 사용자가 직접 입력한 참고 파일은 원본과 읽은 본문을
+로컬 전용 보관 XML로 만들 수 있지만, 이 작업은 시험 문제 생성·TLS 업로드와 분리된다.
 
 ### 파일별 분석 → 후보 저장 → 시험지 조합
 

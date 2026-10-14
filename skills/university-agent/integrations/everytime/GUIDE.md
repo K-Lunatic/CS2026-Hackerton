@@ -37,6 +37,9 @@
 ## 내부 구성 확인과 첫 크롤링
 
 실제 읽기 작업은 설명을 다시 조합하지 말고 이 Skill의 실행기를 사용한다.
+엔드포인트와 구현 상태를 확인해야 할 때는 먼저 [엔드포인트 지도](references/endpoint-map.md)를
+읽는다. `구현`으로 표시된 경로만 기존 실행기를 통해 사용하고, `관찰`·`미구현` 경로는
+주소를 추측해 호출하지 않는다.
 
 ```text
 python3 <터틀넥 경로>/integrations/everytime/scripts/everytime.py --board-url https://everytime.kr/<게시판ID> --limit 20

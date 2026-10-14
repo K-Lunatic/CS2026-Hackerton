@@ -57,6 +57,37 @@ class FilePipelineTests(ProjectTestBase):
             with self.assertRaises(ValueError):
                 self.session('pipeline').call({'action': 'candidate', 'candidateIds': ids})
 
+    def test_extract_batch_requires_and_stores_every_independent_request(self):
+        session = self.session('batch')
+        prepared = session.call({'action': 'request',
+            'selection': {'courseId': 'course-1', 'allFiles': True},
+            'settings': {'count': 4, 'delivery': 'web'}})
+        seen = 0
+        while prepared.get('needsExtraction'):
+            requests = prepared['hostOnly']['requests']
+            self.assertLessEqual(len(requests), 2)
+            items = []
+            for request in requests:
+                single = {**prepared, 'hostOnly': request}
+                question = self.candidate(single)
+                items.append({'requestId': request['requestId'], 'data': {
+                    'context': '정렬된 배열에서 이진 탐색하는 수업',
+                    'learning': [{'concept': '이진 탐색', 'explanation': '정렬 조건과 범위 축소',
+                                  'evidence': question['evidence']}],
+                    'types': [{'type': question['type'], 'reason': '탐색 조건 확인'}],
+                    'questions': [question], 'shortageReason': '각 부분의 근거 있는 후보만 저장'}})
+            with self.assertRaises(ValueError):
+                session.call({'action': 'extract_batch',
+                              'batchRequestId': prepared['batchRequestId'], 'items': items[:-1]})
+            with self.assertRaises(ValueError):
+                session.call({'action': 'extract_batch',
+                              'batchRequestId': prepared['batchRequestId'], 'items': items + [items[0]]})
+            prepared = session.call({'action': 'extract_batch',
+                'batchRequestId': prepared['batchRequestId'], 'items': items})
+            seen += len(items)
+        self.assertEqual(seen, 4)
+        self.assertEqual(prepared['totalCandidates'], 4)
+
     def test_twenty_question_budget_scales_with_files_without_losing_source(self):
         state = {'settings': {'count': 20, 'choices': 4, 'difficulty': '보통', 'types': ['auto'] * 20}, 'selection': {'courseId': 'course-1'},
                  'pipeline': {'files': [f'r{i}' for i in range(7)], 'units': [], 'candidates': []}}
@@ -193,6 +224,29 @@ class FilePipelineTests(ProjectTestBase):
         with self.assertRaises(ValueError):
             self.extract_questions(session, prepared, [question])
         self.assertEqual(self.session('unsupported-quote').call({'action': 'status'})['requestId'], prepared['requestId'])
+
+    def test_source_assessments_are_validated_and_saved_separately(self):
+        from features.study import exam_references
+        review = {'kind': 'everytime_review', 'courseId': 'course-1', 'professor': '테스트 교수',
+                  'semester': '2025-2', 'source': 'https://everytime.kr/lecture/view/1',
+                  'location': '후기 1', 'text': '정렬이 반복되어 나왔어요.'}
+        session = self.session('source-assessments')
+        prepared = session.call({'action': 'request', 'selection': {'courseId': 'course-1', 'resourceIds': ['r0'],
+            'examReferences': [review]}, 'settings': {'count': 1}})
+        question = self.candidate(prepared)
+        refs = question['evidence']
+        ref_id = exam_references([review], {'id': 'course-1', 'professor': '테스트 교수'})[0]['id']
+        response = {'context': '정렬된 배열에서 이진 탐색하는 수업',
+                    'learning': [{'concept': '이진 탐색', 'explanation': '정렬 조건', 'evidence': refs,
+                                  'importanceBySource': [{'sourceKind': 'everytime_review', 'score': 70,
+                                                          'reason': '후기에서 반복 언급', 'referenceIds': [ref_id]}]}],
+                    'types': [{'type': question['type'], 'reason': '조건 확인'}], 'questions': [question],
+                    'shortageReason': '현재 부분의 근거 있는 후보만 저장'}
+        result = session.call({'action': 'extract', 'requestId': prepared['requestId'], 'data': response})
+        unit = session.call({'action': 'unit', 'unitId': 'u1'})['hostOnly']
+        self.assertEqual(unit['learning'][0]['importanceBySource'][0]['sourceKind'], 'everytime_review')
+        with self.assertRaises(ValueError):
+            session.call({'action': 'extract', 'requestId': result.get('requestId'), 'data': {}})
 
     def test_all_files_must_finish_resume_and_private_question_bank(self):
         prepared = self.request()

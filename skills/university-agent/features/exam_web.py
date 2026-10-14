@@ -3,6 +3,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import secrets
+from urllib.parse import parse_qs, urlsplit
 
 
 def create_exam_server(session, port=0, view='exam'):
@@ -56,6 +57,19 @@ def create_exam_server(session, port=0, view='exam'):
                 try:
                     self.send(200, session.call({'action': 'web_status'}))
                 except ValueError as exc:
+                    self.send(409, {'error': str(exc)})
+            elif self.path.startswith('/api/image'):
+                try:
+                    query = parse_qs(urlsplit(self.path).query)
+                    if set(query) != {'examId', 'questionId', 'index'}:
+                        raise ValueError('문항 이미지를 확인해주세요.')
+                    image = session.call({'action': 'web_image', 'examId': query['examId'][0],
+                                          'questionId': query['questionId'][0], 'index': query['index'][0]})
+                    path = Path(image['path']).resolve(strict=True)
+                    if path.stat().st_size > 10_000_000:
+                        raise ValueError('문항 이미지가 너무 큽니다.')
+                    self.send(200, path.read_bytes(), image['contentType'])
+                except (KeyError, OSError, ValueError) as exc:
                     self.send(409, {'error': str(exc)})
             elif self.path == '/api/history':
                 try:

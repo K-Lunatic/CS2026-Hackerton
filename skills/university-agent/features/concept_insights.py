@@ -16,7 +16,7 @@ def _load(value, fallback):
     return result if isinstance(result, type(fallback)) else fallback
 
 
-def _add(bucket, concept, *, importance=0, weak=0, attempts=0, explanation="", evidence=()):
+def _add(bucket, concept, *, importance=0, weak=0, attempts=0, explanation="", evidence=(), source_assessments=()):
     concept = str(concept or "").strip()
     if not concept:
         return
@@ -33,6 +33,18 @@ def _add(bucket, concept, *, importance=0, weak=0, attempts=0, explanation="", e
             "location": str(ref["location"])[:200],
             "quote": str(ref.get("quote") or "")[:500],
         }
+    for assessment in source_assessments:
+        if not isinstance(assessment, dict) or not assessment.get("sourceKind"):
+            continue
+        kind = assessment["sourceKind"]
+        source = item["sourceImportance"].setdefault(kind, {"scores": [], "reasons": [], "referenceIds": []})
+        source["scores"].append(assessment.get("score", 0))
+        reason = str(assessment.get("reason") or "").strip()
+        if reason and reason not in source["reasons"]:
+            source["reasons"].append(reason[:1000])
+        for reference_id in assessment.get("referenceIds", []):
+            if reference_id not in source["referenceIds"]:
+                source["referenceIds"].append(reference_id)
 
 
 def _source_allowed(source, allowed, course_ids, fallback_course=None):
@@ -55,7 +67,7 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
     course_ids = set(course_ids) if course_ids is not None else None
     allowed = {item["id"] for item in resources if item.get('downloadStatus') != 'PROHIBITED' and
                (course_ids is None or item.get("courseId") in course_ids)}
-    bucket = defaultdict(lambda: {"importanceRaw": 0, "weakRaw": 0, "attempts": 0, "explanation": "", "evidence": {}})
+    bucket = defaultdict(lambda: {"importanceRaw": 0, "weakRaw": 0, "attempts": 0, "explanation": "", "evidence": {}, "sourceImportance": {}})
 
     analysis_path = root / "analysis-records.db"
     if analysis_path.exists():
@@ -77,7 +89,8 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
                 refs = concept.get('evidence', [])
                 if not refs or any(not isinstance(ref, dict) or ref.get('resourceId') not in source_ids for ref in refs):
                     continue
-                _add(bucket, concept.get("concept"), importance=3, explanation=concept.get("explanation", ""), evidence=concept.get("evidence", []))
+                _add(bucket, concept.get("concept"), importance=3, explanation=concept.get("explanation", ""), evidence=concept.get("evidence", []),
+                     source_assessments=concept.get("importanceBySource", []))
             for unit in units:
                 if not isinstance(unit, dict):
                     continue
@@ -87,7 +100,8 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
                     refs = concept.get('evidence', unit.get('sources', []))
                     if not refs or any(not isinstance(ref, dict) or ref.get('resourceId') not in source_ids for ref in refs):
                         continue
-                    _add(bucket, concept.get("concept"), importance=3, explanation=concept.get("explanation", ""), evidence=concept.get("evidence", unit.get("sources", [])))
+                    _add(bucket, concept.get("concept"), importance=3, explanation=concept.get("explanation", ""), evidence=concept.get("evidence", unit.get("sources", [])),
+                         source_assessments=concept.get("importanceBySource", []))
                 questions = unit.get("questions", []) if isinstance(unit.get("questions", []), list) else []
                 for question in questions:
                     if isinstance(question, dict) and question.get('evidence') and all(isinstance(ref, dict) and ref.get("resourceId") in source_ids for ref in question['evidence']):
@@ -142,9 +156,15 @@ def build_insights(root, user, resources, *, course_ids=None, limit=20):
         importance = round(item["importanceRaw"] / max_importance * 100)
         weakness = round(min(100, item["weakRaw"] / max(item["attempts"], 1) * 40))
         priority = round(importance * 0.45 + weakness * 0.55)
+        source_importance = []
+        for kind, source in sorted(item["sourceImportance"].items()):
+            scores = source["scores"]
+            source_importance.append({"sourceKind": kind, "score": round(sum(scores) / len(scores)) if scores else 0,
+                                      "reasons": source["reasons"][:3], "referenceIds": source["referenceIds"][:10]})
         ranked.append({"concept": concept, "priority": priority, "importance": importance, "weakness": weakness,
                        "status": "우선 복습" if weakness >= 40 else "핵심 개념" if importance >= 60 else "확인 권장",
                        "learningMaterial": item["explanation"] or "저장된 설명이 없어 원문 근거를 먼저 확인해 주세요.",
+                       "importanceBySource": source_importance,
                        "evidence": list(item["evidence"].values())[:5]})
     ranked.sort(key=lambda value: (-value["priority"], -value["importance"], value["concept"]))
     return {"concepts": ranked[:limit], "total": len(ranked)}

@@ -5,6 +5,10 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from threading import Lock
+
+
+_WRITE_LOCK = Lock()
 
 
 def key(value):
@@ -36,9 +40,12 @@ def get(root, kind, user, identifier):
     path = (Path(root) / 'materials.db').resolve()
     if not path.exists():
         return None
-    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
-        row = db.execute('SELECT value FROM material_cache WHERE kind=? AND user=? AND key=?',
-                         (kind, user, identifier)).fetchone()
+    # The first writer creates the table lazily. Share the same short lock so
+    # a read cannot observe the file between creation and schema commit.
+    with _WRITE_LOCK:
+        with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=10)) as db:
+            row = db.execute('SELECT value FROM material_cache WHERE kind=? AND user=? AND key=?',
+                             (kind, user, identifier)).fetchone()
     return json.loads(row[0]) if row else None
 
 
@@ -48,7 +55,10 @@ def put(root, kind, user, identifier, value):
     path = root / 'materials.db'
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     os.close(fd)
-    with closing(sqlite3.connect(path)) as db, db:
-        db.execute('CREATE TABLE IF NOT EXISTS material_cache (kind TEXT, user TEXT, key TEXT, value TEXT, PRIMARY KEY(kind,user,key))')
-        db.execute('INSERT OR REPLACE INTO material_cache VALUES (?,?,?,?)',
-                   (kind, user, identifier, json.dumps(value, ensure_ascii=False, separators=(',', ':'))))
+    # Readers remain parallel; only the short SQLite schema/write section is
+    # serialized so two extractors cannot recreate the cache lock race.
+    with _WRITE_LOCK:
+        with closing(sqlite3.connect(path, timeout=10)) as db, db:
+            db.execute('CREATE TABLE IF NOT EXISTS material_cache (kind TEXT, user TEXT, key TEXT, value TEXT, PRIMARY KEY(kind,user,key))')
+            db.execute('INSERT OR REPLACE INTO material_cache VALUES (?,?,?,?)',
+                       (kind, user, identifier, json.dumps(value, ensure_ascii=False, separators=(',', ':'))))

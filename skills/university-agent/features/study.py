@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import hashlib
+import mimetypes
 import os
 import random
 import re
@@ -25,11 +26,32 @@ PROMPT = '''역할: 제공된 수업자료로 연습문제를 만들고 채점�
 - 순서 배열형은 `blocks`의 각 블록을 한 번씩 올바른 순서로 배치하게 만들고, 정답은 블록 번호 배열로 보관한다.
 - 코딩 자료는 예제 기반 오류 수정이나 실행 결과 예측 문제를 우선한다. 코드를 실행하지 않는다.
 - 각 문제에는 핵심 개념, 해설, 평가 기준, 실제 자료의 위치와 짧은 원문 근거를 포함한다.
+- 개념 중요도는 `importanceBySource`로 출처별로 나눈다. 에타 강의평, AI 평가, 인터넷 평가,
+  교수 전사문·공지의 점수와 이유를 섞지 말고, AI 평가를 공식 정답이나 시험 출제 보장으로 표현하지 않는다.
 - 사용자가 남긴 학습·시험 메모는 출제 형식, 난이도, 시간 배분과 설명 방식만 조절하는 참고다.
   메모를 공식 공지나 원문 근거로 취급하지 말고, 메모에 없는 사실을 보충하지 않는다.
 - 새 문제 유형을 만들 때는 표시 이름과 답변 형식(choice/text/code/ordering)을 함께 정한다.'''
 
 MAX_QUESTIONS = 200
+REFERENCE_KINDS = ('everytime_review', 'student_report', 'ai_evaluation',
+                   'internet_evaluation', 'instructor_transcript', 'instructor_notice')
+
+QUESTION_TYPE_LABELS = {
+    'mcq': '객관식', 'short': '용어 단답형', 'essay': '서술형', 'truefalse': 'O/X',
+    'code_fix': '코드 오류 수정', 'code_output': '실행 결과 예측', 'ordering': '순서 배열형',
+    'multichoice': 'Moodle 객관식', 'multichoiceset': '복수 정답 객관식',
+    'calculatedmulti': '계산형 객관식', 'calculated': '계산형 수치',
+    'calculatedsimple': '간단 계산형', 'randomsamatch': '랜덤 단답 매칭',
+    'multianswer': '빈칸 채우기(Cloze)', 'shortanswer': 'Moodle 단답형', 'numerical': '수치형',
+    'match': '짝짓기', 'description': '설명형',
+}
+
+CHOICE_TYPES = {'mcq', 'multichoice', 'multichoiceset', 'calculatedmulti'}
+PAIR_TYPES = {'match', 'randomsamatch'}
+MOODLE_NATIVE_TYPES = {'multichoice', 'multichoiceset', 'truefalse', 'calculatedmulti',
+                       'calculated', 'calculatedsimple', 'randomsamatch', 'multianswer',
+                       'essay', 'numerical', 'shortanswer', 'match', 'description'}
+IMAGE_SUFFIXES = {'.gif', '.jpe', '.jpeg', '.jpg', '.png', '.svg', '.svgz'}
 
 
 def study_intent(text):
@@ -83,7 +105,9 @@ def event_from_text(text, courses):
             configured['mode'] = 'concepts'
         if re.search(r'문제|퀴즈|모의\s*시험', text):
             configured['delivery'] = 'web'
-        kinds = [('mcq', '객관식'), ('short', '단답형'), ('essay', '서술형'), ('code_fix', '오류 수정'), ('code_output', '실행 결과'), ('ordering', '순서 배열')]
+        kinds = [('mcq', '객관식'), ('short', '단답형'), ('essay', '서술형'), ('truefalse', 'OX'),
+                 ('code_fix', '오류 수정'), ('code_output', '실행 결과'), ('ordering', '순서 배열'),
+                 ('numerical', '수치형'), ('match', '짝짓기'), ('multianswer', '빈칸 채우기')]
         mentioned = [kind for kind, word in kinds if word in text]
         if re.search(r'(?:모든|전체|각).{0,4}유형|유형.{0,4}(?:섞|혼합)', text):
             pattern = [kind for kind, _ in kinds]
@@ -173,8 +197,8 @@ def exam_references(raw, course):
     result, seen, report_chars, transcript_chars = [], set(), 0, 0
     fields = {'kind', 'courseId', 'professor', 'semester', 'source', 'location', 'text'}
     for item in raw:
-        if not isinstance(item, dict) or set(item) - fields or item.get('kind') not in ('everytime_review', 'student_report', 'instructor_transcript'):
-            raise ValueError('강의평·사용자 경험담·실제 교수 전사문만 참고할 수 있습니다.')
+        if not isinstance(item, dict) or set(item) - fields or item.get('kind') not in REFERENCE_KINDS:
+            raise ValueError('강의평·AI 평가·인터넷 평가·교수 전사문·공지 등 확인된 참고 자료만 사용할 수 있습니다.')
         if item.get('courseId') != course['id']:
             raise ValueError('참고 자료의 과목이 선택한 과목과 다릅니다.')
         if any(not isinstance(item.get(k, ''), str) or len(item.get(k, '')) > 500 for k in fields - {'text'}):
@@ -196,6 +220,43 @@ def exam_references(raw, course):
     if report_chars > 8000 or transcript_chars > 1000000:
         raise ValueError('후기는 총 8000자, 전사문은 총 100만 자 이내로 범위를 나눠 주세요.')
     return result
+
+
+def source_assessments(value, references):
+    """Validate source-separated importance guidance without turning it into answer evidence."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 10:
+        raise ValueError('출처별 중요도 평가는 10개 이하로 분리하세요.')
+    by_id = {item.get('id'): item for item in references if isinstance(item, dict) and item.get('id')}
+    checked = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) - {'sourceKind', 'score', 'reason', 'referenceIds'}:
+            raise ValueError('출처별 중요도 평가 형식이 올바르지 않습니다.')
+        kind = item.get('sourceKind')
+        if kind not in REFERENCE_KINDS:
+            raise ValueError('지원하지 않는 평가 출처입니다.')
+        score = item.get('score')
+        if type(score) is not int or not 0 <= score <= 100:
+            raise ValueError('출처별 중요도는 0~100 정수로 지정하세요.')
+        reason = required_text(item, 'reason')
+        if len(reason) > 1000:
+            raise ValueError('출처별 중요도 평가 이유는 1000자 이내로 적어주세요.')
+        reference_ids = item.get('referenceIds', [])
+        if (not isinstance(reference_ids, list) or len(reference_ids) > 10 or
+                any(not isinstance(reference_id, str) for reference_id in reference_ids) or
+                len(set(reference_ids)) != len(reference_ids)):
+            raise ValueError('출처별 참고 자료 ID는 중복 없이 10개 이내로 지정하세요.')
+        if kind != 'ai_evaluation' and not reference_ids:
+            raise ValueError('AI 평가가 아닌 출처별 평가는 확인된 참고 자료에 연결해야 합니다.')
+        for reference_id in reference_ids:
+            if not isinstance(reference_id, str) or reference_id not in by_id:
+                raise ValueError('확인되지 않은 참고 자료 ID가 포함되어 있습니다.')
+            if kind != 'ai_evaluation' and by_id[reference_id].get('kind') != kind:
+                raise ValueError('평가 출처와 참고 자료 종류가 다릅니다.')
+        checked.append({'sourceKind': kind, 'score': score, 'reason': reason,
+                        'referenceIds': reference_ids})
+    return checked
 
 
 def validate_generated(data, state):
@@ -226,13 +287,12 @@ def validate_generated(data, state):
         if q['id'] in ids or not isinstance(q.get('type'), str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,39}', q['type']) or q['type'] == 'auto' or (expected != 'auto' and q['type'] != expected):
             raise ValueError('문항 ID 중복 또는 문제 유형 불일치')
         ids.add(q['id'])
-        labels = {'mcq': '객관식', 'short': '용어 단답형', 'essay': '서술형', 'code_fix': '코드 오류 수정', 'code_output': '실행 결과 예측', 'ordering': '순서 배열형'}
-        q['typeLabel'] = labels.get(q['type']) or required_text(q, 'typeLabel')
-        if q['type'] not in labels:
+        q['typeLabel'] = QUESTION_TYPE_LABELS.get(q['type']) or required_text(q, 'typeLabel')
+        if q['type'] not in QUESTION_TYPE_LABELS:
             required_text(q, 'responseFormat')
-        q['responseFormat'] = q.get('responseFormat', 'choice' if q['type'] == 'mcq' else 'code' if q['type'] == 'code_fix' else 'ordering' if q['type'] == 'ordering' else 'text')
-        if q['responseFormat'] not in ('choice', 'text', 'code', 'ordering') or (q['type'] == 'mcq' and q['responseFormat'] != 'choice') or (q['type'] == 'ordering' and q['responseFormat'] != 'ordering'):
-            raise ValueError('답안 입력 형식은 choice/text/code/ordering입니다.')
+        q['responseFormat'] = q.get('responseFormat', 'multi_choice' if q['type'] == 'multichoiceset' else 'choice' if q['type'] in CHOICE_TYPES else 'code' if q['type'] == 'code_fix' else 'ordering' if q['type'] == 'ordering' else 'text')
+        if q['responseFormat'] not in ('choice', 'multi_choice', 'text', 'code', 'ordering') or (q['type'] == 'mcq' and q['responseFormat'] != 'choice') or (q['type'] == 'multichoiceset' and q['responseFormat'] != 'multi_choice') or (q['type'] == 'ordering' and q['responseFormat'] != 'ordering'):
+            raise ValueError('답안 입력 형식은 choice/multi_choice/text/code/ordering입니다.')
         blocks = q.get('blocks', [])
         if q['responseFormat'] == 'ordering':
             if not isinstance(blocks, list) or not 2 <= len(blocks) <= 20 or any(not isinstance(block, str) or not block.strip() for block in blocks) or len(set(blocks)) != len(blocks):
@@ -257,18 +317,49 @@ def validate_generated(data, state):
         options = q.get('options', [])
         if not isinstance(options, list):
             raise ValueError('선택지는 목록이어야 합니다.')
-        if q['responseFormat'] == 'choice':
+        if q['responseFormat'] in ('choice', 'multi_choice'):
             if not isinstance(options, list) or len(options) != state['settings']['choices'] or any(not isinstance(o, str) or not o.strip() for o in options):
                 raise ValueError('선택지 개수/형식 오류')
-            if len({re.sub(r'\s+', '', o).casefold() for o in options}) != len(options) or q['answer'] not in options:
+            if len({re.sub(r'\s+', '', o).casefold() for o in options}) != len(options):
                 raise ValueError('중복 선택지 또는 정답 구조 오류')
+            if q['responseFormat'] == 'choice' and q['answer'] not in options:
+                raise ValueError('정답이 선택지에 없습니다.')
+            if q['responseFormat'] == 'multi_choice':
+                correct = q.get('correctAnswers') or [q['answer']]
+                if not isinstance(correct, list) or not correct or any(answer not in options for answer in correct) or len(set(correct)) != len(correct):
+                    raise ValueError('복수 선택 정답이 선택지에 없습니다.')
         elif options:
             raise ValueError('주관식에는 선택지가 없습니다.')
+        if q['type'] in PAIR_TYPES:
+            pairs = q.get('pairs')
+            if not isinstance(pairs, list) or len(pairs) < 2 or any(
+                not isinstance(pair, dict) or not isinstance(pair.get('prompt'), str) or not pair['prompt'].strip()
+                or not isinstance(pair.get('answer'), str) or not pair['answer'].strip() for pair in pairs):
+                raise ValueError('짝짓기 문항에는 prompt/answer 쌍이 2개 이상 필요합니다.')
+        if q['type'] in {'calculated', 'calculatedsimple', 'calculatedmulti'}:
+            if not isinstance(q.get('formula', q.get('answer')), str) or not str(q.get('formula', q.get('answer'))).strip():
+                raise ValueError('계산형 문항에는 formula 또는 정답 수식이 필요합니다.')
+            if q.get('tolerance') is not None and not isinstance(q['tolerance'], (int, float)):
+                raise ValueError('계산형 허용 오차는 숫자여야 합니다.')
+        if q['type'] == 'numerical' and q.get('tolerance') is not None and not isinstance(q['tolerance'], (int, float)):
+            raise ValueError('수치형 허용 오차는 숫자여야 합니다.')
         if q['type'] == 'short' and (not isinstance(q.get('acceptedAnswers'), list) or not q['acceptedAnswers'] or any(not isinstance(a, str) or not a.strip() for a in q['acceptedAnswers'])):
             raise ValueError('단답형 허용 답안 기준이 필요합니다.')
+        images = q.get('images', [])
+        if not isinstance(images, list) or len(images) > 8 or any(
+            not isinstance(image, (str, dict)) or
+            (isinstance(image, str) and not image.strip()) or
+            (isinstance(image, dict) and (not isinstance(image.get('path'), str) or not image['path'].strip()))
+            for image in images
+        ):
+            raise ValueError('문항 이미지는 로컬 경로 목록이어야 하며 8개 이내입니다.')
         q['evidence'] = evidence(q.get('evidence'), state['sources'])
         # Store only the defined contract, never arbitrary host fields in public output.
-        checked.append({**{k: q[k] for k in ('id', 'type', 'question', 'answer', 'explanation', 'concept', 'hint', 'rubric', 'evidence', 'typeLabel', 'responseFormat', 'points', 'code', 'language', 'keywords')}, 'blocks': blocks, 'options': options, 'acceptedAnswers': q.get('acceptedAnswers', [])})
+        checked.append({**{k: q[k] for k in ('id', 'type', 'question', 'answer', 'explanation', 'concept', 'hint', 'rubric', 'evidence', 'typeLabel', 'responseFormat', 'points', 'code', 'language', 'keywords')},
+                        'blocks': blocks, 'options': options, 'acceptedAnswers': q.get('acceptedAnswers', []),
+                        'pairs': q.get('pairs', []), 'formula': q.get('formula', ''),
+                        'tolerance': q.get('tolerance'), 'units': q.get('units', []),
+                        'correctAnswers': q.get('correctAnswers', []), 'images': images})
     return checked
 
 
@@ -759,6 +850,51 @@ class StudySession:
         overtime = max(0, elapsed - limit) if limit is not None else 0
         return {'elapsedSeconds': elapsed, 'timeLimitSeconds': limit, 'remainingSeconds': remaining, 'overtimeSeconds': overtime}
 
+    def _resolve_exam_image(self, image):
+        raw_path = image if isinstance(image, str) else image.get('path') if isinstance(image, dict) else None
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError('문항 이미지 경로를 확인해주세요.')
+        try:
+            path = Path(raw_path).expanduser().resolve(strict=True)
+        except (OSError, ValueError) as error:
+            raise ValueError('문항 이미지를 읽을 수 없습니다.') from error
+        if path.suffix.casefold() not in IMAGE_SUFFIXES or not path.is_file() or path.stat().st_size > 10_000_000:
+            raise ValueError('문항 이미지는 지원되는 형식의 10MB 이하 파일이어야 합니다.')
+        allowed = [self.files_root.resolve(), (self.files_root.parent / 'attachments').resolve()]
+        if not any(path == root or root in path.parents for root in allowed):
+            raise ValueError('문항 이미지는 터틀넥 자료 또는 첨부 폴더 안에 있어야 합니다.')
+        return path
+
+    def _validate_exam_images(self, questions):
+        for question in questions:
+            for image in question.get('images') or []:
+                self._resolve_exam_image(image)
+
+    @staticmethod
+    def _public_images(question):
+        images = []
+        for index, image in enumerate(question.get('images') or []):
+            alt = image.get('alt', '') if isinstance(image, dict) else ''
+            images.append({'index': index, 'alt': str(alt)[:200]})
+        return images
+
+    def web_image(self, state, event):
+        if event.get('examId') != state.get('examId'):
+            raise ValueError('시험지가 바뀌었어요. 화면을 새로고침해 주세요.')
+        question_id = event.get('questionId')
+        if not isinstance(question_id, str):
+            raise ValueError('문항을 확인해주세요.')
+        try:
+            index = int(event.get('index'))
+        except (TypeError, ValueError) as error:
+            raise ValueError('문항 이미지 번호를 확인해주세요.') from error
+        question = next((item for item in state.get('questions', []) if item.get('id') == question_id), None)
+        images = question.get('images') if question else None
+        if not isinstance(images, list) or not 0 <= index < len(images):
+            raise ValueError('문항 이미지를 찾지 못했어요.')
+        path = self._resolve_exam_image(images[index])
+        return {'path': str(path), 'contentType': mimetypes.guess_type(path.name)[0] or 'application/octet-stream'}
+
     def call(self, event):
         if not isinstance(event, dict):
             raise ValueError('이벤트는 JSON 객체여야 합니다.')
@@ -776,18 +912,20 @@ class StudySession:
             db.execute('CREATE TABLE IF NOT EXISTS study_match_history (user TEXT, match_id TEXT, source_exam_id TEXT, conversation TEXT, created_at TEXT, phase TEXT, pair_count INTEGER, attempts INTEGER, state TEXT, PRIMARY KEY(user,match_id))')
             db.execute('CREATE TABLE IF NOT EXISTS study_exam_collections (user TEXT, collection_id TEXT, conversation TEXT, created_at TEXT, state TEXT, PRIMARY KEY(user,collection_id))')
             self._ensure_context_notes(db)
-            read_only = self.exam_id is not None or event.get('action') in ('list_context_notes', 'catalog', 'unit', 'candidate', 'exam_review', 'exam_history', 'match_status', 'sets_status')
+            read_only = self.exam_id is not None or event.get('action') in ('list_context_notes', 'catalog', 'unit', 'candidate', 'exam_review', 'exam_history', 'match_status', 'sets_status', 'web_image')
             db.execute('BEGIN' if read_only else 'BEGIN IMMEDIATE')
             if event.get('action') in ('save_context_note', 'list_context_notes'):
                 return self.context_note_event(db, event)
             self._notes_db = db
             if self.exam_id or event.get('action') == 'exam_review':
-                if event.get('action') not in ('web_status', 'status', 'exam_review'):
+                if event.get('action') not in ('web_status', 'status', 'exam_review', 'web_image'):
                     raise ValueError('지난 시험지는 읽기 전용이에요.')
                 exam = self.exam_id or event.get('examId')
                 saved = db.execute('SELECT state FROM study_exams WHERE user=? AND exam_id=?', (self.user, exam)).fetchone()
                 if not saved:
                     raise ValueError('현재 사용자의 저장된 시험지가 아닙니다.')
+                if event.get('action') == 'web_image':
+                    return self.web_image(json.loads(saved[0]), event)
                 return {**self.web_event(json.loads(saved[0]), {'action': 'web_status'}), 'readOnly': True}
             if event.get('action') == 'exam_history':
                 # Keep pre-upgrade exams too; never expose another local user's sessions.
@@ -817,6 +955,8 @@ class StudySession:
                 result = self.toggle_confusion(state, event)
             elif event.get('action') == 'question_focus':
                 result = self.focus_question(state, event)
+            elif event.get('action') == 'web_image':
+                result = self.web_image(state, event)
             elif event.get('action') == 'match_start':
                 source_id = event.get('examId')
                 if source_id:
@@ -878,7 +1018,7 @@ class StudySession:
                     r['courseId'] == state['selection'].get('courseId')}
                 if not ids <= allowed:
                     raise ValueError('자료 이용 상태가 달라져 이어서 읽지 않았어요. 사용할 자료를 다시 골라 주세요.')
-        if action in ('extract', 'catalog', 'unit', 'candidate', 'assemble') or (action == 'status' and state['phase'] in ('extracting', 'assembling')):
+        if action in ('extract', 'extract_batch', 'catalog', 'unit', 'candidate', 'assemble') or (action == 'status' and state['phase'] in ('extracting', 'assembling')):
             if 'pipeline' not in state:
                 raise ValueError('먼저 파일별 분석을 시작하세요.')
             return study_pipeline.handle(self, state, event)
@@ -918,6 +1058,8 @@ class StudySession:
             if state['phase'] != 'prepared' or event.get('requestId') != state.get('requestId'):
                 raise ValueError('현재 읽은 자료에 대한 생성 요청이 아닙니다.')
             items = validate_generated(event.get('data'), state)
+            if state['settings']['mode'] == 'quiz':
+                self._validate_exam_images(items)
             if state['settings']['mode'] == 'concepts':
                 if not items:
                     state.update(phase='finished', shortageReason=event['data']['shortageReason'])
@@ -1065,7 +1207,7 @@ class StudySession:
                         'failures': failures, 'truncated': truncated,
                         'answer': '이 자료에서 정리해 둔 핵심 개념을 바로 가져왔어요.',
                         'nextCommands': ['문제 10개 풀기', '문제 20개 풀기(권장)', '개념 다시 설명해줘']}
-        contract = {'questions': [{'id': 'q1', 'type': '설정된 유형 식별자', 'typeLabel': '새 유형의 표시 이름', 'responseFormat': 'choice|text|code|ordering', 'blocks': ['순서 배열형 블록 1', '순서 배열형 블록 2'], 'points': 10, 'code': '코딩 문항의 예제 코드', 'language': 'java 등', 'keywords': ['핵심 용어'], 'question': '질문', 'options': ['선택지 (choice만)'], 'answer': '정답 선택지 원문 또는 블록 번호 배열', 'acceptedAnswers': ['단답 허용 표현'], 'explanation': '해설', 'rubric': ['주요 키워드와 의미적 충족 조건'], 'concept': '핵심 개념', 'hint': '정답을 누설하지 않는 힌트', 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}], 'shortageReason': '문항 부족 시 사유'}
+        contract = {'questions': [{'id': 'q1', 'type': '설정된 유형 식별자', 'typeLabel': '새 유형의 표시 이름', 'responseFormat': 'choice|multi_choice|text|code|ordering', 'blocks': ['순서 배열형 블록 1', '순서 배열형 블록 2'], 'pairs': [{'prompt': '짝짓기 왼쪽', 'answer': '짝짓기 오른쪽'}], 'points': 10, 'code': '코딩 문항의 예제 코드', 'language': 'java 등', 'keywords': ['핵심 용어'], 'question': '질문', 'options': ['선택지 (choice만)'], 'correctAnswers': ['복수 선택 정답 원문'], 'answer': '정답 선택지 원문 또는 블록 번호 배열', 'acceptedAnswers': ['단답 허용 표현'], 'formula': '{x}+1', 'tolerance': 0.01, 'units': [{'name': '단위', 'multiplier': 1}], 'explanation': '해설', 'rubric': ['주요 키워드와 의미적 충족 조건'], 'concept': '핵심 개념', 'hint': '정답을 누설하지 않는 힌트', 'images': [{'path': '문항에 연결할 로컬 이미지 경로', 'alt': '이미지 설명'}], 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}], 'shortageReason': '문항 부족 시 사유'}
         if state['settings']['mode'] == 'concepts':
             contract = {'concepts': [{'concept': '개념', 'explanation': '설명', 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}]}
         if schema_only:
@@ -1122,7 +1264,7 @@ class StudySession:
         started = state.get('webStarted', True)
         result = {'status': state['phase'] if started else 'ready', 'examId': state['examId'], 'title': ' / '.join(dict.fromkeys(s['name'] for s in state['sources'])),
                   'webStarted': started, 'questionCount': len(state['questions']),
-                  'questions': [{**{k: q[k] for k in ('id', 'type', 'typeLabel', 'responseFormat', 'question', 'options', 'code', 'language', 'points')}, 'blocks': q.get('blocks', [])} for q in state['questions']] if started else [],
+                  'questions': [{**{k: q[k] for k in ('id', 'type', 'typeLabel', 'responseFormat', 'question', 'options', 'code', 'language', 'points')}, 'blocks': q.get('blocks', []), 'images': self._public_images(q)} for q in state['questions']] if started else [],
                   'drafts': state.get('drafts', {}) if started else {}, 'confusedIds': state.get('confusedIds', []),
                   'totalPoints': 100}
         result.update(self._web_clock(state))

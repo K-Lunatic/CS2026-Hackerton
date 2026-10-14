@@ -17,6 +17,11 @@ from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, bu
 from pathlib import Path
 from xml.etree import ElementTree
 
+SKILL_ROOT = Path(__file__).resolve().parents[3]
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+from features.secret_boundary import redact_output
+
 from everytime_cache import LocalCache
 from session_store import load
 
@@ -510,9 +515,9 @@ def main() -> int:
             result = sync_board(args)
     except (EverytimeError, OSError, RuntimeError) as error:
         message = str(error) if isinstance(error, EverytimeError) else "로컬 저장소를 열지 못했어요. 로그인 연결과 저장 위치를 확인해 주세요."
-        print(json.dumps({"source": "everytime", "partial": True, "message": message}, ensure_ascii=False))
+        print(json.dumps(redact_output({"source": "everytime", "partial": True, "message": message}), ensure_ascii=False))
         return 1
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(redact_output(result), ensure_ascii=False, indent=2))
     return 1 if result.get("status") == "PARTIAL" else 0
 
 

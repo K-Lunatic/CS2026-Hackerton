@@ -20,7 +20,7 @@ from providers.moodle_session import LoginError, MoodleSession
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch a TLS page with an in-memory Moodle session")
     parser.add_argument("--path", default="/my/", help="TLS path to fetch after login")
-    parser.add_argument("--output", type=Path, help="Save fetched HTML locally instead of printing it")
+    parser.add_argument("--output", type=Path, required=True, help="Save fetched HTML to this local file")
     args = parser.parse_args()
     try:
         username, password = resolve(os.environ.get("TLS_USERNAME"))
@@ -35,11 +35,8 @@ def main() -> None:
         raise SystemExit("TLS 서버 응답이 30초 동안 없어 중단했습니다. 잠시 후 다시 실행해 주세요.") from error
     except (LoginError, URLError) as error:
         raise SystemExit(str(error)) from error
-    if args.output:
-        args.output.write_text(html, encoding="utf-8")
-        print(args.output)
-    else:
-        print(html)
+    args.output.write_text(html, encoding="utf-8")
+    print(args.output)
 
 
 if __name__ == "__main__":

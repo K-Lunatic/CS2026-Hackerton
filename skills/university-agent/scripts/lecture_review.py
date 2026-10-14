@@ -13,6 +13,7 @@ from urllib.error import URLError
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from features import lecture_review
+from features.secret_boundary import redact_output
 from providers.moodle_provider import MoodleTLSProvider
 from providers.moodle_session import DownloadRestricted, LoginError
 from scripts.sync_tls import _login_with_retries
@@ -71,8 +72,8 @@ def main():
                 raise ValueError('한 번에 필요한 화면 1–3장만 확인해요.')
             for seconds in args.seconds:
                 record = lecture_review.extract_frame(provider, user, lecture, plan, root, record['recordId'], seconds)
-        print(json.dumps({'courseName': names[lecture['courseId']], 'data': record,
-                          'answer': '전사와 검수 기록을 준비했어요. 화면이 필요한 부분은 해당 시각만 확인해요.'}, ensure_ascii=False))
+        print(json.dumps(redact_output({'courseName': names[lecture['courseId']], 'data': record,
+                          'answer': '전사와 검수 기록을 준비했어요. 화면이 필요한 부분은 해당 시각만 확인해요.'}), ensure_ascii=False))
     except (DownloadRestricted, ValueError, RuntimeError) as error:
         raise SystemExit(str(error)) from None
     except (LoginError, URLError):

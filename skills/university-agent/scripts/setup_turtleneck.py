@@ -20,6 +20,7 @@ from providers.credentials import CONFIG_PATH
 from scripts.sync_tls import _saved_sync_state, open_connection_terminal
 from scripts.academic_watch import install_schedule, uninstall_schedule
 from everytime_cache import default_path, scope_key
+from features.secret_boundary import redact_output
 
 
 def status() -> dict:
@@ -122,7 +123,7 @@ def main() -> int:
         result = prepare(args.only)
         return result
     current = status()
-    print(json.dumps(current, ensure_ascii=False))
+    print(json.dumps(redact_output(current), ensure_ascii=False))
     if args.status or all(item['status'] == 'READY' for key, item in current.items() if not args.only or key == args.only):
         return 0
     if any(item['status'] in ('RUNNING', 'UNAVAILABLE') for key, item in current.items() if not args.only or key == args.only):

@@ -184,6 +184,210 @@ class _ActivityParser(HTMLParser):
                 self.anchor_text.append(data)
 
 
+class _CourseStructureParser(HTMLParser):
+    """Extract visible topic names and activity links from one course page."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.sections: list[dict[str, Any]] = []
+        self.section: dict[str, Any] | None = None
+        self.activity: dict[str, Any] | None = None
+        self.anchor: dict[str, Any] | None = None
+        self.hidden_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        classes = (values.get("class") or "").split()
+        if tag == "li" and "section" in classes:
+            if self.section is not None:
+                self.sections.append(self.section)
+            self.section = {"id": values.get("id") or "", "name": values.get("aria-label") or "", "activities": []}
+        if tag == "li" and "activity" in classes and self.section is not None:
+            kind = next((value.removeprefix("modtype_") for value in classes if value.startswith("modtype_")), "")
+            self.activity = {"id": values.get("id") or "", "type": kind, "href": "", "name": ""}
+        if self.activity is None:
+            return
+        if tag == "a" and self.anchor is None:
+            self.anchor = {"href": values.get("href") or "", "text": []}
+        if tag in ("script", "style", "noscript", "template") or "accesshide" in classes or values.get("aria-hidden") == "true":
+            self.hidden_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self.anchor is not None and self.activity is not None:
+            self.activity["href"] = self.anchor["href"]
+            self.activity["name"] = " ".join("".join(self.anchor["text"]).split())
+            self.anchor = None
+        if tag == "li" and self.activity is not None:
+            activity = self.activity
+            self.activity = None
+            if self.section is not None:
+                self.section["activities"].append(activity)
+        if tag in ("script", "style", "noscript", "template", "span") and self.hidden_depth:
+            self.hidden_depth -= 1
+    def handle_data(self, data: str) -> None:
+        if self.anchor is not None and self.hidden_depth == 0:
+            self.anchor["text"].append(data)
+
+
+def _activity_reference(href: str) -> tuple[str | None, str | None]:
+    try:
+        parts = urlsplit(urljoin("https://tls.kku.ac.kr/", href))
+    except ValueError:
+        return None, None
+    if parts.hostname not in (None, "tls.kku.ac.kr") or not parts.path.startswith("/mod/"):
+        return None, None
+    values = parse_qs(parts.query, keep_blank_values=True).get("id", [])
+    if len(values) != 1 or not re.fullmatch(r"[1-9][0-9]*", values[0]):
+        return None, None
+    path_parts = parts.path.split("/")
+    return values[0], path_parts[2] if len(path_parts) > 2 else None
+
+
+def parse_course_structure(html: str) -> dict[str, Any]:
+    parser = _CourseStructureParser()
+    parser.feed(html)
+    if parser.section is not None:
+        parser.sections.append(parser.section)
+    sections: list[dict[str, Any]] = []
+    seen_sections: set[str] = set()
+    for section in parser.sections:
+        section_id = section.get("id") or f"section-{len(sections)}"
+        if section_id in seen_sections:
+            continue
+        seen_sections.add(section_id)
+        activities = []
+        seen_activities: set[str] = set()
+        for activity in section.get("activities", []):
+            activity_id, kind = _activity_reference(activity.get("href", ""))
+            if not activity_id or activity_id in seen_activities:
+                continue
+            seen_activities.add(activity_id)
+            activities.append({"id": f"tls-activity-{activity_id}", "externalId": activity_id,
+                               "type": kind or activity.get("type") or "unknown",
+                               "name": activity.get("name") or f"TLS activity {activity_id}"})
+        sections.append({"id": section_id, "name": section.get("name") or "강의 개요", "activities": activities})
+    return {"source": "tls_course_page", "sections": sections}
+
+
+class _AutonomousCourseParser(HTMLParser):
+    """Read the visible rows from TLS's own autonomous-course table."""
+
+    _VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[dict[str, Any]]] = []
+        self.row: list[dict[str, Any]] | None = None
+        self.cell: dict[str, Any] | None = None
+        self.anchor: dict[str, Any] | None = None
+        self.stack: list[tuple[str, bool]] = []
+        self.hidden_depth = 0
+
+    @staticmethod
+    def _is_hidden(values: dict[str, str | None]) -> bool:
+        classes = (values.get("class") or "").split()
+        return (values.get("aria-hidden") == "true" or "hidden" in values or
+                any(value in classes for value in ("hidden", "d-none", "accesshide")) or
+                re.search(r"display\s*:\s*none|visibility\s*:\s*hidden", values.get("style") or "", re.I) is not None)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "tr":
+            self.row = []
+        if self.row is not None and tag in ("td", "th"):
+            self.cell = {"text": [], "links": []}
+        visible = (self.hidden_depth == 0 and tag not in ("script", "style", "noscript", "template") and
+                   not self._is_hidden(values))
+        if tag == "br" and self.cell is not None and not self.hidden_depth:
+            self.cell["text"].append("\n")
+        if self.cell is not None and tag == "a" and visible:
+            self.anchor = {"href": values.get("href") or "", "text": []}
+        if tag not in self._VOID:
+            self.stack.append((tag, not visible))
+            if not visible:
+                self.hidden_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self.anchor is not None and self.cell is not None:
+            self.cell["links"].append((self.anchor["href"], " ".join("".join(self.anchor["text"]).split())))
+            self.anchor = None
+        if tag in ("td", "th") and self.cell is not None and self.row is not None:
+            self.cell["text"] = "".join(self.cell["text"])
+            self.row.append(self.cell)
+            self.cell = None
+        if tag == "tr" and self.row is not None:
+            self.rows.append(self.row)
+            self.row = None
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == tag:
+                removed = self.stack[index:]
+                del self.stack[index:]
+                self.hidden_depth -= sum(hidden for _, hidden in removed)
+                break
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if self.cell is None or self.hidden_depth:
+            return
+        self.cell["text"].append(data)
+        if self.anchor is not None:
+            self.anchor["text"].append(data)
+
+
+def _autonomous_course_id(href: str) -> str | None:
+    try:
+        parts = urlsplit(urljoin("https://tls.kku.ac.kr/", href))
+    except ValueError:
+        return None
+    if parts.hostname not in (None, "tls.kku.ac.kr") or parts.path != "/course/view.php":
+        return None
+    values = parse_qs(parts.query, keep_blank_values=True).get("id", [])
+    return values[0] if len(values) == 1 and re.fullmatch(r"[1-9][0-9]*", values[0]) else None
+
+
+def parse_autonomous_courses(html: str) -> list[dict[str, Any]]:
+    """Normalize visible `/local/ubeclass/my.php` rows without exposing form values."""
+    parser = _AutonomousCourseParser()
+    parser.feed(html)
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in parser.rows:
+        if len(row) < 7:
+            continue
+        raw_cells = [str(cell.get("text", "")) for cell in row]
+        cells = [" ".join(value.split()) for value in raw_cells]
+        if cells[0].lower() in {"번호", "no", ""}:
+            continue
+        links = [link for link, _title in row[3].get("links", [])]
+        external_id = next((course_id for course_id in (_autonomous_course_id(link) for link in links) if course_id), None)
+        title = next((title for link, title in row[3].get("links", []) if _autonomous_course_id(link) and title), None)
+        if not title:
+            title = next((line.strip() for line in raw_cells[3].splitlines() if line.strip()), cells[3])
+        number = cells[0] if re.fullmatch(r"\d+", cells[0]) else str(len(result) + 1)
+        stable_id = f"tls-course-{external_id}" if external_id else f"tls-autonomous-row-{number}"
+        if stable_id in seen:
+            continue
+        seen.add(stable_id)
+        management_link = any("/local/ubeclass/request.php" in href for href, _title in row[6].get("links", []))
+        result.append({
+            "id": stable_id,
+            "externalId": external_id,
+            "name": title or f"TLS autonomous course {number}",
+            "visibility": cells[1],
+            "category": cells[2],
+            "period": next((line.strip() for line in raw_cells[3].splitlines()[1:] if line.strip()), None),
+            "role": cells[4],
+            "status": cells[5],
+            "ownerControlsVisible": cells[4] == "운영자" and management_link,
+            "ownerRoleVerified": False,
+            "source": "tls_autonomous",
+        })
+    return result
+
+
 class MoodleTLSProvider:
     RESOURCE_RESPONSE_VERSION = '2'
 
@@ -191,6 +395,7 @@ class MoodleTLSProvider:
         self.session = session
         self.progress = progress
         self._courses: list[dict[str, Any]] | None = None
+        self._autonomous_courses: list[dict[str, Any]] | None = None
         self._course_pages: dict[str, str] = {}
         self._activity_links: dict[str, list[tuple[str, str]]] = {}
 
@@ -234,6 +439,18 @@ class MoodleTLSProvider:
             result.append({"id": f"tls-course-{match.group(1)}", "externalId": match.group(1), "name": title or f"TLS course {match.group(1)}", "source": "tls"})
         self._courses = result
         return [dict(course) for course in result]
+
+    def get_autonomous_courses(self, _user_id: str) -> list[dict[str, Any]]:
+        """List the signed-in user's autonomous courses; this is read-only."""
+        if self._autonomous_courses is None:
+            self._autonomous_courses = parse_autonomous_courses(self.session.get("/local/ubeclass/my.php"))
+        return [dict(course) for course in self._autonomous_courses]
+
+    def get_course_structure(self, external_id: str) -> dict[str, Any]:
+        """Read one observed course page as a local blueprint; never mutates TLS."""
+        if not re.fullmatch(r"[1-9][0-9]*", str(external_id)):
+            raise ValueError("TLS course id must be numeric")
+        return parse_course_structure(self.session.get(f"/course/view.php?id={external_id}"))
 
     def _course_page(self, course: dict[str, Any]) -> str:
         external_id = str(course["externalId"])

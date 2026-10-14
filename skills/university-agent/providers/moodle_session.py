@@ -187,6 +187,33 @@ class MoodleSession:
         html, response = self._request(path, allowed_origin=allowed_origin, page_only=True)
         return html, response.geturl(), response.headers
 
+    def post_bytes(self, path: str, payload: bytes, *, content_type: str,
+                   referer: str | None = None, allowed_origin=None) -> tuple[str, Any]:
+        """POST a browser-compatible body while keeping cookies in this session."""
+        if not self.logged_in:
+            raise LoginError('Call login() before post_bytes()')
+        url = urljoin(f"{self.base_url}/", path.lstrip("/"))
+        check_download_origin(url, allowed_origin)
+        headers = {
+            "User-Agent": "UniversityAgent/0.1",
+            "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Content-Type": content_type,
+            "Origin": self.base_url,
+            "Referer": referer or url,
+        }
+        request = Request(url, data=payload, headers=headers, method="POST")
+        request.allowed_origin = allowed_origin
+        response = self.opener.open(request, timeout=30)
+        try:
+            check_download_origin(response.geturl(), allowed_origin)
+            html = self._decode(response)
+        finally:
+            response.close()
+        if "/login" in urlsplit(response.geturl()).path or re.search(r'name=["\']username["\']', html, re.I):
+            raise LoginError("TLS session expired; sign in again")
+        return html, response
+
     def document_state(self, viewer_url):
         """The viewer's read-only status request; never start file conversion/upload."""
         if not self.logged_in:

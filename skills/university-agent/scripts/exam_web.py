@@ -9,6 +9,7 @@ import webbrowser
 from run_agent import DB_PATH, USER_ID, database
 from features.study import StudySession
 from features.exam_web import create_exam_server
+from features.secret_boundary import redact_output
 
 
 def main():
@@ -35,7 +36,7 @@ def main():
             while True:
                 result = session.call({'action': 'status'})
                 if result['status'] in ('grading', 'finished') or time.monotonic() >= end:
-                    print(json.dumps(result, ensure_ascii=False), flush=True)
+                    print(json.dumps(redact_output(result), ensure_ascii=False), flush=True)
                     return
                 time.sleep(1)
         view = 'exam'
@@ -57,7 +58,7 @@ def main():
                 'match': '개념 매칭판이 준비됐어요. 왼쪽 개념과 오른쪽 설명을 연결해 보세요.',
                 'sets': '문제 세트를 준비했어요. 풀고 싶은 세트를 골라 주세요.',
             }[view]
-            print(json.dumps({'url': url, 'answer': answer}, ensure_ascii=False), flush=True)
+            print(json.dumps(redact_output({'url': url, 'answer': answer}), ensure_ascii=False), flush=True)
             if not args.no_open:
                 try:
                     if not webbrowser.open(url):

@@ -4,6 +4,18 @@ __pycache__/
 .university-agent/
 *.db
 *.sqlite
+*.db-*
+*.mbz
+*.tpack
+*.backup
+*.bak
+*.cookies
+*.session
+*.pem
+*.key
+settings.html
+files/
+data/
 
 .env
 .env.*

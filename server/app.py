@@ -30,6 +30,7 @@ from features.lectures import get_lectures
 from features.assignment_selection import find_assignments, public_checkpoint, normalize, selection_command
 from features.context_bookmarks import get_context_bookmark, list_unfinished_context_bookmarks, save_context_bookmark
 from features.context_commands import parse_context_command, next_commands
+from features.secret_boundary import redact_output
 from server import study_bridge
 
 
@@ -132,6 +133,9 @@ class Gateway:
         method, path = env['REQUEST_METHOD'], env.get('PATH_INFO', '/')
         query = {key: values[-1] for key, values in parse_qs(env.get('QUERY_STRING', ''), keep_blank_values=True).items()}
         def reply(data, status=200, extra=None):
+            # Academic responses are model-visible; OAuth protocol responses are not.
+            if path.startswith('/v1/'):
+                data = redact_output(data)
             if path.startswith('/v1/') and path != '/v1/disconnect' and 200 <= status < 300 and isinstance(data, dict):
                 calls = ['list_context_bookmarks'] if path == '/v1/checkpoints' else []
                 data = {**data, 'nextCommands': next_commands({'toolCalls': calls, 'data': data.get('data')})}

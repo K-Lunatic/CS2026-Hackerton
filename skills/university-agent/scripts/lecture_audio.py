@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from features.lecture_audio import extract_audio, select_lectures
+from features.secret_boundary import redact_output
 from providers.moodle_provider import MoodleTLSProvider
 from providers.moodle_session import DownloadRestricted, LoginError
 from scripts.sync_tls import _login_with_retries
@@ -81,7 +82,7 @@ def main():
                 results.append({**item, 'status': 'SKIPPED', 'reason': str(error)})
             except (URLError, TimeoutError, OSError):
                 results.append({**item, 'status': 'FAILED', 'reason': '연결 또는 저장을 마무리하지 못했어요. 기존 보관 파일은 그대로 뒀어요.'})
-        print(json.dumps({'data': results, 'transcribed': False, 'answer': '강의 음성 확인을 마쳤어요. 전사나 시험 내용 검수는 아직 하지 않았어요.'}, ensure_ascii=False))
+        print(json.dumps(redact_output({'data': results, 'transcribed': False, 'answer': '강의 음성 확인을 마쳤어요. 전사나 시험 내용 검수는 아직 하지 않았어요.'}), ensure_ascii=False))
     except (LoginError, URLError, RuntimeError):
         raise SystemExit('학교 연결을 확인하지 못했어요. 비밀번호는 대화가 아니라 학교 연결창에서 입력해 주세요.') from None
     except (ValueError, sqlite3.Error, OSError) as error:

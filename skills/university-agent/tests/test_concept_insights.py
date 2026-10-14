@@ -76,6 +76,22 @@ class ConceptInsightTests(unittest.TestCase):
         self.assertIsNone(guidance_request("핵심 개념 학습시켜줘"))
         self.assertIsNone(guidance_request("학습 자료 만들어줘"))
 
+    def test_keeps_importance_by_source_separate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = {"resourceId": "r1", "courseId": "c1", "name": "자료", "location": "p.1", "quote": "핵심"}
+            analysis_records.save(Path(temp), "student", [source], {}, "exam_analysis", {"units": [{
+                "learning": [{"concept": "핵심", "explanation": "설명", "evidence": [source],
+                               "importanceBySource": [
+                                   {"sourceKind": "everytime_review", "score": 80, "reason": "후기에서 반복", "referenceIds": ["ref-e"]},
+                                   {"sourceKind": "ai_evaluation", "score": 40, "reason": "본문 연결도", "referenceIds": []},
+                               ]}],
+            }]})
+            result = build_insights(Path(temp), "student", [{"id": "r1", "courseId": "c1"}], course_ids={"c1"})
+            self.assertEqual(result["concepts"][0]["importanceBySource"], [
+                {"sourceKind": "ai_evaluation", "score": 40, "reasons": ["본문 연결도"], "referenceIds": []},
+                {"sourceKind": "everytime_review", "score": 80, "reasons": ["후기에서 반복"], "referenceIds": ["ref-e"]},
+            ])
+
 
 if __name__ == "__main__":
     unittest.main()

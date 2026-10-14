@@ -151,13 +151,13 @@ def apply_update(*, force: bool = False) -> dict[str, str | bool]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="터틀넥 버전 확인 및 명시적 업데이트")
-    parser.add_argument("--auto", action="store_true", help="새 버전 확인만 수행")
+    parser.add_argument("--auto", action="store_true", help="새 버전 확인 후 설치본에 자동 적용")
     parser.add_argument("--apply", action="store_true", help="확인된 새 버전을 명시적으로 적용")
     parser.add_argument("--force", action="store_true", help="캐시를 무시하고 버전 확인")
     args = parser.parse_args()
     if args.auto and args.apply:
         parser.error("--auto와 --apply는 함께 사용할 수 없습니다.")
-    result = apply_update(force=args.force) if args.apply else check(force=args.force)
+    result = apply_update(force=args.force) if (args.auto or args.apply) else check(force=args.force)
     print(result["message"])
     return 0 if result["status"] not in {"FAILED", "UNAVAILABLE"} else 1
 

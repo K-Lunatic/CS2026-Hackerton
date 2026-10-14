@@ -83,7 +83,13 @@ class AcademicAlertTests(unittest.TestCase):
             self.assertNotIn('--ensure', run.call_args.args[0])
         with patch.object(academic_watch.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as run:
             self.assertTrue(academic_watch.run_sync()[0])
-            self.assertIn('--full', run.call_args.args[0])
+            self.assertIn('--ensure', run.call_args.args[0])
+
+        with patch.object(academic_watch.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stderr='MoodleSession=secret\n학교 연결 실패')):
+            ok, message = academic_watch.run_sync()
+            self.assertFalse(ok)
+            self.assertIn('학교 연결 실패', message)
+            self.assertNotIn('secret', message)
 
     def test_unfinished_work_is_sorted_and_linked(self):
         with tempfile.TemporaryDirectory() as folder:

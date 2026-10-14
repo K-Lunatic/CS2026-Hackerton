@@ -18,6 +18,9 @@ def main():
     parser.add_argument('--exam-id', help='보관한 시험을 읽기 전용으로 열기')
     parser.add_argument('--match-source-exam-id', help='저장된 시험의 개념을 여러 쌍 매칭으로 열기')
     parser.add_argument('--sets-source-exam-id', help='저장된 시험을 여러 웹 문제 세트로 나눠 열기')
+    parser.add_argument('--sets-review-course-id', help='과목별 문제은행에서 성적 기반 복습 세트를 열기')
+    parser.add_argument('--review-count', type=int, default=20, help='성적 기반 복습 문항 수')
+    parser.add_argument('--review-week', action='append', default=[], help='복습할 주차(여러 번 지정 가능)')
     parser.add_argument('--set-size', type=int, default=20, help='문제 세트 하나에 담을 문항 수')
     parser.add_argument('--match-count', type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument('--port', type=int, default=0)
@@ -25,7 +28,7 @@ def main():
     parser.add_argument('--wait', type=int, metavar='SECONDS', help='제출 대기 후 AI 채점 데이터를 반환 (1~60초)')
     args = parser.parse_args()
     try:
-        modes = [args.exam_id, args.match_source_exam_id, args.sets_source_exam_id]
+        modes = [args.exam_id, args.match_source_exam_id, args.sets_source_exam_id, args.sets_review_course_id]
         if sum(value is not None for value in modes) > 1:
             raise ValueError('시험지, 개념 매칭, 문제 세트 화면은 한 번에 하나만 열 수 있어요.')
         session = StudySession(DB_PATH.parent / 'study-sessions.db', USER_ID, args.conversation, database(), DB_PATH.parent / 'files', exam_id=args.exam_id)
@@ -48,6 +51,10 @@ def main():
             view = 'match'
         elif args.sets_source_exam_id:
             session.call({'action': 'set_collection_start', 'examId': args.sets_source_exam_id, 'setSize': args.set_size})
+            view = 'sets'
+        elif args.sets_review_course_id:
+            session.call({'action': 'review_collection_start', 'courseId': args.sets_review_course_id,
+                          'count': args.review_count, 'weeks': args.review_week, 'setSize': args.set_size})
             view = 'sets'
         server, url = create_exam_server(session, args.port, view=view)
         worker = threading.Thread(target=server.serve_forever, daemon=True)

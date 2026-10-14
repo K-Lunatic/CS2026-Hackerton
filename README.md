@@ -77,7 +77,7 @@ claude plugin install university-agent@kku-university-agent-local
 호출합니다. 이 경우 플러그인 자동 업데이트 대신 폴더를 다시 복사해 갱신합니다.
 [Claude 설치 규칙](https://code.claude.com/docs/en/plugin-marketplaces)과 [실행 지침](skills/university-agent/references/claude-code.md)을 참고하세요.
 
-로컬 시험 서버나 Actions 연결을 실행할 때는 `University Agent.command`(macOS) 또는 `University Agent.bat`(Windows)를 더블클릭하세요. 실행할 때 터틀넥 버전은 확인하지만 코드를 자동으로 교체하지는 않습니다. 개발 중인 Git 저장소는 자동으로 덮어쓰지 않습니다.
+로컬 시험 서버나 Actions 연결을 실행할 때는 `University Agent.command`(macOS) 또는 `University Agent.bat`(Windows)를 더블클릭하세요. 실행 전 터틀넥은 신뢰한 `dev` 버전을 확인하고, 설치본이 더 오래된 경우에만 자동으로 교체합니다. 개발 중인 Git 저장소는 자동으로 덮어쓰지 않습니다.
 
 ### 공개 저장소 사용 범위
 
@@ -310,7 +310,7 @@ python3 scripts/run_agent.py tls-backup-restore \
 <details>
 <summary><strong>학사 자동 확인</strong></summary>
 
-학교 연결을 마치면 macOS 또는 Windows의 예약 작업으로 6시간마다 TLS의 과제·강의·공지 상태를 새로 확인합니다. 새 과제, 마감 임박 과제, 아직 끝내지 않은 영상, 새 공지가 있을 때만 터틀넥이 과목명·기한·확인된 내용·바로 가기 링크를 알려줍니다.
+학교 연결을 마치면 macOS 또는 Windows의 예약 작업으로 매일 오전 7시(컴퓨터 현지 시간)에 TLS의 과제·강의·공지 상태를 새로 확인합니다. 노트북이 예약 시각에 잠들어 있던 경우를 위해 6시간 간격 보완 실행도 둡니다. 새 과제, 마감 임박 과제, 아직 끝내지 않은 영상, 새 공지가 있을 때만 터틀넥이 과목명·기한·확인된 내용·바로 가기 링크를 알려줍니다.
 
 채팅의 할 일·일일 보고는 과제와 강의만 먼저 확인합니다. 파일은 해당 자료를 요청할 때 받으며,
 최신 확인에 실패하면 이전 기록으로 추정하지 않습니다. 전체 과목별 보고 실행:
@@ -336,7 +336,7 @@ python3 scripts/setup_turtleneck.py --watch-uninstall
 <details>
 <summary><strong>버전 업데이트와 실행 환경</strong></summary>
 
-터틀넥은 신뢰한 저장소의 패키지 버전을 주기적으로 확인합니다. 새 버전 확인은 자동으로 수행하지만 코드 교체는 자동으로 하지 않습니다. 업데이트 내용을 확인한 뒤 `python3 scripts/update_turtleneck.py --apply`를 직접 실행하세요. Git으로 직접 관리하는 개발 저장소는 자동 업데이트하지 않습니다.
+터틀넥은 신뢰한 저장소의 패키지 버전을 주기적으로 확인합니다. 설치본이 더 오래된 경우 `--auto`가 새 패키지를 받아 자동으로 적용합니다. 네트워크가 끊기면 현재 버전을 유지하고, Git으로 직접 관리하는 개발 저장소는 자동으로 덮어쓰지 않습니다. 수동 적용은 `python3 scripts/update_turtleneck.py --apply`로 실행합니다.
 
 Python이 없는 일반 사용자는 실행기를 더블클릭하면 됩니다. 실행기는 기존 Python을 먼저 사용하고, 없을 때는 공식 `uv` 실행기를 통해 관리형 Python을 준비합니다. 사용자 비밀번호와 학교 DB는 실행 환경 설치 위치와 분리되어 있습니다.
 

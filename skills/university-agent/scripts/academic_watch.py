@@ -19,11 +19,14 @@ if str(ROOT) not in sys.path:
 
 from features.academic_alerts import collect_alerts, fingerprint, format_alerts, format_daily_report, notice_ids
 from features.deadlines import deadline
+from features.secret_boundary import redact_output
 from providers.credentials import CONFIG_PATH
 from storage.local_db import LocalDatabase
 
 
 INTERVAL_SECONDS = 6 * 60 * 60
+MORNING_HOUR = 7
+MORNING_MINUTE = 0
 TASK_NAME = "Turtleneck Academic Watch"
 PLIST_NAME = "com.k-lunatic.turtleneck-watch.plist"
 
@@ -62,15 +65,18 @@ def notify(message: str) -> None:
 
 
 def run_sync(*, academic_only=False) -> tuple[bool, str]:
-    mode = ['--academic-only'] if academic_only else ['--full', '--metadata-only']
+    mode = ['--academic-only'] if academic_only else ['--ensure', '--metadata-only']
     try:
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("sync_tls.py")), *mode],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+                                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)
     except subprocess.TimeoutExpired:
         return False, '학교 확인이 2분 안에 끝나지 않아 최신 데이터를 확인하지 못했어요. 이전 기록으로 추정하지 않을게요.'
     except OSError:
         return False, '학교 확인을 시작하지 못했어요. 이전 기록으로 추정하지 않을게요.'
     if result.returncode:
+        detail = next((line.strip() for line in reversed((result.stderr or '').splitlines()) if line.strip()), '')
+        if detail:
+            return False, f'학교 자료를 새로 확인하지 못했어요. {redact_output(detail[:180])}'
         return False, '학교 자료를 새로 확인하지 못했어요. 이전 기록으로 추정하지 않을게요.'
     return True, ""
 
@@ -139,6 +145,10 @@ def install_schedule() -> str:
             "ProgramArguments": [sys.executable, str(script), "--once"],
             "RunAtLoad": True,
             "StartInterval": INTERVAL_SECONDS,
+            "StartCalendarInterval": {"Hour": MORNING_HOUR, "Minute": MORNING_MINUTE},
+            "ThrottleInterval": 300,
+            "ProcessType": "Background",
+            "LowPriorityIO": True,
             "StandardOutPath": str(path.parent / "turtleneck-watch.log"),
             "StandardErrorPath": str(path.parent / "turtleneck-watch.error.log"),
         }
@@ -148,12 +158,12 @@ def install_schedule() -> str:
         os.replace(temporary, path)
         subprocess.run(["launchctl", "unload", str(path)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["launchctl", "load", str(path)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        return f"6시간마다 자동 확인을 켰어요. ({path})"
+        return f"매일 오전 {MORNING_HOUR:02d}:{MORNING_MINUTE:02d}와 6시간 간격으로 자동 확인을 켰어요. ({path})"
     if os.name == "nt":
         command = subprocess.list2cmdline([sys.executable, str(script), "--once"])
-        subprocess.run(["schtasks", "/Create", "/SC", "HOURLY", "/MO", "6", "/TN", TASK_NAME, "/TR", command, "/F"],
+        subprocess.run(["schtasks", "/Create", "/SC", "DAILY", "/ST", f"{MORNING_HOUR:02d}:{MORNING_MINUTE:02d}", "/TN", TASK_NAME, "/TR", command, "/F"],
                        check=True, capture_output=True, text=True)
-        return "6시간마다 자동 확인을 켰어요."
+        return f"매일 오전 {MORNING_HOUR:02d}:{MORNING_MINUTE:02d} 자동 확인을 켰어요."
     raise RuntimeError("이 운영체제의 예약 작업은 아직 지원하지 않아요.")
 
 

@@ -74,10 +74,13 @@ class UpdateTests(unittest.TestCase):
                     update_turtleneck._extract_archive(bundle, Path(folder))
             self.assertFalse((Path(folder).parent / 'outside.txt').exists())
 
-    def test_auto_only_checks_and_apply_is_explicit(self):
-        with patch.object(update_turtleneck, 'check', return_value={'status': 'CURRENT', 'message': '최신'}) as check, \
-             patch.object(update_turtleneck, 'apply_update', side_effect=AssertionError('unexpected apply')):
+    def test_auto_applies_and_plain_invocation_only_checks(self):
+        with patch.object(update_turtleneck, 'apply_update', return_value={'status': 'CURRENT', 'message': '최신'}) as apply_update:
             with patch.object(sys, 'argv', ['update_turtleneck.py', '--auto']), redirect_stdout(io.StringIO()):
+                self.assertEqual(update_turtleneck.main(), 0)
+            apply_update.assert_called_once_with(force=False)
+        with patch.object(update_turtleneck, 'check', return_value={'status': 'CURRENT', 'message': '최신'}) as check:
+            with patch.object(sys, 'argv', ['update_turtleneck.py']), redirect_stdout(io.StringIO()):
                 self.assertEqual(update_turtleneck.main(), 0)
             check.assert_called_once_with(force=False)
 

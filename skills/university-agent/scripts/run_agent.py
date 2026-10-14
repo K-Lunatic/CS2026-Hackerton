@@ -31,6 +31,7 @@ from features.context_commands import command_template, detect_context_intent, p
 from features.study import StudySession, study_intent, event_from_text
 from features import analysis_records, study_pack
 from features.concept_insights import build_insights
+from features.learning_plan import build_plan
 from features.lectures import get_lectures
 from features.lecture_audio import select_lectures
 from features.guidance import academic_list_answer, guidance_request, is_status_request, usage_guide
@@ -480,6 +481,8 @@ def main() -> None:
     insights_parser = sub.add_parser("study-insights", help="중요도와 취약도에 따른 개념 복습 자료")
     insights_parser.add_argument("--course", default="", help="과목명 또는 일부")
     insights_parser.add_argument("--limit", type=int, default=10)
+    plan_parser = sub.add_parser("study-plan", help="주차별 학습 순서와 시험 전 복습 비율")
+    plan_parser.add_argument("--course", default="", help="과목명 또는 일부")
     args = parser.parse_args()
 
     if args.command == "context":
@@ -713,6 +716,16 @@ def main() -> None:
         data = build_insights(DB_PATH.parent, USER_ID, store.get_resources(USER_ID), course_ids=course_ids, limit=args.limit)
         result = {"toolCalls": ["get_concept_insights"], "data": data,
                   "answer": "취약한 개념부터 다시 확인할 수 있는 학습 자료를 정리했어요." if data["concepts"] else "아직 풀이 기록이나 자료 분석이 없어 개념 우선순위를 정하지 못했어요."}
+    elif args.command == "study-plan":
+        store = database()
+        courses = store.get_courses(USER_ID)
+        matches = [course for course in courses if not args.course.strip() or normalize(args.course) in normalize(course["name"])]
+        if args.course.strip() and len(matches) != 1:
+            raise SystemExit("학습 계획을 볼 과목을 하나만 지정해 주세요.")
+        data = build_plan(DB_PATH.parent, USER_ID, matches if args.course.strip() else courses,
+                          store.get_resources(USER_ID), course_ids={item["id"] for item in matches})
+        result = {"toolCalls": ["get_study_plan"], "data": data,
+                  "answer": "주차별 자료와 지금까지의 풀이 결과를 바탕으로 학습 순서를 정리했어요."}
     elif args.command == "bookmarks":
         result = {"toolCalls": ["get_bookmarks"], "data": list_bookmarks(database(), USER_ID)}
     elif args.command == "bookmark-add":

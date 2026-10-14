@@ -93,6 +93,14 @@ def usage_guide(text: str = "") -> dict:
 
 
 def guidance_request(text: str) -> dict | None:
+    if re.search(r'자율강좌.{0,20}(?:세팅|설정|만들|준비|학습)|(?:학습|복습).{0,20}자율강좌', text, re.I):
+        return {'toolCalls': [], 'needsAutonomousCourseSetup': True,
+                'nextCommands': ['python3 scripts/autonomous_courses.py', 'python3 scripts/autonomous_course_structure.py --course-id "<확인된 강좌 ID>"'],
+                'answer': '먼저 이 계정의 자율강좌와 수강 과목을 확인할게요. 소유 권한과 강좌 구조를 확인한 뒤, 승인하면 과목별 토픽과 주차별 학습 흐름을 준비합니다. 원격 강좌를 만들거나 바꾸지는 않고 확인부터 진행할게요.'}
+    if re.search(r'(?:주차별|주차마다|시험\s*전|시험\s*대비).{0,20}(?:문제|복습|학습)|문제은행.{0,20}(?:랜덤|복습|출제)|성적.{0,20}(?:부족|취약|보완)', text):
+        return {'toolCalls': [], 'needsStudyPlan': True,
+                'nextCommands': ['python3 scripts/run_agent.py study-plan --course "<과목명>"'],
+                'answer': '수강 과목의 주차별 자료와 지금까지의 풀이 결과를 먼저 묶어볼게요. 이후 주차별 문제를 문제은행에 쌓고, 틀린 개념은 보완 문제로 돌리며, 시험 전에는 취약 50%·핵심 30%·랜덤 20% 비율로 웹 복습 세트를 열 수 있어요.'}
     if re.search(r'터틀넥.{0,12}(?:시작|설정|연결)|처음\s*설정|(?:학교|TLS).{0,12}(?:에타|에브리타임).{0,12}(?:연결|설정)', text, re.I):
         return {'toolCalls': [], 'needsSetup': True, 'data': {'intent': 'setup', 'performed': False},
                 'nextCommands': ['python3 scripts/setup_turtleneck.py'],

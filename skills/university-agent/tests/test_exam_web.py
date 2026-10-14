@@ -114,6 +114,22 @@ class ExamWebTests(ProjectTestBase):
         self.assertGreaterEqual(len(history['exams']), 2)
         self.assertTrue(any(item['examId'] == original['examId'] for item in history['exams']))
 
+    def test_review_collection_uses_saved_course_questions(self):
+        s = self.make_exam()
+        public = s.call({'action': 'web_status'})
+        answers = {q['id']: '1' if q['type'] == 'mcq' else '정렬된 배열' for q in public['questions']}
+        submitted = s.call({'action': 'web_submit', 'examId': public['examId'], 'revision': 0, 'answers': answers})
+        pending = s.call({'action': 'status'})
+        grades = [{'questionId': item['questionId'], 'criteria': [
+            {'criterion': '정렬 조건', 'met': item['questionId'] != 'q2', 'feedback': '확인'} ,
+            {'criterion': '탐색 범위 변화', 'met': True, 'feedback': '확인'}]}
+                  for item in pending['hostOnly']['answers']]
+        s.call({'action': 'grade_batch', 'gradeId': pending['gradeId'], 'grades': grades})
+        review = s.call({'action': 'review_collection_start', 'courseId': 'course-1', 'count': 4, 'setSize': 2})
+        self.assertEqual(review['status'], 'set_selector')
+        self.assertEqual(review['reviewPlan']['reviewMix'], {'weak': 50, 'core': 30, 'random': 20})
+        self.assertEqual(sum(item['questionCount'] for item in review['sets']), review['reviewPlan']['questionCount'])
+        self.assertGreater(review['reviewPlan']['questionCount'], 0)
     def test_web_all_types_drafts_ai_grades_and_no_answer_leaks(self):
         s = self.make_exam()
         public = s.call({'action': 'web_status'})

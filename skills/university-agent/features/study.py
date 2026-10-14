@@ -15,6 +15,7 @@ from features.assignment_selection import normalize
 from features import study_pipeline
 from features import material_cache, analysis_records
 from features.concept_insights import build_insights
+from features.learning_plan import select_review_questions
 
 PROMPT = '''역할: 제공된 수업자료로 연습문제를 만들고 채점한다.
 
@@ -714,14 +715,43 @@ class StudySession:
                 'selection': source.get('selection', {}), 'sources': source.get('sources', []),
                 'sets': sets, 'completedSetIds': []}
 
+    def review_collection_state(self, db, event):
+        course_id = event.get('courseId')
+        if not isinstance(course_id, str) or not course_id.strip():
+            raise ValueError('복습할 과목을 확인해 주세요.')
+        count = event.get('count', 20)
+        weeks = event.get('weeks')
+        if weeks is not None and (not isinstance(weeks, list) or any(not isinstance(item, str) for item in weeks)):
+            raise ValueError('복습 주차 형식이 올바르지 않아요.')
+        rows = db.execute('SELECT score,state FROM study_exams WHERE user=? AND phase=?',
+                          (self.user, 'finished')).fetchall()
+        states = []
+        for score, encoded in rows:
+            try:
+                state = json.loads(encoded)
+            except (TypeError, ValueError):
+                continue
+            state['score'] = score
+            states.append(state)
+        plan = select_review_questions(states, course_id, count, weeks)
+        source = {'questions': plan['questions'], 'title': '주차별 복습',
+                  'settings': {'count': plan['questionCount'], 'choices': 4},
+                  'selection': {'courseId': course_id}, 'sources': []}
+        payload = self.collection_state(source, {**event, 'shuffle': True})
+        payload['reviewPlan'] = {key: plan[key] for key in ('courseScore', 'reviewMix', 'questionCount', 'weeks')}
+        return payload
+
     @staticmethod
     def collection_public(payload):
         completed = set(payload.get('completedSetIds', []))
-        return {'status': 'set_selector', 'collectionId': payload['collectionId'], 'title': payload['title'],
+        result = {'status': 'set_selector', 'collectionId': payload['collectionId'], 'title': payload['title'],
                 'totalSets': len(payload['sets']), 'completedSets': len(completed),
                 'sets': [{'setId': item['setId'], 'index': item['index'], 'questionCount': item['questionCount'],
                           'completed': item['setId'] in completed} for item in payload['sets']],
                 'answer': '풀고 싶은 문제 세트를 골라 주세요.'}
+        if payload.get('reviewPlan'):
+            result['reviewPlan'] = payload['reviewPlan']
+        return result
 
     def collection_status(self, db, state):
         collection_id = state.get('collectionId')
@@ -943,6 +973,16 @@ class StudySession:
                 db.execute('INSERT INTO study_exam_collections VALUES (?,?,?,?,?)',
                            (self.user, payload['collectionId'], self.conversation, datetime.now(timezone.utc).isoformat(),
                             json.dumps(payload, ensure_ascii=False, separators=(',', ':'))))
+                state.clear(); state.update({'phase': 'set_selector', 'collectionId': payload['collectionId']})
+                result = self.collection_public(payload)
+            elif event.get('action') == 'review_collection_start':
+                payload = self.review_collection_state(db, event)
+                db.execute('INSERT INTO study_exam_collections VALUES (?,?,?,?,?)',
+                           (self.user, payload['collectionId'], self.conversation, datetime.now(timezone.utc).isoformat(),
+                            json.dumps(payload, ensure_ascii=False, separators=(',', ':'))))
+                if state.get('questions'):
+                    self.detach_pipeline(db, state)
+                    self.archive_exam(db, state)
                 state.clear(); state.update({'phase': 'set_selector', 'collectionId': payload['collectionId']})
                 result = self.collection_public(payload)
             elif event.get('action') == 'sets_status':

@@ -153,6 +153,12 @@ class StudyFlowTests(ProjectTestBase):
         self.assertEqual(result['toolCalls'], ['get_concept_insights'])
         self.assertEqual(result['data']['concepts'][0]['concept'], '이진 탐색')
 
+    def test_cli_exposes_weekly_study_plan(self):
+        result = self.cli('study-plan', '--course', '자료구조')
+        self.assertEqual(result['toolCalls'], ['get_study_plan'])
+        self.assertEqual(result['data']['courses'][0]['weeks'][0]['label'], '3주차')
+        self.assertEqual(result['data']['courses'][0]['reviewMix'], {'weak': 50, 'core': 30, 'random': 20})
+
     def test_web_exam_is_opened_instead_of_returning_plain_questions(self):
         class Process:
             stdout = StringIO('{"url":"http://127.0.0.1:4321/#token", "answer":"시험지가 준비됐어요."}\n')

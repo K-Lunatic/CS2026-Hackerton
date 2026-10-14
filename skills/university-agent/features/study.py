@@ -170,6 +170,23 @@ def evidence(refs, sources):
     return checked
 
 
+def material_sources(material, course_id, image_refs):
+    """Expose stable image refs to the host while keeping local paths private."""
+    sources = []
+    for section in material.get('sections', []):
+        images = []
+        for image in section.get('images', []):
+            if not isinstance(image, dict) or not image.get('ref'):
+                continue
+            if image.get('path'):
+                image_refs[image['ref']] = image['path']
+            images.append({'ref': image['ref'], 'alt': str(image.get('alt') or '')[:200]})
+        sources.append({'resourceId': material['id'], 'courseId': course_id,
+                        'name': material['title'], 'location': section['location'],
+                        'text': section['text'], 'images': images})
+    return sources
+
+
 def required_text(obj, key):
     if not isinstance(obj, dict):
         raise ValueError(f'{key}: 객체 형식이 필요합니다.')
@@ -350,17 +367,28 @@ def validate_generated(data, state):
         if not isinstance(images, list) or len(images) > 8 or any(
             not isinstance(image, (str, dict)) or
             (isinstance(image, str) and not image.strip()) or
-            (isinstance(image, dict) and (not isinstance(image.get('path'), str) or not image['path'].strip()))
+            (isinstance(image, dict) and
+             (not (isinstance(image.get('path'), str) and image['path'].strip()) and
+              not (isinstance(image.get('ref'), str) and image['ref'].strip())))
             for image in images
         ):
-            raise ValueError('문항 이미지는 로컬 경로 목록이어야 하며 8개 이내입니다.')
+            raise ValueError('문항 이미지는 자료 이미지 참조 또는 로컬 경로 8개 이내입니다.')
+        resolved_images = []
+        for image in images:
+            if isinstance(image, dict) and image.get('ref'):
+                path = state.get('imageRefs', {}).get(image['ref'])
+                if not isinstance(path, str) or not path:
+                    raise ValueError('자료에 연결되지 않은 이미지 참조입니다.')
+                resolved_images.append({'path': path, 'alt': str(image.get('alt') or '')[:200]})
+            else:
+                resolved_images.append(image)
         q['evidence'] = evidence(q.get('evidence'), state['sources'])
         # Store only the defined contract, never arbitrary host fields in public output.
         checked.append({**{k: q[k] for k in ('id', 'type', 'question', 'answer', 'explanation', 'concept', 'hint', 'rubric', 'evidence', 'typeLabel', 'responseFormat', 'points', 'code', 'language', 'keywords')},
                         'blocks': blocks, 'options': options, 'acceptedAnswers': q.get('acceptedAnswers', []),
                         'pairs': q.get('pairs', []), 'formula': q.get('formula', ''),
                         'tolerance': q.get('tolerance'), 'units': q.get('units', []),
-                        'correctAnswers': q.get('correctAnswers', []), 'images': images})
+                        'correctAnswers': q.get('correctAnswers', []), 'images': resolved_images})
     return checked
 
 
@@ -1163,8 +1191,9 @@ class StudySession:
             if state['settings']['mode'] == 'quiz' and state['settings']['delivery'] == 'web':
                 selection['courseId'] = course_id
                 return study_pipeline.start(self, state, [material['id']], material)
-            state.update(phase='prepared', sources=[{'resourceId': material['id'], 'courseId': course_id,
-                'name': material['title'], **s} for s in material['sections']], requestId=secrets.token_hex(12))
+            state['imageRefs'] = {}
+            state.update(phase='prepared', sources=material_sources(material, course_id, state['imageRefs']),
+                         requestId=secrets.token_hex(12))
             return self.generation_request(state, [], material['truncated'])
         courses = self.provider.get_courses(self.user)
         course_id = selection.get('courseId')
@@ -1211,11 +1240,13 @@ class StudySession:
             if (not selected and not any(r['kind'] == 'instructor_transcript' for r in state['examReferences'])) or len(set(selected)) != len(selected) or not set(selected) <= available:
                 raise ValueError('선택 과목의 자료를 중복 없이 지정하세요.')
             return study_pipeline.start(self, state, selected)
-        result = study_materials(courses, resources, files_root=self.files_root, course_id=course['id'], resource_ids=selected, locations=locations, include_ids=True)
+        result = study_materials(courses, resources, files_root=self.files_root, course_id=course['id'], resource_ids=selected, locations=locations, include_ids=True, include_image_paths=True)
         if result.get('needsInput'):
             return {'status': 'selecting', **result}
         data = result['data']
-        sources = [{'resourceId': m['id'], 'courseId': course['id'], 'name': m['title'], **section} for m in data['materials'] for section in m['sections']]
+        state['imageRefs'] = {}
+        sources = [source for material in data['materials']
+                   for source in material_sources(material, course['id'], state['imageRefs'])]
         failures = [{'name': m['title'], 'reason': m['error']} for m in data['materials'] if m.get('error')]
         if not sources:
             prefix = result['answer'] if not data['materials'] else '읽은 본문이 없어 출제하지 않습니다.'
@@ -1247,7 +1278,7 @@ class StudySession:
                         'failures': failures, 'truncated': truncated,
                         'answer': '이 자료에서 정리해 둔 핵심 개념을 바로 가져왔어요.',
                         'nextCommands': ['문제 10개 풀기', '문제 20개 풀기(권장)', '개념 다시 설명해줘']}
-        contract = {'questions': [{'id': 'q1', 'type': '설정된 유형 식별자', 'typeLabel': '새 유형의 표시 이름', 'responseFormat': 'choice|multi_choice|text|code|ordering', 'blocks': ['순서 배열형 블록 1', '순서 배열형 블록 2'], 'pairs': [{'prompt': '짝짓기 왼쪽', 'answer': '짝짓기 오른쪽'}], 'points': 10, 'code': '코딩 문항의 예제 코드', 'language': 'java 등', 'keywords': ['핵심 용어'], 'question': '질문', 'options': ['선택지 (choice만)'], 'correctAnswers': ['복수 선택 정답 원문'], 'answer': '정답 선택지 원문 또는 블록 번호 배열', 'acceptedAnswers': ['단답 허용 표현'], 'formula': '{x}+1', 'tolerance': 0.01, 'units': [{'name': '단위', 'multiplier': 1}], 'explanation': '해설', 'rubric': ['주요 키워드와 의미적 충족 조건'], 'concept': '핵심 개념', 'hint': '정답을 누설하지 않는 힌트', 'images': [{'path': '문항에 연결할 로컬 이미지 경로', 'alt': '이미지 설명'}], 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}], 'shortageReason': '문항 부족 시 사유'}
+        contract = {'questions': [{'id': 'q1', 'type': '설정된 유형 식별자', 'typeLabel': '새 유형의 표시 이름', 'responseFormat': 'choice|multi_choice|text|code|ordering', 'blocks': ['순서 배열형 블록 1', '순서 배열형 블록 2'], 'pairs': [{'prompt': '짝짓기 왼쪽', 'answer': '짝짓기 오른쪽'}], 'points': 10, 'code': '코딩 문항의 예제 코드', 'language': 'java 등', 'keywords': ['핵심 용어'], 'question': '질문', 'options': ['선택지 (choice만)'], 'correctAnswers': ['복수 선택 정답 원문'], 'answer': '정답 선택지 원문 또는 블록 번호 배열', 'acceptedAnswers': ['단답 허용 표현'], 'formula': '{x}+1', 'tolerance': 0.01, 'units': [{'name': '단위', 'multiplier': 1}], 'explanation': '해설', 'rubric': ['주요 키워드와 의미적 충족 조건'], 'concept': '핵심 개념', 'hint': '정답을 누설하지 않는 힌트', 'images': [{'ref': 'SOURCE에 있는 이미지 ref', 'alt': '이미지 설명'}], 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}], 'shortageReason': '문항 부족 시 사유'}
         if state['settings']['mode'] == 'concepts':
             contract = {'concepts': [{'concept': '개념', 'explanation': '설명', 'evidence': [{'resourceId': '자료 ID', 'location': '정확한 위치', 'quote': '연속된 원문'}]}]}
         if schema_only:
@@ -1256,7 +1287,7 @@ class StudySession:
                 'answer': '읽은 자료 범위에서 준비합니다: ' + ', '.join(dict.fromkeys(s['name'] for s in sources)),
                 'failures': failures, 'truncated': truncated,
                 'sourceLocations': [{'resourceId': s['resourceId'], 'name': s['name'], 'location': s['location']} for s in sources],
-                'hostOnly': {'instruction': PROMPT + '\nstudyContext의 메모는 사용자 제공 참고 정보다. 자료 본문 인용과 분리해 사용하고, 메모 자체를 정답 근거로 인용하지 않는다. learningFocus는 먼저 복습할 개념을 정하는 참고 자료이며, SOURCE의 근거가 없으면 새 사실을 만들지 않는다.',
+                'hostOnly': {'instruction': PROMPT + '\nstudyContext의 메모는 사용자 제공 참고 정보다. 자료 본문 인용과 분리해 사용하고, 메모 자체를 정답 근거로 인용하지 않는다. learningFocus는 먼저 복습할 개념을 정하는 참고 자료이며, SOURCE의 근거가 없으면 새 사실을 만들지 않는다. SOURCE의 images에는 PDF/PPT에서 추출한 이미지 ref가 있다. 그림·도표 문항이 필요할 때만 같은 ref를 images에 넣고 임의 경로나 내용을 만들지 않는다.',
                              'courseName': next((c['name'] for c in self.provider.get_courses(self.user) if c['id'] == state['selection'].get('courseId')), state['selection'].get('attachmentTitle', '첨부 자료')),
                              'settings': state['settings'], 'studyContext': state.get('focusNotes', []), 'learningFocus': learning_focus,
                              'schema': contract, 'SOURCE': sources}}

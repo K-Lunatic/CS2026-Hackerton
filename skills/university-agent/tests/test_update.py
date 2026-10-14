@@ -43,7 +43,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_update_keeps_both_hosts_in_sync_and_uses_the_check_cache(self):
         archive = io.BytesIO()
-        prefix = 'CS2026-Hackerton-dev/'
+        prefix = 'Turtleneck-turtleneck/'
         with zipfile.ZipFile(archive, 'w') as bundle:
             bundle.writestr(prefix + 'skills/university-agent/SKILL.md', 'new skill')
             bundle.writestr(prefix + 'plugin.json', '{"version":"0.5.0"}')

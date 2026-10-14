@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/Claude_Code-Skill-D97757?style=flat-square" alt="Claude Code Skill">
   <img src="https://img.shields.io/badge/macOS%20%7C%20Windows-28654D?style=flat-square" alt="macOS와 Windows">
   <img src="https://img.shields.io/badge/local%20first-28654D?style=flat-square" alt="기기 우선 저장">
-  <img src="https://img.shields.io/badge/hackathon%20prototype-BC8B36?style=flat-square" alt="해커톤 프로토타입">
+  <img src="https://img.shields.io/badge/Turtleneck-local%20study-BC8B36?style=flat-square" alt="터틀넥 로컬 학습">
 </p>
 
 <p align="center">
@@ -52,7 +52,7 @@
 **Codex:**
 
 ```bash
-codex plugin marketplace add K-Lunatic/CS2026-Hackerton --ref dev
+codex plugin marketplace add K-Lunatic/Turtleneck --ref turtleneck
 codex plugin add university-agent@kku-university-agent-local
 ```
 
@@ -71,13 +71,13 @@ claude plugin install university-agent@kku-university-agent-local
 
 새 Claude Code 대화에서 `/university-agent:turtleneck`을 호출하세요. 설치 없이 개발본을 확인하려면
 `claude --plugin-dir .`로 시작해 같은 명령을 사용합니다. 경로의 `.`은 이 저장소 루트입니다.
-저장소가 없다면 먼저 `git clone --branch dev https://github.com/K-Lunatic/CS2026-Hackerton.git`로
-받은 뒤 `CS2026-Hackerton` 폴더에서 설치합니다.
+저장소가 없다면 먼저 `git clone --branch turtleneck https://github.com/K-Lunatic/Turtleneck.git`로
+받은 뒤 `Turtleneck` 폴더에서 설치합니다.
 스킬 폴더만 쓸 때는 `skills/university-agent`를 `~/.claude/skills/turtleneck`에 복사하고 `/turtleneck`을
 호출합니다. 이 경우 플러그인 자동 업데이트 대신 폴더를 다시 복사해 갱신합니다.
 [Claude 설치 규칙](https://code.claude.com/docs/en/plugin-marketplaces)과 [실행 지침](skills/university-agent/references/claude-code.md)을 참고하세요.
 
-로컬 시험 서버나 Actions 연결을 실행할 때는 `University Agent.command`(macOS) 또는 `University Agent.bat`(Windows)를 더블클릭하세요. 실행 전 터틀넥은 신뢰한 `dev` 버전을 확인하고, 설치본이 더 오래된 경우에만 자동으로 교체합니다. 개발 중인 Git 저장소는 자동으로 덮어쓰지 않습니다.
+로컬 시험 서버나 Actions 연결을 실행할 때는 `University Agent.command`(macOS) 또는 `University Agent.bat`(Windows)를 더블클릭하세요. 실행 전 터틀넥은 신뢰한 `turtleneck` 버전을 확인하고, 설치본이 더 오래된 경우에만 자동으로 교체합니다. 개발 중인 Git 저장소는 자동으로 덮어쓰지 않습니다.
 
 ### 공개 저장소 사용 범위
 
@@ -127,6 +127,7 @@ python3 scripts/run_agent.py tls-activity-control \
 | 일반 할 일 | “TLS에 없는 과제도 추가해줘” | 학교에 없는 개인 과제까지 함께 관리 |
 | 수업자료 | “자료구조 공지와 자료 보여줘” | 저장된 과목 자료와 원본 파일 확인 |
 | 자료 학습 | “자료구조 공부 좀 해야겠다” | 핵심 개념을 먼저 익히고 다음 학습 선택 |
+| PDF·PPT 도표 | “이 자료로 문제 만들어줘” | 문서 내부 이미지를 로컬에서 추출해 필요한 문항에만 연결 |
 | 취약 개념 복습 | “약한 개념부터 복습 자료 보여줘” | 자료 분석·풀이 기록으로 중요도와 취약도를 정해 짧은 복습 자료 제공 |
 | 시험지 | “자료구조 전체 자료로 10문제 만들어줘” | 전용 웹 시험지와 자동 저장 답안 |
 | 채점 | “시험 채점해줘” | 현재 Codex·Claude의 기준별 AI 채점과 자료 근거 피드백 |
@@ -166,7 +167,7 @@ TLS 자율강좌의 자료·활동 메뉴는 실제 화면에서 확인한 유�
 답안 자동 저장 → 제출 → 현재 AI 채점 → 점수·피드백·근거 표시
 ```
 
-자료를 한 번에 AI에 넣지 않습니다. 긴 파일은 작은 본문 조각으로 나누고, 파일별 분석이 끝난 뒤 후보 문항을 조합합니다. 변경된 파일이나 출제 조건만 다시 처리합니다. 시험지가 완성되면 실행기가 전용 웹 화면을 자동으로 열며, 채팅에 문제를 평문으로 대신 내지 않습니다.
+자료를 한 번에 AI에 넣지 않습니다. 긴 파일은 작은 본문 조각으로 나누고, 파일별 분석이 끝난 뒤 후보 문항을 조합합니다. PDF/PPT/PPTX 안의 이미지·도표도 로컬에서 추출해 이미지 참조 후보로 함께 보관합니다. 변경된 파일이나 출제 조건만 다시 처리합니다. 시험지가 완성되면 실행기가 전용 웹 화면을 자동으로 열며, 채팅에 문제를 평문으로 대신 내지 않습니다.
 
 완료된 강의는 저장된 학교 연결로 창 없이 음성을 가져올 수 있습니다. TLS의 현재 `completed`를
 확인하고 공식 제공 경로만 사용하며 재생·진도·출석 요청은 보내지 않습니다. 보호·금지된 영상은

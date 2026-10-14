@@ -14,8 +14,8 @@ from pathlib import Path
 from urllib.error import URLError
 
 
-REPO = "K-Lunatic/CS2026-Hackerton"
-BRANCH = "dev"
+REPO = "K-Lunatic/Turtleneck"
+BRANCH = "turtleneck"
 REMOTE_PLUGIN = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/plugin.json"
 REMOTE_ARCHIVE = f"https://github.com/{REPO}/archive/refs/heads/{BRANCH}.zip"
 CHECK_INTERVAL_SECONDS = 6 * 60 * 60
@@ -121,7 +121,7 @@ def apply_update(*, force: bool = False) -> dict[str, str | bool]:
     installed_package = package_root()
     target = skill_root()
     if installed_package is None or development_checkout(installed_package):
-        return {"status": "SKIPPED", "message": "개발 중인 Git 저장소는 자동으로 덮어쓰지 않아요. 최신 dev를 확인해 주세요."}
+        return {"status": "SKIPPED", "message": "개발 중인 Git 저장소는 자동으로 덮어쓰지 않아요. 최신 turtleneck 브랜치를 확인해 주세요."}
     state = check(force=force)
     if state.get("status") != "UPDATE_AVAILABLE":
         return state

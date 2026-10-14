@@ -5,7 +5,7 @@ description: 터틀넥 대학생활 Skill. 과제·마감·미시청 강의·공
 
 # 터틀넥
 
-For local Codex or Claude Code, use the same bundled standard-library runner for every data lookup or mutation. In Claude Code, first read [references/claude-code.md](references/claude-code.md) for host-specific invocation, permissions and background exam handling; all academic and study contracts below remain shared. Before setup or an academic lookup, run `python3 scripts/update_turtleneck.py --auto` (Windows: `py -3`) when the installed package is not a Git checkout; it checks the trusted `dev` package at most every six hours and applies a newer package to the installed skill only. A network failure keeps the current version, and a Git checkout is never overwritten. Use `--apply` when an explicit manual update is requested. Supported local platforms are macOS and Windows. Ordinary Claude web chat/cloud sessions cannot use this computer's protected credentials or local web exam. The ChatGPT web/mobile gateway remains an optional, temporarily deferred path described in [server/README.md](../../server/README.md). Do not invent a response from local data when the runner can return the result.
+For local Codex or Claude Code, use the same bundled standard-library runner for every data lookup or mutation. In Claude Code, first read [references/claude-code.md](references/claude-code.md) for host-specific invocation, permissions and background exam handling; all academic and study contracts below remain shared. Before setup or an academic lookup, run `python3 scripts/update_turtleneck.py --auto` (Windows: `py -3`) when the installed package is not a Git checkout; it checks the trusted `turtleneck` package at most every six hours and applies a newer package to the installed skill only. A network failure keeps the current version, and a Git checkout is never overwritten. Use `--apply` when an explicit manual update is requested. Supported local platforms are macOS and Windows. Ordinary Claude web chat/cloud sessions cannot use this computer's protected credentials or local web exam. The ChatGPT web/mobile gateway remains an optional, temporarily deferred path described in [server/README.md](../../server/README.md). Do not invent a response from local data when the runner can return the result.
 
 ## First invocation: one setup for TLS and Everytime
 
@@ -56,6 +56,10 @@ For completed-lecture audio/review requests, read [references/lecture-audio.md](
 Use its local runner with stored credentials, never play the lecture or call attendance/progress endpoints.
 Audio extraction exists; timestamped transcription, AI review and targeted frames are a documented next-stage
 design, not implemented capabilities. Never claim an audio file was transcribed or semantically reviewed.
+
+PDF/PPT/PPTX를 읽을 때는 본문과 함께 문서 안의 이미지·도표를 기기 안에 캐시한다. AI에는 절대경로가
+아닌 이미지 참조만 전달하고, 이미지가 실제 문항에 필요할 때만 그 참조를 문항 후보에 연결한다.
+추출 이미지는 웹 시험지에서만 토큰으로 제공하며, 원본 자료의 다운로드 제한을 우회해 이미지를 만들지 않는다.
 
 ### Immediate account connection
 

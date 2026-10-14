@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from test_project import ProjectTestBase, snapshot, upsert
 from storage.local_db import LocalDatabase
-from features.study_materials import _docx_sections, _hwpx_sections, _pdf_sections, _text_sections, study_materials, attached_material, original_files
+from features.study_materials import _docx_sections, _hwpx_sections, _pdf_sections, _pptx_sections, _text_sections, study_materials, attached_material, original_files
 
 
 class StudyMaterialsTests(ProjectTestBase):
@@ -25,7 +25,7 @@ class StudyMaterialsTests(ProjectTestBase):
                 'downloadStatus': 'PROHIBITED' if i == 4 else 'DOWNLOADED'})
         counts = {'active': 0, 'peak': 0}
         lock = threading.Lock()
-        def read(path, extension, cache):
+        def read(path, extension, cache, image_root):
             self.assertNotEqual(path.name, 'source-4.txt')
             with lock:
                 counts['active'] += 1
@@ -155,6 +155,39 @@ class StudyMaterialsTests(ProjectTestBase):
         self.assertIn("정렬된 배열", material["sections"][0]["text"])
         self.assertNotIn("resource-1", str(result))
         self.assertNotIn(str(self.pptx), str(result))
+
+    def test_pdf_and_pptx_images_are_cached_as_private_refs(self):
+        media = b'\x89PNG\r\nfixture'
+        with zipfile.ZipFile(self.pptx, 'a') as archive:
+            archive.writestr('ppt/slides/_rels/slide1.xml.rels',
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>'
+                '</Relationships>')
+            archive.writestr('ppt/media/image1.png', media)
+        sections = _pptx_sections(self.pptx, self.files / '.turtleneck-images', 'ppt-fixture')
+        self.assertEqual(sections[0]['images'][0]['ref'], 'image:ppt-fixture-slide-1:1')
+        self.assertTrue(Path(sections[0]['images'][0]['path']).is_file())
+        public = study_materials([{'id': 'course-1', 'name': '자료구조'}],
+            [{'id': 'r1', 'courseId': 'course-1', 'title': '슬라이드', 'fileName': self.pptx.name,
+              'extension': 'pptx', 'localPath': str(self.pptx), 'downloadStatus': 'DOWNLOADED'}],
+            files_root=self.files, course_id='course-1', include_ids=True)
+        image = public['data']['materials'][0]['sections'][0]['images'][0]
+        self.assertIn('ref', image)
+        self.assertNotIn('path', image)
+        internal = study_materials([{'id': 'course-1', 'name': '자료구조'}],
+            [{'id': 'r1', 'courseId': 'course-1', 'title': '슬라이드', 'fileName': self.pptx.name,
+              'extension': 'pptx', 'localPath': str(self.pptx), 'downloadStatus': 'DOWNLOADED'}],
+            files_root=self.files, course_id='course-1', include_ids=True, include_image_paths=True)
+        self.assertTrue(Path(internal['data']['materials'][0]['sections'][0]['images'][0]['path']).is_file())
+        page = SimpleNamespace(extract_text=lambda: 'PDF 도표', images=[SimpleNamespace(name='diagram.png', data=media)])
+        reader = SimpleNamespace(is_encrypted=False, pages=[page])
+        pdf = self.files / 'course-1' / 'diagram.pdf'
+        pdf.write_bytes(b'%PDF-fixture')
+        with patch('features.study_materials.PdfReader', return_value=reader), \
+             patch('features.study_materials.shutil.which', return_value=None):
+            extracted = _pdf_sections([pdf], Path('unused.swift'), self.files / 'cache',
+                                      image_root=self.files / '.turtleneck-images', source_keys={str(pdf): 'pdf-fixture'})
+        self.assertEqual(extracted[str(pdf.resolve())][0]['images'][0]['ref'], 'image:pdf-fixture-p-1:1')
 
     def test_study_materials_accepts_more_than_three_files(self):
         db = LocalDatabase(self.db_path)

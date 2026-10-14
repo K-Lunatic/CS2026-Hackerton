@@ -1,12 +1,12 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "university-agent",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "터틀넥: TLS·에타 통합 설치, 과제·시간표·강의평과 수업자료 기반 학습보조",
   "author": {
     "name": "K-Lunatic"
   },
-  "repository": "https://github.com/K-Lunatic/CS2026-Hackerton",
+  "repository": "https://github.com/K-Lunatic/Turtleneck",
   "extensions": {
     "com.openai": {
       "interface": {

@@ -86,7 +86,7 @@ def analysis_key(state, material):
     configuration['types'] = sorted(set(state['settings']['types']))
     locations = state['selection'].get('locations', {}).get(material['id'])
     text_formats = {'txt', 'md', 'java', 'py', 'js', 'c', 'cpp', 'html', 'css', 'csv', 'json', 'xml', 'yaml', 'yml'}
-    return material_cache.key(['analysis-v3' if material.get('extension') in text_formats else 'analysis-v2', CHUNK_CHARS, state['selection']['courseId'],
+    return material_cache.key(['analysis-v3', CHUNK_CHARS, state['selection']['courseId'],
         material['id'], material['title'], material.get('extension'), material.get('contentKey'),
         sorted(set(locations)) if locations is not None else None, configuration])
 
@@ -96,12 +96,21 @@ def load_chunks(state, material):
     chunks, chunk, size = [], [], 0
     for section in material['sections']:
         text = section['text']
+        images = [image for image in section.get('images', []) if isinstance(image, dict) and image.get('ref')]
+        for image in images:
+            if image.get('path'):
+                p.setdefault('imageRefs', {})[image['ref']] = image['path']
         position = 0
+        first_piece = True
         while position < len(text):
             excerpt = text[position:position + CHUNK_CHARS - size]
             position += len(excerpt)
-            chunk.append({'resourceId': material['id'], 'courseId': state['selection']['courseId'],
-                          'name': material['title'], 'location': section['location'], 'text': excerpt})
+            item = {'resourceId': material['id'], 'courseId': state['selection']['courseId'],
+                    'name': material['title'], 'location': section['location'], 'text': excerpt}
+            if first_piece and images:
+                item['images'] = [{'ref': image['ref'], 'alt': image.get('alt', '')} for image in images]
+                first_piece = False
+            chunk.append(item)
             size += len(excerpt)
             if size == CHUNK_CHARS:
                 chunks.append(chunk); chunk, size = [], 0
@@ -170,7 +179,7 @@ def _request_for_chunk(session, state, chunk_index, request_id):
         types=[{'type': '유형 식별자', 'reason': '이 내용에 적합한 이유'}])
     prior = p['units'][-1] if p['units'] and p['units'][-1]['resourceId'] == p['files'][p['fileIndex']] else None
     instruction = PROMPT + '''
-이번 파일 부분만 분석한다. 여러 requests가 있으면 각 SOURCE를 서로 독립된 분석 단위로 처리하고 requestId를 유지해 결과를 분리한다. 이미 검증된 후보를 최종 조립에서 다시 생성하거나 재분석하지 않는다. settings.count는 이번 부분의 후보 목표이지 최종 시험 문항 수가 아니다. examSettings의 요청 유형에 맞춰 꼭 필요한 후보만 만든다. 맥락·학습 설명은 핵심만 짧게 적고 같은 내용을 여러 유형으로 반복하지 않는다. 앞부분 요약은 맥락으로만 참고하고 새 문제의 근거로 사용하지 않는다. 원문 인용은 1000자 이내로 제한한다. 교수 전사문이면 강조·반복·시험 관련 발언을 맥락에 기록하되 청취 불가·전사 오류가 의심되는 부분을 정답 근거로 쓰지 않는다. 후보가 부족하면 이유를 적는다. 각 개념의 중요도는 확인 가능한 출처별로 importanceBySource에 분리하고, AI 평가는 판단 보조일 뿐 공식 근거가 아님을 적는다. 사용자의 학습·시험 메모는 출제 형식과 설명 방식 참고로만 반영하고 정답 근거로 인용하지 않는다.'''
+이번 파일 부분만 분석한다. 여러 requests가 있으면 각 SOURCE를 서로 독립된 분석 단위로 처리하고 requestId를 유지해 결과를 분리한다. 이미 검증된 후보를 최종 조립에서 다시 생성하거나 재분석하지 않는다. settings.count는 이번 부분의 후보 목표이지 최종 시험 문항 수가 아니다. examSettings의 요청 유형에 맞춰 꼭 필요한 후보만 만든다. 맥락·학습 설명은 핵심만 짧게 적고 같은 내용을 여러 유형으로 반복하지 않는다. 앞부분 요약은 맥락으로만 참고하고 새 문제의 근거로 사용하지 않는다. 원문 인용은 1000자 이내로 제한한다. 교수 전사문이면 강조·반복·시험 관련 발언을 맥락에 기록하되 청취 불가·전사 오류가 의심되는 부분을 정답 근거로 쓰지 않는다. 후보가 부족하면 이유를 적는다. 각 개념의 중요도는 확인 가능한 출처별로 importanceBySource에 분리하고, AI 평가는 판단 보조일 뿐 공식 근거가 아님을 적는다. 사용자의 학습·시험 메모는 출제 형식과 설명 방식 참고로만 반영하고 정답 근거로 인용하지 않는다. SOURCE의 images에는 PDF/PPT에서 추출된 이미지 참조가 있다. 그림·도표가 문제에 직접 필요할 때만 같은 ref를 images에 넣고, ref를 임의로 만들거나 로컬 경로로 바꾸지 않는다. 이미지가 실제로 보이지 않으면 그림 내용을 추측하지 않는다.'''
     host = {'requestId': request_id, 'instruction': instruction, 'sourceKind': p.get('fileSourceKind', 'course_file'),
             'previousPart': {'context': prior['context'][:1000], 'concepts': [x['concept'][:100] for x in prior['learning'][:10]]} if prior else None,
             'courseName': next((c['name'] for c in session.provider.get_courses(session.user) if c['id'] == state['selection']['courseId']), state['selection'].get('attachmentTitle', '첨부 자료')),
@@ -244,6 +253,7 @@ def advance(session, state):
                     material = study_materials(courses, resources, files_root=session.files_root,
                         course_id=state['selection']['courseId'], resource_ids=[rid],
                         locations=state['selection'].get('locations', {}), include_ids=True,
+                        include_image_paths=True,
                         max_chars=10_000_000)['data']['materials'][0]
             if not material.get('error'):
                 p['analysisKey'] = analysis_key(state, material)
@@ -303,7 +313,8 @@ def _validated_part(session, state, item, data):
     target = p.get('candidateTarget', 20)
     requested_types = set(state['settings']['types'])
     part_type = next(iter(requested_types)) if len(requested_types) == 1 else 'auto'
-    candidate_state = {'sources': sources, 'settings': {**state['settings'], 'count': target, 'types': [part_type] * target}}
+    candidate_state = {'sources': sources, 'imageRefs': p.get('imageRefs', {}),
+                       'settings': {**state['settings'], 'count': target, 'types': [part_type] * target}}
     questions = validate_generated(data, candidate_state)
     if any(q['type'] not in {t['type'] for t in checked_types} for q in questions):
         raise ValueError('각 문항은 분석한 시험 유형에 속해야 합니다.')

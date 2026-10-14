@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import posixpath
 import re
 import shutil
 import subprocess
@@ -23,12 +25,67 @@ except ImportError:
     PdfReader = None
 
 _SWIFT_LOCK = Lock()
+_IMAGE_SUFFIXES = {'.gif', '.jpe', '.jpeg', '.jpg', '.png', '.svg', '.svgz'}
+_MAX_EXTRACTED_IMAGES = 100
+_MAX_EXTRACTED_IMAGE_BYTES = 8_000_000
 
 def _normalize(value: str) -> str:
     return "".join(char for char in unicodedata.normalize("NFKC", value).casefold() if char.isalnum())
 
 
-def _pptx_sections(path: Path) -> list[dict[str, str]]:
+def _image_suffix(name: str, data: bytes) -> str | None:
+    suffix = Path(name).suffix.casefold()
+    if suffix in _IMAGE_SUFFIXES:
+        return suffix
+    if data.startswith(b'\x89PNG'):
+        return '.png'
+    if data.startswith(b'\xff\xd8\xff'):
+        return '.jpg'
+    if data.startswith((b'GIF87a', b'GIF89a')):
+        return '.gif'
+    if data.lstrip().startswith(b'<svg'):
+        return '.svg'
+    return None
+
+
+def _save_images(image_root: Path | None, source_key: str, items: list[tuple[str, bytes]]) -> list[dict[str, str]]:
+    if image_root is None:
+        return []
+    target = image_root / source_key
+    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+    result = []
+    for index, (name, data) in enumerate(items[:_MAX_EXTRACTED_IMAGES], 1):
+        if not isinstance(data, bytes) or not data or len(data) > _MAX_EXTRACTED_IMAGE_BYTES:
+            continue
+        suffix = _image_suffix(name, data)
+        if not suffix:
+            continue
+        digest = hashlib.sha256(data).hexdigest()[:16]
+        path = target / f'{index:03d}-{digest}{suffix}'
+        if not path.exists():
+            path.write_bytes(data)
+            path.chmod(0o600)
+        result.append({'ref': f'image:{source_key}:{index}', 'path': str(path),
+                       'alt': f'{source_key} 이미지 {index}'})
+    return result
+
+
+def _pptx_slide_images(archive: zipfile.ZipFile, number: int) -> list[tuple[str, bytes]]:
+    rels_name = f'ppt/slides/_rels/slide{number}.xml.rels'
+    if rels_name not in archive.namelist():
+        return []
+    root = ET.fromstring(archive.read(rels_name))
+    images = []
+    for relation in root.iter():
+        if relation.tag.rsplit('}', 1)[-1] != 'Relationship' or not relation.get('Target'):
+            continue
+        target = posixpath.normpath(posixpath.join('ppt/slides', relation.get('Target')))
+        if target.startswith('ppt/media/') and target in archive.namelist():
+            images.append((target, archive.read(target)))
+    return images
+
+
+def _pptx_sections(path: Path, image_root: Path | None = None, source_key: str = '') -> list[dict[str, object]]:
     with zipfile.ZipFile(path) as archive:
         slides = sorted(
             (name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)),
@@ -45,8 +102,12 @@ def _pptx_sections(path: Path) -> list[dict[str, str]]:
                 text = "".join(node.text or "" for node in paragraph.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}t")).strip()
                 if text:
                     paragraphs.append(text)
-            if paragraphs:
-                sections.append({"location": f"슬라이드 {number}", "text": "\n".join(paragraphs)})
+            images = _save_images(image_root, f'{source_key or path.stem}-slide-{number}',
+                                  _pptx_slide_images(archive, number))
+            if paragraphs or images:
+                sections.append({"location": f"슬라이드 {number}",
+                                 "text": "\n".join(paragraphs) or f"[이미지 자료: 슬라이드 {number}]",
+                                 "images": images})
         return sections
 
 
@@ -125,22 +186,35 @@ def _text_sections(path: Path) -> list[dict[str, str]]:
     raise RuntimeError('텍스트 인코딩을 확인하지 못했어요. UTF-8로 저장한 파일을 골라주세요.')
 
 
-def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path) -> dict[str, list[dict[str, str]]]:
+def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path, image_root: Path | None = None,
+                  source_keys: dict[str, str] | None = None) -> dict[str, list[dict[str, object]]]:
     pdftotext = shutil.which("pdftotext")
     swift = shutil.which("swift") if sys.platform == "darwin" else None
     if not (PdfReader or pdftotext or swift):
         raise RuntimeError("PDF 읽기 도구가 없어요. 같은 Python에서 python -m pip install pypdf를 실행한 뒤 다시 시도해 주세요. Windows에서도 Swift는 필요 없어요.")
-    output: dict[str, list[dict[str, str]]] = {}
+    output: dict[str, list[dict[str, object]]] = {}
     for path in paths:
         pages = []
         succeeded = False
+        reader = None
         if PdfReader:
             try:
                 reader = PdfReader(path)
                 if reader.is_encrypted:
                     raise RuntimeError('암호화된 PDF는 자동으로 해제하지 않습니다.')
-                pages = [{"location": f"PDF p.{index}", "text": text.strip()}
-                         for index, page in enumerate(reader.pages, 1) if (text := page.extract_text()) and text.strip()]
+                for index, page in enumerate(reader.pages, 1):
+                    text = (page.extract_text() or '').strip()
+                    images = []
+                    try:
+                        raw_images = [(getattr(image, 'name', f'image-{item}'), getattr(image, 'data', b''))
+                                      for item, image in enumerate(page.images, 1)]
+                        key = (source_keys or {}).get(str(path), path.stem)
+                        images = _save_images(image_root, f'{key}-p-{index}', raw_images)
+                    except (AttributeError, OSError, ValueError):
+                        pass
+                    if text or images:
+                        pages.append({'location': f'PDF p.{index}',
+                                      'text': text or f'[이미지 자료: PDF p.{index}]', 'images': images})
                 succeeded = True
             except Exception:
                 # Different readers handle broken fonts differently; do not label this OCR yet.
@@ -149,7 +223,7 @@ def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path) -> dict[str,
             try:
                 result = subprocess.run([pdftotext, "-enc", "UTF-8", "-layout", str(path), "-"], capture_output=True, text=True, encoding='utf-8', timeout=120)
                 if result.returncode == 0:
-                    pages = [{"location": f"PDF p.{index}", "text": page.strip()}
+                    pages = [{"location": f"PDF p.{index}", "text": page.strip(), "images": []}
                              for index, page in enumerate(result.stdout.split("\f"), 1) if page.strip()]
                     succeeded = True
             except (OSError, UnicodeError, subprocess.SubprocessError):
@@ -174,44 +248,46 @@ def _pdf_sections(paths: list[Path], script: Path, cache_dir: Path) -> dict[str,
     return output
 
 
-def _ppt_sections(path: Path) -> list[dict[str, str]]:
+def _ppt_sections(path: Path, image_root: Path | None = None, source_key: str = '') -> list[dict[str, object]]:
+    for name in ("soffice", "libreoffice"):
+        command = shutil.which(name)
+        if not command:
+            continue
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([command, "--headless", "--convert-to", "pptx", "--outdir", directory, str(path)], capture_output=True, text=True, timeout=120)
+            converted = Path(directory) / f"{path.stem}.pptx"
+            if result.returncode == 0 and converted.is_file():
+                return _pptx_sections(converted, image_root, source_key or path.stem)
     textutil = shutil.which("textutil")
     if textutil:
         result = subprocess.run([textutil, "-convert", "txt", "-stdout", str(path)], capture_output=True, text=True, timeout=60)
         if result.returncode == 0 and result.stdout.strip():
-            return [{"location": "슬라이드 위치 미확인", "text": result.stdout.strip()}]
-    for name in ("soffice", "libreoffice", "catppt"):
-        command = shutil.which(name)
-        if not command:
-            continue
-        if name == "catppt":
-            result = subprocess.run([command, str(path)], capture_output=True, text=True, timeout=60)
-            if result.returncode == 0 and result.stdout.strip():
-                return [{"location": "슬라이드 위치 미확인", "text": result.stdout.strip()}]
-            continue
-        with tempfile.TemporaryDirectory() as directory:
-            result = subprocess.run([command, "--headless", "--convert-to", "txt:Text", "--outdir", directory, str(path)], capture_output=True, text=True, timeout=120)
-            converted = Path(directory) / f"{path.stem}.txt"
-            if result.returncode == 0 and converted.is_file():
-                text = converted.read_text(encoding="utf-8", errors="replace").strip()
-                if text:
-                    return [{"location": "슬라이드 위치 미확인", "text": text}]
+            return [{"location": "슬라이드 위치 미확인", "text": result.stdout.strip(), "images": []}]
+    if catppt := shutil.which('catppt'):
+        result = subprocess.run([catppt, str(path)], capture_output=True, text=True, timeout=60)
+        if result.returncode == 0 and result.stdout.strip():
+            return [{"location": "슬라이드 위치 미확인", "text": result.stdout.strip(), "images": []}]
     raise RuntimeError("구형 PPT를 읽을 변환 도구가 없습니다. PPTX 또는 PDF로 변환해 다시 동기화해 주세요.")
 
 
-def _read_sections(path: Path, extension: str, cache_root: Path):
+def _read_sections(path: Path, extension: str, cache_root: Path, image_root: Path | None = None):
     text_formats = {'txt', 'md', 'py', 'js', 'java', 'c', 'cpp', 'html', 'css', 'csv', 'json', 'xml', 'yaml', 'yml'}
-    identifier = material_cache.key(['text-v2' if extension in text_formats else 'text-v1', extension, material_cache.fingerprint(cache_root, path)])
+    content_key = material_cache.fingerprint(cache_root, path)
+    identifier = material_cache.key(['text-v3', extension, content_key])
     cached = material_cache.get(cache_root, 'text', '', identifier)
     if cached is not None:
         return cached
     if extension == 'pdf':
         script = Path(__file__).resolve().parents[1] / 'scripts' / 'extract_pdf.swift'
-        sections = _pdf_sections([path], script, cache_root / 'swift-modules').get(str(path), [])
+        sections = _pdf_sections([path], script, cache_root / 'swift-modules', image_root=image_root,
+                                  source_keys={str(path): content_key[:16]}).get(str(path), [])
     elif extension in ('txt', 'md'):
         sections = _text_sections(path)
     elif extension in ('pptx', 'ppt', 'docx', 'hwpx'):
-        sections = {'pptx': _pptx_sections, 'ppt': _ppt_sections, 'docx': _docx_sections, 'hwpx': _hwpx_sections}[extension](path)
+        reader = {'pptx': lambda p: _pptx_sections(p, image_root, content_key[:16]),
+                  'ppt': lambda p: _ppt_sections(p, image_root, content_key[:16]),
+                  'docx': _docx_sections, 'hwpx': _hwpx_sections}[extension]
+        sections = reader(path)
     elif extension in ('doc', 'hwp'):
         sections = _legacy_office_sections(path)
     elif extension in ('py', 'js', 'java', 'c', 'cpp', 'html', 'css', 'csv', 'json', 'xml', 'yaml', 'yml'):
@@ -223,7 +299,7 @@ def _read_sections(path: Path, extension: str, cache_root: Path):
     return sections
 
 
-def _read_many(selected, resolved, cache_root):
+def _read_many(selected, resolved, cache_root, image_root):
     # Keep the pool small: readers retain full extracted text until the caller
     # applies the requested character limit.
     eligible = [item for item in selected if item['id'] in resolved]
@@ -236,7 +312,7 @@ def _read_many(selected, resolved, cache_root):
                 path = resolved[item['id']]
                 try:
                     material_cache.fingerprint(cache_root, path)
-                    value = pool.submit(_read_sections, path, item['extension'].lower(), cache_root)
+                    value = pool.submit(_read_sections, path, item['extension'].lower(), cache_root, image_root)
                 except Exception as error:
                     value = error
                 pending.append((item['id'], value))
@@ -282,7 +358,8 @@ def attached_material(path_text: str, *, title: str = "", max_chars: int = 30000
     try:
         if extension not in ('.pdf', '.pptx', '.ppt', '.txt', '.md'):
             raise ValueError("PDF, PPTX, TXT, MD 파일만 첨부할 수 있습니다.")
-        sections = _read_sections(path, extension[1:], cache_root or path.parent / 'cache')
+        sections = _read_sections(path, extension[1:], cache_root or path.parent / 'cache',
+                                   path.parent / '.turtleneck-images')
     except RuntimeError as exc:
         raise ValueError(str(exc)) from exc
     except (OSError, UnicodeError, json.JSONDecodeError, zipfile.BadZipFile, ET.ParseError, subprocess.SubprocessError) as exc:
@@ -290,10 +367,15 @@ def attached_material(path_text: str, *, title: str = "", max_chars: int = 30000
     usable = []
     remaining = max_chars
     for section in sections:
-        if section.get("text", "").strip() and remaining:
-            excerpt = section["text"][:remaining]
-            usable.append({"location": section["location"], "text": excerpt})
-            remaining -= len(excerpt)
+        text = section.get("text", "").strip()
+        images = section.get('images', [])
+        if not text and not images:
+            continue
+        if text and not remaining:
+            break
+        excerpt = text[:remaining] if text else f"[이미지 자료: {section['location']}]"
+        usable.append({"location": section["location"], "text": excerpt, "images": images})
+        remaining -= len(excerpt) if text else 0
     if not usable:
         raise ValueError("첨부 파일에서 읽을 수 있는 텍스트가 없습니다. 이미지형 PDF라면 OCR이 필요합니다.")
     digest = material_cache.fingerprint(cache_root or path.parent / 'cache', path)
@@ -307,7 +389,7 @@ def study_materials(
     courses: list[dict[str, Any]], resources: list[dict[str, Any]], *,
     files_root: Path, course_query: str = "", resource_query: str = "", max_chars: int = 30000,
     course_id: str = "", resource_ids: list[str] | None = None, locations: dict | None = None, include_ids: bool = False,
-    metadata_only: bool = False,
+    metadata_only: bool = False, include_image_paths: bool = False,
 ) -> dict[str, Any]:
     """Return grounded, bounded source text without local paths or database IDs."""
     if course_id:
@@ -354,7 +436,8 @@ def study_materials(
         except (OSError, ValueError):
             errors[item["id"]] = "로컬 파일이 없습니다. TLS 동기화를 다시 실행해 주세요."
 
-    prepared = _read_many(selected, resolved, files_root.parent / 'cache') if not metadata_only and len(resolved) > 1 else None
+    image_root = root / '.turtleneck-images'
+    prepared = _read_many(selected, resolved, files_root.parent / 'cache', image_root) if not metadata_only and len(resolved) > 1 else None
     materials = []
     remaining = max_chars
     for item in selected:
@@ -381,7 +464,7 @@ def study_materials(
                 if isinstance(sections, Exception):
                     raise sections
             else:
-                sections = _read_sections(path, extension, files_root.parent / 'cache')
+                sections = _read_sections(path, extension, files_root.parent / 'cache', image_root)
         except RuntimeError as exc:
             material['error'] = str(exc)
             materials.append(material)
@@ -401,20 +484,26 @@ def study_materials(
         text_found = False
         for section in sections:
             text = section["text"].strip()
-            if not text:
+            images = section.get('images', [])
+            if not text and not images:
                 continue
             text_found = True
             if remaining <= 0:
                 material["truncated"] = True
                 break
-            excerpt = text[:remaining]
-            material["sections"].append({"location": section["location"], "text": excerpt})
-            remaining -= len(excerpt)
-            if len(excerpt) < len(text):
+            excerpt = text[:remaining] if text else f"[이미지 자료: {section['location']}]"
+            public_images = [{'ref': image['ref'], 'alt': image.get('alt', '')}
+                             for image in images if isinstance(image, dict) and image.get('ref')]
+            if include_image_paths:
+                public_images = [{'ref': image['ref'], 'alt': str(image.get('alt') or '')[:200], 'path': image['path']}
+                                 for image in images if isinstance(image, dict) and image.get('ref') and image.get('path')]
+            material["sections"].append({"location": section["location"], "text": excerpt, "images": public_images})
+            remaining -= len(excerpt) if text else 0
+            if text and len(excerpt) < len(text):
                 material["truncated"] = True
                 break
         if not text_found:
-            material["error"] = "추출 가능한 텍스트가 없습니다. 이미지 스캔 자료는 OCR이 필요합니다."
+            material["error"] = "추출 가능한 텍스트나 이미지가 없습니다. 이미지 스캔 자료는 OCR이 필요합니다."
         materials.append(material)
 
     blocked = [item["title"] for item in materials if item["downloadStatus"] == "PROHIBITED"]

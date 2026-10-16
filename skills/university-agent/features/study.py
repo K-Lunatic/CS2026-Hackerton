@@ -1333,6 +1333,8 @@ class StudySession:
     def web_event(self, state, event):
         if state.get('settings', {}).get('delivery') != 'web' or not state.get('questions'):
             raise ValueError('delivery: web으로 생성한 시험지가 필요합니다.')
+        if event['action'] == 'web_status':
+            self._recover_immediate_web_feedback(state)
         started = state.get('webStarted', True)
         if event['action'] == 'start_exam':
             if event.get('examId') != state.get('examId') or state['phase'] != 'question':
@@ -1401,6 +1403,30 @@ class StudySession:
                 result['pendingCount'] = len(state.get('pendingGrades', {}))
             result['referenceUse'] = state.get('referenceUse', [])
         return result
+
+    def _recover_immediate_web_feedback(self, state):
+        """Upgrade already-submitted exams after the immediate-grading update."""
+        if state.get('phase') != 'grading' or not state.get('pendingGrades'):
+            return
+        recovered = []
+        for qid, pending in list(state['pendingGrades'].items()):
+            question = pending['question']
+            auto = _auto_web_result(question, pending['text'])
+            if auto is None:
+                continue
+            outcome, answer = auto
+            item = {'questionId': qid, 'outcome': outcome, 'hintUsed': False,
+                    'submitted': pending['text'], 'concept': question['concept'],
+                    'evidence': question['evidence'], 'criteria': [],
+                    'points': question.get('points', 10),
+                    'score': question.get('points', 10) if outcome == 'correct' else 0}
+            state['history'].append(item)
+            recovered.append({**item, 'answer': answer, 'explanation': question['explanation']})
+            del state['pendingGrades'][qid]
+        if recovered:
+            state['webFeedback'] = state.get('webFeedback', []) + recovered
+        if not state['pendingGrades']:
+            state['phase'] = 'finished'
 
     def pending_evaluation(self, state):
         return {'status': 'grading', 'gradeId': state['batchGradeId'], 'needsEvaluation': True,

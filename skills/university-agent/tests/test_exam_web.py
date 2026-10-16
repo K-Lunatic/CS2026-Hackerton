@@ -173,6 +173,25 @@ class ExamWebTests(ProjectTestBase):
         self.assertEqual(archived['summary']['score'], finished['summary']['score'])
         self.assertEqual(archived['feedback'], finished['feedback'])
 
+    def test_web_answers_reveal_each_result_before_exam_is_finished(self):
+        s = self.make_exam()
+        public = s.call({'action': 'web_status'})
+        result = s.call({'action': 'web_answer', 'examId': public['examId'], 'questionId': 'q1',
+                         'text': '1', 'revision': public['revision']})
+        self.assertEqual(result['status'], 'question')
+        self.assertEqual(result['answeredCount'], 1)
+        self.assertEqual([item['questionId'] for item in result['feedback']], ['q1'])
+        self.assertEqual(result['feedback'][0]['answer'], '정렬된 배열에서 탐색')
+        self.assertEqual(result['summary']['score'], 16.67)
+        for index in range(2, 7):
+            result = s.call({'action': 'web_answer', 'examId': public['examId'], 'questionId': f'q{index}',
+                             'text': '정렬된 배열에서 탐색', 'revision': result['revision']})
+        self.assertEqual(result['status'], 'grading')
+        self.assertEqual(result['answeredCount'], 6)
+        self.assertEqual(len(result['feedback']), 6)
+        self.assertEqual(result['pendingCount'], 4)
+        self.assertEqual(result['feedback'][2]['outcome'], 'pending')
+
     def test_web_blank_answers_and_invalid_grading_are_atomic(self):
         s = self.make_exam(); public = s.call({'action': 'web_status'})
         answers = {q['id']: '' for q in public['questions']}

@@ -93,7 +93,7 @@ def create_exam_server(session, port=0, view='exam'):
             if not self.authorized():
                 return
             allowed_paths = {
-                'exam': ('/api/start', '/api/retry', '/api/draft', '/api/submit', '/api/confusion', '/api/focus'),
+                'exam': ('/api/start', '/api/retry', '/api/draft', '/api/answer', '/api/submit', '/api/confusion', '/api/focus'),
                 'match': ('/api/match',),
                 'sets': ('/api/sets/select',),
             }[view]
@@ -122,6 +122,10 @@ def create_exam_server(session, port=0, view='exam'):
                         if not isinstance(data, dict) or set(data) != {'examId', 'questionId'}:
                             raise ValueError('문항 시간 기록 형식을 확인해주세요.')
                         action = 'question_focus'
+                    elif self.path == '/api/answer':
+                        if not isinstance(data, dict) or set(data) != {'examId', 'questionId', 'text', 'revision'}:
+                            raise ValueError('문항 답안 형식을 확인해주세요.')
+                        action = 'web_answer'
                     else:
                         if not isinstance(data, dict) or set(data) != {'examId', 'answers', 'revision'}:
                             raise ValueError('답안 입력 형식을 확인해주세요.')

@@ -12,7 +12,7 @@ try {
   history.replaceState(null, '', APP_ROOT);
 } catch (_) { /* Keep the fragment for refresh when tab storage is unavailable. */ }
 const SVG = 'http://www.w3.org/2000/svg';
-const OUTCOME = {correct: '맞았어요', partial: '일부만 맞았어요', incorrect: '틀렸어요'};
+const OUTCOME = {correct: '맞았어요', partial: '일부만 맞았어요', incorrect: '틀렸어요', pending: '채점 대기 중'};
 // Red-pencil marks drawn over the question number: circle, triangle, slash.
 const MARK = {
   correct: 'M33 7 C18 4 6 15 6 30 C6 46 19 55 33 54 C47 53 56 42 55 28 C54 14 43 5 27 9',
@@ -78,10 +78,10 @@ function chosen(q) {
   return /^\d+$/.test(text) && q.options[Number(text) - 1] !== undefined ? Number(text) : q.options.indexOf(text) + 1;
 }
 function progress() {
-  const count = exam.questions.filter(answered).length;
+  const count = Number.isInteger(exam.answeredCount) ? exam.answeredCount : exam.questions.filter(answered).length;
   if (exam.readOnly) { $('progress').textContent = '지난 시험과 당시 답안을 보고 있어요'; return; }
   $('progress').textContent = exam.webStarted === false ? exam.questionCount + '문항을 준비했어요'
-    : exam.status === 'question' ? exam.questions.length + '문항 중 ' + count + '문항에 답했어요'
+    : exam.status === 'question' ? exam.questions.length + '문항 중 ' + count + '문항의 정답을 확인했어요'
     : exam.status === 'grading' ? (exam.feedback?.length ? '확인 가능한 결과가 있어요' : '채점을 기다리고 있어요') : '채점이 끝났어요';
 }
 function formatDuration(seconds) {
@@ -151,7 +151,7 @@ function confusionButton(q) {
   const button = node('button', undefined, 'confusion-toggle'); button.type = 'button';
   button.append(confusionIcon(), node('span', '헷갈렸어요'));
   const update = confused => { button.classList.toggle('selected', confused); button.setAttribute('aria-pressed', String(confused)); };
-  update((exam.confusedIds || []).includes(q.id)); button.disabled = exam.readOnly || exam.status !== 'question';
+  update((exam.confusedIds || []).includes(q.id)); button.disabled = exam.readOnly || exam.status !== 'question' || (exam.feedback || []).some(item => item.questionId === q.id);
   button.addEventListener('click', async () => {
     if (button.disabled) return;
     const confused = !(exam.confusedIds || []).includes(q.id); button.disabled = true;
@@ -159,13 +159,13 @@ function confusionButton(q) {
       const result = await api('/api/confusion', {examId: exam.examId, questionId: q.id, confused});
       exam.confusedIds = result.confusedIds; update(confused);
     } catch (e) { error(e.message); }
-    finally { button.disabled = exam.readOnly || exam.status !== 'question'; }
+    finally { button.disabled = exam.readOnly || exam.status !== 'question' || (exam.feedback || []).some(item => item.questionId === q.id); }
   });
   return button;
 }
 function define(list, term, text, className) { list.append(node('dt', term), node('dd', text, className)); }
 function options(q, feedback) {
-  const answering = exam.status === 'question' && !exam.readOnly, list = node('ol', undefined, 'options' + (answering ? '' : ' graded'));
+  const answering = exam.status === 'question' && !exam.readOnly && !feedback, list = node('ol', undefined, 'options' + (answering ? '' : ' graded'));
   q.options.forEach((option, n) => {
     const row = node(answering ? 'label' : 'div', undefined, 'option');
     if (answering) {
@@ -233,7 +233,8 @@ function answerInput(q, index) {
 }
 function result(q, feedback) {
   const box = node('div', undefined, 'result'), list = node('dl');
-  box.append(node('p', OUTCOME[feedback.outcome] + ' ' + feedback.score + '/' + feedback.points + '점', 'outcome'));
+  const label = OUTCOME[feedback.outcome] || '결과를 확인했어요';
+  box.append(node('p', feedback.outcome === 'pending' ? label : label + ' ' + feedback.score + '/' + feedback.points + '점', 'outcome'));
   if (q.responseFormat !== 'choice' && q.responseFormat !== 'multi_choice') define(list, '내 답', answered(q) ? displayAnswer(q, drafts[q.id]) : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : '');
   else if (!chosen(q)) define(list, '내 답', '답을 고르지 않았어요.');
   define(list, '정답', feedback.answer, q.responseFormat === 'code' ? 'code' : '');
@@ -258,15 +259,17 @@ function questionItem(q, index, feedback) {
   const item = node('li', undefined, 'question'), num = node('div', String(index + 1), 'num'), body = node('div', undefined, 'body'), text = node('p', undefined, 'q-text');
   item.id = 'q-' + index;
   item.addEventListener('pointerdown', () => focusQuestion(q)); item.addEventListener('focusin', () => focusQuestion(q));
-  if (feedback) num.append(mark(feedback.outcome, index));
+  if (feedback && MARK[feedback.outcome]) num.append(mark(feedback.outcome, index));
   if (q.responseFormat !== 'choice' && q.responseFormat !== 'multi_choice') text.append(node('span', '[' + q.typeLabel + ']', 'kind'), ' ');
   text.append(q.question, ' ', node('span', '[' + q.points + '점]', 'points'));
   if (Number.isFinite(Number(exam.questionTimes?.[q.id]))) text.append(' ', node('span', '[풀이 ' + formatDuration(exam.questionTimes[q.id]) + ']', 'question-time'));
   const head = node('div', undefined, 'question-head'); head.append(text, confusionButton(q)); body.append(head);
   const imageBox = node('div', undefined, 'question-images'); body.append(imageBox); loadQuestionImages(q, imageBox);
   if (q.code) { const pre = node('pre', q.code); if (q.language) pre.dataset.language = q.language; body.append(pre); }
+  const answerable = exam.status === 'question' && !exam.readOnly && !feedback;
   if (q.responseFormat === 'choice' || q.responseFormat === 'multi_choice') body.append(options(q, feedback));
-  else if (exam.status === 'question' && !exam.readOnly) body.append(answerInput(q, index));
+  else if (answerable) body.append(answerInput(q, index));
+  if (answerable) body.append(answerButton(q));
   if (feedback) body.append(result(q, feedback));
   else if (exam.status !== 'question' || exam.readOnly) {
     if (q.responseFormat !== 'choice' && q.responseFormat !== 'multi_choice') { const list = node('dl'); define(list, '내 답', answered(q) ? displayAnswer(q, drafts[q.id]) : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : ''); body.append(list); }
@@ -298,8 +301,23 @@ function omrRow(q, index, feedback) {
     });
     row.append(bubbles);
   } else row.append(node('span', q.typeLabel, 'omr-bar' + (answered(q) ? ' filled' : '')));
-  if (feedback) row.append(node('span', GLYPH[feedback.outcome], 'omr-result'));
+  if (feedback) row.append(node('span', GLYPH[feedback.outcome] || '?', 'omr-result'));
   return row;
+}
+async function submitQuestion(q, button) {
+  if (submitting || exam.readOnly || exam.status !== 'question' || (exam.feedback || []).some(item => item.questionId === q.id)) return;
+  if (!answered(q)) { error('먼저 답을 입력해주세요.'); return; }
+  submitting = true; button.disabled = true; document.body.classList.add('busy'); clearTimeout(timer); error('');
+  try {
+    await focusRequest;
+    await saveDraft();
+    render(await api('/api/answer', {examId: exam.examId, questionId: q.id, text: drafts[q.id] || '', revision}));
+  } catch (e) { error(e.message); button.disabled = false; }
+  finally { submitting = false; document.body.classList.remove('busy'); }
+}
+function answerButton(q) {
+  const button = node('button', '답 제출하고 정답 보기', 'button primary question-submit'); button.type = 'button';
+  button.addEventListener('click', () => submitQuestion(q, button)); return button;
 }
 function render(data) {
   exam = data; exam.confusedIds = data.confusedIds || []; revision = data.revision;
@@ -317,7 +335,7 @@ function render(data) {
   $('time-panel').hidden = ready;
   $('questions').replaceChildren(...data.questions.map((q, i) => questionItem(q, i, feedback[q.id])));
   $('nav').replaceChildren(...data.questions.map((q, i) => omrRow(q, i, feedback[q.id])));
-  $('submit-area').hidden = ready || data.status !== 'question' || data.readOnly;
+  $('submit-area').hidden = ready || data.status !== 'question' || data.readOnly || data.immediateFeedback !== false;
   if (data.status !== 'question') $('saved').textContent = '';
   resetConfirm(); progress();
   $('notice').hidden = data.status === 'question';
@@ -429,7 +447,7 @@ window.addEventListener('beforeunload', event => {
       const data = await api('/api/exam');
       if (data.examId !== exam.examId) { error('새 시험지가 만들어졌어요. 대화에서 새 시험 링크를 열어주세요.'); $('submit').disabled = true; stopped = true; return; }
       // Answers are locked once the status changes, so a full redraw cannot lose typing.
-      if (data.status !== exam.status && !submitting) render(data);
+      if (!submitting && (data.status !== exam.status || (data.feedback || []).length !== (exam.feedback || []).length)) render(data);
       stopped = exam.status === 'finished';
     } catch (e) { error(e.message); }
     finally { if (!stopped) setTimeout(poll, 3000); }

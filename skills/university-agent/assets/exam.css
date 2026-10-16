@@ -112,6 +112,7 @@ textarea.code { display: block; width: 100%; min-height: 168px; margin-top: 14px
 .short:focus-visible, .essay:focus-visible { outline: 0; box-shadow: 0 2px 0 var(--omr); }
 ::placeholder { color: #98a39d; }
 .pending { margin-top: 12px; color: var(--soft); font-size: 14px; }
+.question-submit { margin-top: 14px; }
 
 /* Ordering blocks */
 .ordering-input { margin-top: 14px; }

@@ -664,6 +664,7 @@ class StudySession:
                 'selection': dict(source.get('selection', {})), 'sources': list(source.get('sources', [])),
                 'questions': questions, 'index': 0, 'history': [], 'hinted': False,
                 'hintedIds': [], 'examId': secrets.token_hex(12), 'drafts': {},
+                'immediateFeedback': True, 'webFeedback': [], 'webAnsweredIds': [],
                 'draftRevision': 0, 'shuffledFrom': event['examId']}
 
     @staticmethod
@@ -843,7 +844,8 @@ class StudySession:
         state.clear(); state.update({'phase': 'question', 'settings': settings_value, 'webStarted': False,
             'selection': dict(payload.get('selection', {})), 'sources': list(payload.get('sources', [])),
             'questions': questions, 'index': 0, 'history': [], 'hinted': False, 'hintedIds': [],
-            'examId': secrets.token_hex(12), 'drafts': {}, 'draftRevision': 0,
+            'examId': secrets.token_hex(12), 'drafts': {}, 'immediateFeedback': True,
+            'webFeedback': [], 'webAnsweredIds': [], 'draftRevision': 0,
             'collectionId': payload['collectionId'], 'setId': chosen['setId'],
             'collectionTitle': payload['title'], 'setIndex': chosen['index'], 'totalSets': len(payload['sets'])})
         return {**current(state), 'collectionId': payload['collectionId'], 'setId': chosen['setId'],
@@ -1186,9 +1188,11 @@ class StudySession:
             if not items:
                 state.update(phase='finished', questions=[], history=[], shortageReason=event['data']['shortageReason'])
                 return {'status': 'insufficient', 'answer': '읽은 자료로 근거 있는 문제를 만들 수 없습니다. 다른 자료를 선택하거나 파일을 첨부해주세요.', 'reason': event['data']['shortageReason']}
-            state.update(phase='question', webStarted=False, questions=items, index=0, history=[], hinted=False, hintedIds=[], examId=secrets.token_hex(12), drafts={}, draftRevision=0)
+            state.update(phase='question', webStarted=False, questions=items, index=0, history=[], hinted=False,
+                         hintedIds=[], examId=secrets.token_hex(12), drafts={}, immediateFeedback=True,
+                         webFeedback=[], webAnsweredIds=[], draftRevision=0)
             return {**current(state), 'shortageReason': event['data'].get('shortageReason', '')}
-        elif action in ('web_status', 'start_exam', 'draft', 'web_submit'):
+        elif action in ('web_status', 'start_exam', 'draft', 'web_answer', 'web_submit'):
             return self.web_event(state, event)
         elif action in ('answer', 'submit', 'grade_batch', 'hint', 'skip', 'reveal', 'grade', 'next', 'stop', 'status'):
             return self.practice(state, event)
@@ -1333,6 +1337,9 @@ class StudySession:
     def web_event(self, state, event):
         if state.get('settings', {}).get('delivery') != 'web' or not state.get('questions'):
             raise ValueError('delivery: web으로 생성한 시험지가 필요합니다.')
+        state.setdefault('immediateFeedback', True)
+        state.setdefault('webFeedback', [])
+        state.setdefault('webAnsweredIds', [])
         if event['action'] == 'web_status':
             self._recover_immediate_web_feedback(state)
         started = state.get('webStarted', True)
@@ -1345,6 +1352,51 @@ class StudySession:
         elif event['action'] == 'web_status':
             if not event.get('readOnly') and started and state['phase'] == 'question':
                 self._touch_web_clock(state)
+        elif event['action'] == 'web_answer':
+            if not started:
+                raise ValueError('시험 시작 버튼을 먼저 눌러주세요.')
+            if event.get('examId') != state.get('examId') or state['phase'] != 'question':
+                raise ValueError('이미 제출했거나 시험지가 바뀌었어요. 새로고침해주세요.')
+            if type(event.get('revision')) is not int or event['revision'] != state.get('draftRevision', 0):
+                raise ValueError('다른 시험 창에서 답안이 바뀌었어요. 새로고침 후 이어주세요.')
+            question_id = event.get('questionId')
+            text = event.get('text')
+            if not isinstance(question_id, str) or not isinstance(text, str) or len(text) > 50000:
+                raise ValueError('문항 또는 답안 형식을 확인해주세요.')
+            if question_id in state['webAnsweredIds']:
+                raise ValueError('이미 답을 확인한 문항입니다.')
+            index = next((i for i, question in enumerate(state['questions']) if question['id'] == question_id), None)
+            if index is None:
+                raise ValueError('문항을 확인해주세요.')
+            question = state['questions'][index]
+            state.setdefault('batchFeedback', [])
+            if question['responseFormat'] == 'choice' and text and text not in question['options'] and text not in [str(i) for i in range(1, len(question['options']) + 1)]:
+                raise ValueError('선택지 번호를 확인해주세요.')
+            auto = _auto_web_result(question, text)
+            if auto is None:
+                outcome, answer, score = 'pending', _feedback_answer(question), 0
+                state.setdefault('pendingGrades', {})[question_id] = {
+                    'index': index, 'gradeId': secrets.token_hex(12), 'text': text, 'question': question}
+            else:
+                outcome, answer = auto
+                score = question.get('points', 10) if outcome == 'correct' else 0
+                state['history'].append({'questionId': question_id, 'outcome': outcome, 'hintUsed': False,
+                    'submitted': text, 'concept': question['concept'], 'evidence': question['evidence'],
+                    'criteria': [], 'points': question.get('points', 10), 'score': score})
+            state['drafts'][question_id] = text
+            state['draftRevision'] += 1
+            state['webAnsweredIds'].append(question_id)
+            state['webFeedback'].append({'questionId': question_id, 'outcome': outcome, 'hintUsed': False,
+                'submitted': text, 'concept': question['concept'], 'evidence': question['evidence'],
+                'criteria': [], 'points': question.get('points', 10), 'score': score,
+                'answer': answer, 'explanation': question['explanation']})
+            self._touch_web_clock(state)
+            if len(state['webAnsweredIds']) == len(state['questions']):
+                self._touch_web_clock(state, freeze=True)
+                state['questionTimes'] = self._question_times(state)
+                pending = state.get('pendingGrades', {})
+                state['phase'] = 'grading' if pending else 'finished'
+                state['batchGradeId'] = secrets.token_hex(12)
         else:
             if not started:
                 raise ValueError('시험 시작 버튼을 먼저 눌러주세요.')
@@ -1393,12 +1445,14 @@ class StudySession:
         result.update(self._web_clock(state))
         result['questionTimes'] = state.get('questionTimes', {})
         result['revision'] = state.get('draftRevision', 0)
+        result['immediateFeedback'] = state.get('immediateFeedback', True)
         if state.get('collectionId'):
             result.update(collectionId=state['collectionId'], setId=state['setId'],
                           setIndex=state['setIndex'], totalSets=state['totalSets'])
-        if state['phase'] in ('grading', 'finished'):
+        if state.get('webFeedback') or state['phase'] in ('grading', 'finished'):
             result['summary'] = summary(state)
             result['feedback'] = state.get('webFeedback') or [{**h, 'answer': _feedback_answer(q), 'explanation': q['explanation']} for h in state['history'] for q in state['questions'] if h['questionId'] == q['id']]
+            result['answeredCount'] = len(state.get('webAnsweredIds', [])) or len(state.get('history', []))
             if state['phase'] == 'grading':
                 result['pendingCount'] = len(state.get('pendingGrades', {}))
             result['referenceUse'] = state.get('referenceUse', [])
@@ -1459,7 +1513,10 @@ class StudySession:
                 feedback['hasNext'] = False
                 state['batchFeedback'].append(feedback)
             state.pop('pendingGrades'); state['phase'] = 'finished'
-            state['webFeedback'] = state.get('webFeedback', []) + state.pop('batchFeedback')
+            merged = {item['questionId']: item for item in state.get('webFeedback', [])}
+            for item in state.pop('batchFeedback'):
+                merged[item['questionId']] = item
+            state['webFeedback'] = [merged[q['id']] for q in state['questions'] if q['id'] in merged]
             return {'status': 'finished', 'feedback': state['webFeedback'], 'summary': summary(state)}
         if state['phase'] != 'question':
             raise ValueError('답변 제출 또는 평가가 이미 끝났습니다.')

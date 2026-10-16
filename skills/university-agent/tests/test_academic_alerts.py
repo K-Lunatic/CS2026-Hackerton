@@ -15,7 +15,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from features.academic_alerts import collect_alerts, fingerprint, format_alerts, format_daily_report
+from features.academic_alerts import collect_alerts, fingerprint, format_alerts, format_daily_report, resource_fingerprint
 from scripts import academic_watch
 from storage.local_db import LocalDatabase
 
@@ -112,6 +112,21 @@ class AcademicAlertTests(unittest.TestCase):
             self.assertIn("자료구조", format_alerts({**data, "newNotices": []}))
             self.assertTrue(fingerprint(data))
             db.close()
+
+    def test_resource_changes_are_reported_without_exposing_paths(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with closing(LocalDatabase(Path(folder) / "school.db")) as db:
+                db.upsert_tls_snapshot(
+                    "student", [{"id": "course-1", "name": "자료구조", "source": "tls"}], [], [], "student", None,
+                    resources=[{"id": "resource-1", "courseId": "course-1", "title": "새 자료", "fileName": "week.pdf", "extension": "pdf", "remotePath": "/private/path", "source": "tls"}],
+                )
+                data = collect_alerts(db, "student")
+            current = resource_fingerprint(data)
+            data["resourceChanges"] = data["resources"]
+            text = format_alerts(data, changed=False)
+            self.assertIn("새 자료·자료 업데이트", text)
+            self.assertNotIn("/private/path", text)
+            self.assertTrue(current)
 
     def test_merge_sync_state_preserves_preflight(self):
         with tempfile.TemporaryDirectory() as folder:

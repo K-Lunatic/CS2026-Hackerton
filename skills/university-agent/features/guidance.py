@@ -6,6 +6,48 @@ import re
 from features.deadlines import format_deadline
 
 
+CAPABILITY_INVENTORY = [
+    {"name": "학교 학사정보", "description": "TLS의 과제·강의·공지·수업자료·시청 상태", "access": "연결·동기화된 범위"},
+    {"name": "에타 참고", "description": "강의평·시험 정보 등 참고 자료", "access": "접속 가능할 때만"},
+    {"name": "수업자료 분석", "description": "PDF·PPT·DOCX·코드의 개념·근거·문제 후보", "access": "읽을 수 있고 허용된 자료"},
+    {"name": "학습 기록", "description": "저장된 분석·문제 풀이·채점·취약 개념", "access": "이 기기의 공용 학습 저장소"},
+    {"name": "Notability", "description": "노트·필기·녹음·완료 전사 연결", "access": "사용자 동의 후 선택한 노트만"},
+    {"name": "학습 팩", "description": "분석 결과와 문제 세트의 다른 기기 이동", "access": "사용자가 직접 내보내고 가져올 때"},
+]
+
+
+SKILL_INVENTORY = [
+    {"name": "터틀넥 대학생활", "description": "TLS·에타·과제·강의·시험 흐름"},
+    {"name": "Notability 학습", "description": "노트·녹음·전사·필기 연결"},
+    {"name": "문서·PDF·PPT 분석", "description": "원본 자료 읽기와 근거 확인"},
+    {"name": "웹 시험·채점", "description": "문제 풀이·채점·오답 복습"},
+    {"name": "학습 기록·학습 팩", "description": "여러 채팅·기기에서 학습 결과 재사용"},
+]
+
+
+def learning_inventory_answer() -> dict:
+    return {
+        "toolCalls": [],
+        "data": {"capabilities": CAPABILITY_INVENTORY, "skills": SKILL_INVENTORY},
+        "needsInput": True,
+        "answer": (
+            "현재 쓸 수 있는 학습 기능과 자료 범위예요.\n"
+            + "\n".join(f"• {item['name']} — {item['description']} ({item['access']})" for item in CAPABILITY_INVENTORY)
+            + "\n\n사용 가능한 스킬:\n"
+            + "\n".join(f"• {item['name']} — {item['description']}" for item in SKILL_INVENTORY)
+            + "\n\n학습 스타일과 실제 사용 자료를 확인하려면 ‘학습 프로필 확인해줘’라고 말해 주세요."
+        ),
+    }
+
+
+def needs_learning_discovery_consent(text: str) -> bool:
+    return bool(re.search(
+        r'(?:개념|자료|학습\s*정보|학습\s*스타일|노타빌리티|노트|스킬).{0,18}'
+        r'(?:분석|파악|정리|연결|읽어)|(?:전체|원본).{0,12}(?:자료|노트).{0,12}(?:분석|읽어)',
+        text, re.I,
+    ))
+
+
 def resource_unavailable_reason(item):
     reason = str(item.get('downloadReason') or '')
     # Older imports mislabeled viewer failures as prohibited; do not call them a ban.
@@ -77,22 +119,44 @@ def academic_list_answer(provider, user_id, kind, items):
 
 def usage_guide(text: str = "") -> dict:
     if re.search(r"과제|할\s*일|마감", text):
-        examples = ["이번 주 안 낸 과제 알려줘", "새 과제 추가해줘", "하던 과제 어디까지 했지?"]
+        examples = ["이번 주 안 낸 과제 알려줘", "오늘 뭐 해야 해?", "하던 과제 어디까지 했지?"]
         intro = "남은 과제를 확인하거나, 새 과제를 적어 두거나, 하던 과제의 기록을 찾을 수 있어요."
     elif re.search(r"강의|영상|수업", text):
-        examples = ["아직 안 본 강의 알려줘", "지금 내 상태 어때?"]
+        examples = ["아직 안 본 강의 알려줘", "지금 내 상태 어때?", "수업자료로 복습하고 싶어"]
         intro = "덜 본 강의와 시청률, 학교에 표시된 시청 기한을 확인할 수 있어요."
     elif re.search(r"공부|복습|시험|퀴즈|문제|수업\s*자료", text):
-        examples = ["자료구조 주요 내용 학습시켜줘", "이 자료로 객관식 5문제 만들어줘", "시험 정보 저장해줘"]
+        examples = ["이 자료 핵심 개념부터 설명해줘", "이 자료로 객관식 5문제 만들어줘", "틀린 부분만 다시 연습하고 싶어"]
         intro = "읽을 수 있는 수업자료를 바탕으로 핵심 개념을 정리하거나 연습문제를 만들 수 있어요."
     else:
-        examples = ["오늘 뭐 해야 해?", "과제 진행 상황 저장해줘", "수업자료로 복습하고 싶어"]
+        examples = ["오늘 뭐 해야 해?", "이번 주 안 낸 과제 알려줘", "수업자료로 복습하고 싶어"]
         intro = "학교에서 할 일을 확인하고 정리하는 도우미예요. 기능 이름을 몰라도 평소 말하듯 요청하면 돼요."
     return {"toolCalls": [], "data": {"suggestions": examples}, "needsInput": True,
-            "answer": intro + "\n예를 들면:\n" + "\n".join(f"• {example}" for example in examples) + "\n원하는 일을 한 문장으로 말해 주세요."}
+            "answer": intro + "\n처음이면 아래 문장 중 하나를 그대로 보내도 돼요.\n" + "\n".join(f"• {example}" for example in examples) + "\n원하는 일을 한 문장으로 말해 주세요. 다음 단계는 제가 이어서 안내할게요."}
 
 
 def guidance_request(text: str) -> dict | None:
+    if re.search(r'(?:사용\s*가능한|접근\s*가능한|쓸\s*수\s*있는).{0,16}(?:스킬|기능|자료|정보)|(?:스킬|기능).{0,16}(?:목록|뭐가|무엇)', text, re.I):
+        return learning_inventory_answer()
+    if re.search(r'학습\s*(?:프로필|스타일).{0,20}(?:확인|저장|설정|파악)|노타빌리티.{0,20}(?:공부|학습|사용)', text, re.I):
+        return {
+            'toolCalls': [], 'needsLearningProfile': True,
+            'nextCommands': ['python3 scripts/run_agent.py learning-profile'],
+            'answer': (
+                '학습 프로필을 여러 채팅에서 함께 쓸 수 있게 확인할게요. '
+                '주로 ① Notability ② 노트북 메모장 ③ 손필기 노트 ④ 듣고 끝남 ⑤ 섞어서 중 무엇인지, '
+                '그리고 강의 후 요약·문제풀이·다시 설명 중 무엇을 하는지 알려 주세요. '
+                'Notability의 노트 내용이나 녹음을 읽는 것은 별도 동의 뒤에 선택한 노트만 진행합니다.'
+            ),
+        }
+    if needs_learning_discovery_consent(text):
+        return {
+            'toolCalls': [], 'needsLearningDiscoveryConsent': True,
+            'answer': (
+                '개념과 자료를 분석하기 전에 범위를 확인할게요. TLS에서 동기화된 수업자료와 이 기기에 저장된 '
+                '분석·풀이 기록을 확인해도 될까요? Notability의 노트·필기·녹음·전사까지 보려면 별도 동의가 필요하고, '
+                '동의해도 선택한 노트만 읽습니다. 확인한 결과는 여러 채팅에서 재사용할 학습 프로필과 공용 분석 기록으로 저장합니다.'
+            ),
+        }
     if re.search(r'자율강좌.{0,20}(?:세팅|설정|만들|준비|학습)|(?:학습|복습).{0,20}자율강좌', text, re.I):
         return {'toolCalls': [], 'needsAutonomousCourseSetup': True,
                 'nextCommands': ['python3 scripts/autonomous_courses.py', 'python3 scripts/autonomous_course_structure.py --course-id "<확인된 강좌 ID>"'],
@@ -154,4 +218,4 @@ def guidance_request(text: str) -> dict | None:
 
 
 def is_status_request(text: str) -> bool:
-    return bool(re.search(r"컨텍스트|전체|상태|(?:지금|현재)(?:은|는)?.{0,12}어때|나[.\s…]*어때|할\s*일|해야\s*할\s*일|마감\s*목록|(?:오늘|지금|다음).{0,12}(?:뭐|무엇|뭘).{0,8}(?:해|하)|(?:뭐|무엇)부터.{0,8}(?:해|하)|급한.*(?:것|거|일)", text))
+    return bool(re.search(r"컨텍스트|전체|상태|(?:지금|현재)(?:은|는)?.{0,12}어때|나[.\s…]*어때|할\s*일|해야\s*할\s*일|마감\s*목록|오늘(?:은|는)?\s*(?:뭐|무엇|뭘)\s*(?:할까|하지|해볼까)|(?:오늘|지금|다음).{0,12}(?:뭐|무엇|뭘).{0,8}(?:해|하)|(?:뭐|무엇)부터.{0,8}(?:해|하)|급한.*(?:것|거|일)", text))

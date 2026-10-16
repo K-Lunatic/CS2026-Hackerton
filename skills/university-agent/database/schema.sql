@@ -12,6 +12,14 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TEXT NOT NULL
 );
 
+-- Shared learner preferences/consent for every chat on this device. It contains
+-- metadata only; Notability originals and TLS credentials never belong here.
+CREATE TABLE IF NOT EXISTS learner_profiles (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  profile_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Fast TLS preflight fingerprints. They describe the visible course activity list,
 -- not the source records themselves; a mismatch triggers a normal refresh.
 CREATE TABLE IF NOT EXISTS sync_state (

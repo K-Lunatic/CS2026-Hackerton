@@ -93,12 +93,26 @@ def collect_alerts(provider, user_id: str, *, now: datetime | None = None,
     for item in notices:
         item["url"] = _url(item, "notice", base_url)
     notices.sort(key=lambda item: item.get("publishedAt") or "", reverse=True)
-    return {"asOf": now.isoformat(), "alerts": alerts, "notices": notices[:10], "courses": courses}
+    resources = provider.get_resources(user_id)
+    return {"asOf": now.isoformat(), "alerts": alerts, "notices": notices[:10], "resources": resources, "courses": courses}
 
 
 def fingerprint(data: dict[str, Any]) -> str:
     payload = [{key: item.get(key) for key in ("kind", "id", "state", "dueAt", "status", "summary")} for item in data["alerts"]]
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def resource_fingerprint(data: dict[str, Any]) -> dict[str, str]:
+    """Track visible resource metadata without exposing local or remote paths."""
+    result = {}
+    for item in data.get("resources", []):
+        key = str(item.get("id") or "")
+        if key:
+            result[key] = hashlib.sha256(json.dumps([
+                item.get("courseId"), item.get("title"), item.get("fileName"),
+                item.get("downloadStatus"),
+            ], ensure_ascii=False).encode()).hexdigest()
+    return result
 
 
 def format_daily_report(provider, user_id, checked_at, *, now=None):
@@ -147,7 +161,8 @@ def notice_ids(data: dict[str, Any]) -> list[str]:
 def format_alerts(data: dict[str, Any], *, changed: bool = True) -> str:
     alerts = data.get("alerts", [])
     notices = data.get("newNotices", [])
-    if (not changed and not notices) or (not alerts and not notices):
+    resource_changes = data.get("resourceChanges", [])
+    if (not changed and not notices and not resource_changes) or (not alerts and not notices and not resource_changes):
         return ""
     lines = ["⚠️ 터틀넥이 먼저 하라고 알려드리는 것들이 있어요."]
     for item in alerts[:8]:
@@ -164,4 +179,8 @@ def format_alerts(data: dict[str, Any], *, changed: bool = True) -> str:
             lines.append(f"내용: {content}")
         if item.get("url"):
             lines.append(f"바로 보기: {item['url']}")
+    courses = data.get("courses", {})
+    for item in resource_changes[:5]:
+        lines.append(f"\n[새 자료·자료 업데이트] {courses.get(item.get('courseId'), '과목 확인 필요')} · {item.get('title', '수업자료')}")
+        lines.append("수업자료 목록이 바뀌었어요. 필요하면 이 자료를 읽고 핵심 개념과 연습문제를 준비할 수 있어요.")
     return "\n".join(lines)

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from features.academic_alerts import collect_alerts, fingerprint, format_alerts, format_daily_report, notice_ids
+from features.academic_alerts import collect_alerts, fingerprint, format_alerts, format_daily_report, notice_ids, resource_fingerprint
 from features.deadlines import deadline
 from features.secret_boundary import redact_output
 from providers.credentials import CONFIG_PATH
@@ -109,14 +109,21 @@ def run_once(*, sync: bool = True, send_notification: bool = True, force_report:
             data = collect_alerts(database, user_id)
         previous_fingerprint = state.get("watch_alert_fingerprint")
         previous_notice_ids = set(json.loads(state.get("watch_notice_ids", "[]")))
+        previous_resources = json.loads(state.get("watch_resource_fingerprint", "{}"))
         current_notice_ids = set(notice_ids(data))
         data["newNotices"] = [item for item in data["notices"] if item["id"] in current_notice_ids - previous_notice_ids] if previous_notice_ids else []
-        changed = force_report or previous_fingerprint is None or previous_fingerprint != fingerprint(data)
+        current_resources = resource_fingerprint(data)
+        data["resourceChanges"] = [] if not previous_resources else [
+            item for item in data.get("resources", [])
+            if current_resources.get(str(item.get("id"))) != previous_resources.get(str(item.get("id")))
+        ]
+        changed = force_report or previous_fingerprint is None or previous_fingerprint != fingerprint(data) or bool(data["resourceChanges"])
         report = format_alerts(data, changed=changed)
         with closing(LocalDatabase(db_path)) as database:
             database.merge_sync_state(user_id, {
                 "watch_alert_fingerprint": fingerprint(data),
                 "watch_notice_ids": json.dumps(sorted(current_notice_ids), ensure_ascii=False),
+                "watch_resource_fingerprint": json.dumps(current_resources, ensure_ascii=False, sort_keys=True),
                 "watch_checked_at": datetime.now(timezone.utc).isoformat(),
             })
         if report:

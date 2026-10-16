@@ -172,7 +172,7 @@ def _payload(parser: _FormParser, fields: dict[str, object]) -> dict[str, object
         if info.get("kind") in {"file", "submit", "button", "reset"}:
             continue
         values = parser.field_values.get(name, [info.get("value", "")])
-        payload[name] = values if len(values) > 1 else values[0]
+        payload[name] = values if len(values) > 1 else next(iter(values), info.get("value", ""))
     for name, value in fields.items():
         if name not in parser.fields:
             raise QuizQuestionError(f"화면에서 확인되지 않은 {name} 필드는 보내지 않습니다.")

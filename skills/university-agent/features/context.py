@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 from datetime import datetime
 
@@ -23,6 +24,9 @@ def get_current_context(provider: TLSProvider, user_id: str, bookmarks: Callable
         else:
             overdue.append(item)
     user = provider.get_user(user_id)
+    notices = provider.get_notices(user_id)
+    exam_notices = [item for item in notices
+                    if re.search(r'시험|중간|기말|고사', f"{item.get('title', '')} {item.get('content', '')}", re.I)][:5]
     return {
         "user": user,
         "asOf": now.isoformat(),
@@ -35,6 +39,7 @@ def get_current_context(provider: TLSProvider, user_id: str, bookmarks: Callable
         "unknownSubmissionAssignments": [item for item in assignments if item["submissionStatus"] == "UNKNOWN"],
         "unsubmittedAssignments": pending,
         "unfinishedLectures": get_lectures(provider, user_id, unfinished=True),
+        "examNotices": exam_notices,
         "bookmarks": bookmarks(),
     }
 
@@ -54,6 +59,14 @@ def format_current_context(data: dict[str, Any]) -> str:
         if due is not None and due.date() <= now.date():
             state = "기한 지남" if due < now else "오늘 마감"
             lines.append(f"{state}: {courses.get(item.get('courseId'), '과목 확인 필요')} / {item['title']} — {format_deadline(item.get('availableUntil'))} · 시청률 {item['watchProgress']:g}% · 미완료")
+    if data.get("examNotices"):
+        lines.append("확인된 시험 관련 공지:")
+        for item in data["examNotices"][:3]:
+            content = re.sub(r"<[^>]+>", " ", str(item.get("content") or ""))
+            content = re.sub(r"\s+", " ", content).strip()
+            if len(content) > 160:
+                content = content[:159].rstrip() + "…"
+            lines.append(f"- {courses.get(item.get('courseId'), '과목 확인 필요')} / {item.get('title', '시험 공지')}" + (f" — {content}" if content else ""))
     actionable = [(deadline(item.get("dueAt")), item, "과제") for item in data["upcomingAssignments"]]
     for item in data["unfinishedLectures"]:
         due, start = deadline(item.get("availableUntil")), deadline(item.get("availableFrom"))
@@ -71,5 +84,7 @@ def format_current_context(data: dict[str, Any]) -> str:
         lines.append("지금 할 일: 미완료 강의의 시청 가능 기간을 확인해 보세요.")
     else:
         lines.append("현재 기록에는 남은 과제·강의가 없어요. 최근 변경 여부가 궁금하면 TLS 새로고침을 요청해 주세요.")
+    if data.get("examNotices"):
+        lines.append("시험 공지의 일정과 범위를 기준으로 오늘 공부할 과목을 정하고, 저장된 강의평·학습 기록이 있으면 우선순위에 함께 반영할게요.")
     lines.append("실시간 TLS 조회 결과가 아닙니다. 이후 제출·시청한 내용은 동기화 후 반영됩니다.")
     return "\n".join(lines)

@@ -157,7 +157,9 @@ def _enable_edit_mode(session: MoodleSession, course_id: str, html: str, page_ur
     return response_html, response.geturl()
 
 
-def update_section_name(course_url: str, section_number: str, name: str) -> dict[str, object]:
+def update_section_name(course_url: str, section_number: str, name: str,
+                        summary_append: str = "", summary_remove: str = "",
+                        summary_replace: str = "") -> dict[str, object]:
     if not re.fullmatch(r"[1-9][0-9]*", str(section_number)):
         raise SectionUpdateError("토픽 번호는 1 이상의 숫자여야 해요.")
     name = validate_visible_name(name, field="토픽 이름")
@@ -194,6 +196,14 @@ def update_section_name(course_url: str, section_number: str, name: str) -> dict
         raise SectionUpdateError("토픽 편집 양식의 대상 ID가 화면 링크와 달라요.")
     fields = dict(parser.fields)
     fields["name"] = name
+    if summary_replace:
+        fields["summary_editor[text]"] = summary_replace.strip()
+    elif summary_remove:
+        fields["summary_editor[text]"] = fields.get("summary_editor[text]", "").replace(summary_remove, "")
+    elif summary_append:
+        current_summary = fields.get("summary_editor[text]", "")
+        if summary_append not in current_summary:
+            fields["summary_editor[text]"] = (current_summary.rstrip() + "\n\n" + summary_append).strip()
     fields.pop("usedefaultname", None)
     fields["submitbutton"] = "저장"
     response_html, response = session._request(action_parts.path, data=urlencode(fields).encode(), referer=page_url)
@@ -203,8 +213,22 @@ def update_section_name(course_url: str, section_number: str, name: str) -> dict
     _href, current_name = _section_link(refreshed, str(section_number))
     if current_name != name:
         raise SectionUpdateError("TLS가 토픽 이름 저장 결과를 다시 확인해 주지 않았어요.")
+    if summary_append or summary_remove or summary_replace:
+        refreshed_html, refreshed_url = session.get_page(urljoin(session.base_url, href))
+        refreshed_parser = _SectionFormParser()
+        refreshed_parser.feed(refreshed_html)
+        refreshed_summary = refreshed_parser.fields.get("summary_editor[text]", "")
+        if summary_append and summary_append not in refreshed_summary:
+            raise SectionUpdateError("TLS가 토픽 개요 저장 결과를 다시 확인해 주지 않았어요.")
+        if summary_remove and summary_remove in refreshed_summary:
+            raise SectionUpdateError("TLS가 토픽 개요 정리 결과를 다시 확인해 주지 않았어요.")
+        if summary_replace and refreshed_summary.strip() != summary_replace.strip():
+            raise SectionUpdateError("TLS가 토픽 개요 교체 결과를 다시 확인해 주지 않았어요.")
     return {"courseId": course_id, "section": section_number, "oldName": old_name,
-            "name": name, "endpoint": "/course/editsection.php", "verified": True}
+            "name": name, "summaryAppended": bool(summary_append),
+            "summaryRemoved": bool(summary_remove),
+            "summaryReplaced": bool(summary_replace),
+            "endpoint": "/course/editsection.php", "verified": True}
 
 
 def main() -> None:
@@ -212,9 +236,14 @@ def main() -> None:
     parser.add_argument("--course-url", required=True)
     parser.add_argument("--section", required=True)
     parser.add_argument("--name", required=True)
+    parser.add_argument("--append-summary", default="")
+    parser.add_argument("--remove-summary", default="")
+    parser.add_argument("--replace-summary", default="")
     args = parser.parse_args()
     try:
-        print(json.dumps(update_section_name(args.course_url, args.section, args.name), ensure_ascii=False))
+        print(json.dumps(update_section_name(args.course_url, args.section, args.name,
+                                             args.append_summary, args.remove_summary,
+                                             args.replace_summary), ensure_ascii=False))
     except (SectionUpdateError, LoginError, OSError, ValueError) as error:
         raise SystemExit(str(error)) from error
 

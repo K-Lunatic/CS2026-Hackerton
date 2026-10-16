@@ -67,6 +67,17 @@ class AcademicStatusTests(ProjectTestBase):
         self.assertNotIn('LATE', todo_ids)
         self.assertIn('UNKNOWN', todo_ids)
 
+    def test_today_what_to_do_is_a_status_request_and_shows_exam_notice(self):
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE notices SET title=?, content=? WHERE id=?",
+                ('중간고사 안내', '시험은 다음 주 월요일입니다.', 'notice-1'))
+        with patch.object(run_agent, 'database', return_value=self.db), patch.object(run_agent, 'USER_ID', 'fixture-user'):
+            result = run_agent.ask('오늘 뭐할까')
+        self.assertEqual(result['toolCalls'], ['get_current_context'])
+        self.assertIn('확인된 시험 관련 공지', result['answer'])
+        self.assertIn('시험은 다음 주 월요일입니다.', result['answer'])
+
     def test_all_filter_combinations_preserve_order_and_input(self):
         original = self.db.get_assignments('fixture-user')
         manual = next(item['id'] for item in original if item['source'] == 'manual')
@@ -142,3 +153,10 @@ class AcademicStatusTests(ProjectTestBase):
                 result = run_agent.ask(text)
                 self.assertTrue(result['toolCalls'] or result.get('needsInput'))
         self.assertEqual(self.db.connection.total_changes, before)
+
+    def test_beginner_guide_uses_plain_language_and_starter_questions(self):
+        result = usage_guide()
+        self.assertIn('처음이면', result['answer'])
+        self.assertIn('오늘 뭐 해야 해?', result['data']['suggestions'])
+        self.assertLessEqual(len(result['data']['suggestions']), 3)
+        self.assertNotIn('run_agent.py', result['answer'])

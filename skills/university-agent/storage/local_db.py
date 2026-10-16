@@ -74,6 +74,65 @@ class LocalDatabase:
         row = self.connection.execute("SELECT id, name, department, updated_at AS lastSyncedAt FROM users WHERE id=?", (user_id,)).fetchone()
         return dict(row, department=row["department"] or None) if row else None
 
+    def get_learner_profile(self, user_id: str) -> dict[str, Any]:
+        """Return shared, user-confirmed learning metadata without source contents."""
+        default = {
+            "learningStyle": None,
+            "preferredSources": [],
+            "availableSources": [],
+            "skillInventory": [],
+            "consents": {"sourceAnalysis": False, "notabilityMetadata": False, "notabilityContent": False},
+            "evidence": [],
+        }
+        try:
+            row = self.connection.execute("SELECT profile_json, updated_at FROM learner_profiles WHERE user_id=?", (user_id,)).fetchone()
+        except sqlite3.OperationalError as error:
+            if "no such table" not in str(error):
+                raise
+            return {**default, "updatedAt": None}
+        if not row:
+            return {**default, "updatedAt": None}
+        try:
+            saved = json.loads(row["profile_json"])
+        except (TypeError, ValueError):
+            saved = {}
+        if not isinstance(saved, dict):
+            saved = {}
+        result = {**default, **saved}
+        result["consents"] = {**default["consents"], **(saved.get("consents") or {})}
+        result["updatedAt"] = row["updated_at"]
+        return result
+
+    def save_learner_profile(self, user_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Merge explicit answers; never infer a learning style from activity."""
+        if self.read_only:
+            raise sqlite3.OperationalError("readonly database")
+        if not isinstance(updates, dict) or set(updates) - {"learningStyle", "preferredSources", "availableSources", "skillInventory", "consents", "evidence"}:
+            raise ValueError("학습 프로필에는 허용된 항목만 저장할 수 있어요.")
+        profile = self.get_learner_profile(user_id)
+        profile.pop("updatedAt", None)
+        for key, value in updates.items():
+            if key == "learningStyle":
+                if value is not None and (not isinstance(value, str) or not value.strip()):
+                    raise ValueError("learningStyle은 확인된 문자열이거나 null이어야 해요.")
+                profile[key] = value.strip() if isinstance(value, str) else value
+            elif key in {"preferredSources", "availableSources", "skillInventory", "evidence"}:
+                if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+                    raise ValueError(f"{key}는 비어 있지 않은 문자열 목록이어야 해요.")
+                profile[key] = list(dict.fromkeys(item.strip() for item in value))
+            elif key == "consents":
+                if not isinstance(value, dict) or any(not isinstance(item, bool) for item in value.values()):
+                    raise ValueError("consents는 참·거짓 값의 목록이어야 해요.")
+                profile["consents"].update(value)
+        now = datetime.now(timezone.utc).isoformat()
+        self.connection.execute(
+            "INSERT INTO learner_profiles(user_id, profile_json, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET profile_json=excluded.profile_json, updated_at=excluded.updated_at",
+            (user_id, json.dumps(profile, ensure_ascii=False), now),
+        )
+        self.connection.commit()
+        return {**profile, "updatedAt": now}
+
     def get_sync_state(self, user_id: str) -> dict[str, str]:
         try:
             rows = self.connection.execute(

@@ -389,6 +389,8 @@ def main() -> None:
     sub.add_parser("notices")
     sub.add_parser("todos")
     sub.add_parser("resources")
+    profile_parser = sub.add_parser("learning-profile", help="여러 채팅에서 공유하는 학습 프로필 조회·저장")
+    profile_parser.add_argument("--updates-json", default=None, help="사용자가 직접 확인한 프로필 항목 JSON")
     originals = sub.add_parser('resource-file', help='강의 원본 파일 제공')
     originals.add_argument('--course', default='')
     originals.add_argument('--resource', default='')
@@ -544,6 +546,20 @@ def main() -> None:
         result = {"toolCalls": ["get_notices"], "data": database().get_notices(USER_ID)}
     elif args.command == "resources":
         result = {"toolCalls": ["get_resources"], "data": database().get_resources(USER_ID)}
+    elif args.command == "learning-profile":
+        try:
+            if args.updates_json is None:
+                profile = database().get_learner_profile(USER_ID)
+                result = {"toolCalls": ["get_learner_profile"], "data": profile,
+                          "answer": "여러 채팅에서 함께 쓰는 학습 프로필이에요. 아직 사용자가 확인해 준 학습 방식은 저장되지 않았습니다." if not profile.get("learningStyle") else "여러 채팅에서 함께 쓰는 학습 프로필을 확인했어요."}
+            else:
+                updates = json.loads(args.updates_json)
+                profile = database(write=True).save_learner_profile(USER_ID, updates)
+                result = {"toolCalls": ["save_learner_profile"], "data": profile,
+                          "answer": "확인해 준 학습 방식과 자료 접근 동의를 공용 학습 프로필에 저장했어요."}
+        except (ValueError, json.JSONDecodeError) as error:
+            result = {"toolCalls": ["get_learner_profile"], "data": None,
+                      "error": {"code": "INVALID_LEARNING_PROFILE", "message": str(error)}, "answer": str(error)}
     elif args.command == 'analysis-history':
         result = {'toolCalls': ['get_analysis_records'], 'data': analysis_records.read(
             DB_PATH.parent, USER_ID, database().get_resources(USER_ID), args.id,

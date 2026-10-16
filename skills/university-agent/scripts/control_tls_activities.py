@@ -94,7 +94,7 @@ def _payload(parser: _FormParser, requested: dict[str, object]) -> dict[str, obj
         if info.get("kind") in {"file", "submit", "button", "reset"}:
             continue
         values = parser.field_values.get(name, [info.get("value", "")])
-        payload[name] = values if len(values) > 1 else values[0]
+        payload[name] = values if len(values) > 1 else (values[0] if values else info.get("value", ""))
     submit = next((name for name, info in parser.fields.items() if name == "submitbutton"), None)
     if submit:
         payload[submit] = parser.fields[submit].get("value", "저장")

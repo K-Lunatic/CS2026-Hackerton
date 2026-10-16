@@ -117,7 +117,7 @@ class ExamWebTests(ProjectTestBase):
     def test_review_collection_uses_saved_course_questions(self):
         s = self.make_exam()
         public = s.call({'action': 'web_status'})
-        answers = {q['id']: '1' if q['type'] == 'mcq' else '정렬된 배열' for q in public['questions']}
+        answers = {q['id']: '1' if q['type'] == 'mcq' else '정렬된 배열에서 탐색' for q in public['questions']}
         submitted = s.call({'action': 'web_submit', 'examId': public['examId'], 'revision': 0, 'answers': answers})
         pending = s.call({'action': 'status'})
         grades = [{'questionId': item['questionId'], 'criteria': [
@@ -137,7 +137,7 @@ class ExamWebTests(ProjectTestBase):
         serialized = json.dumps(public, ensure_ascii=False)
         for secret in ('acceptedAnswers', 'rubric', 'keywords', 'evidence', 'hostOnly', 'explanation'):
             self.assertNotIn(secret, serialized)
-        answers = {q['id']: '1' if q['type'] == 'mcq' else '정렬된 배열' for q in public['questions']}
+        answers = {q['id']: '1' if q['type'] == 'mcq' else '정렬된 배열에서 탐색' for q in public['questions']}
         draft = s.call({'action': 'draft', 'examId': public['examId'], 'revision': 0, 'answers': answers})
         self.assertEqual(self.session('exam').call({'action': 'web_status'})['drafts'], answers)
         with self.assertRaises(ValueError):
@@ -148,7 +148,10 @@ class ExamWebTests(ProjectTestBase):
         self.assertEqual(submitted['status'], 'grading')
         self.assertNotIn('hostOnly', submitted)
         pending = self.session('exam').call({'action': 'status'})
-        self.assertEqual(len(pending['hostOnly']['answers']), 6)  # Includes MCQ: AI grades all web answers.
+        self.assertEqual(len(pending['hostOnly']['answers']), 4)  # Choice and accepted short answers are immediate.
+        immediate = s.call({'action': 'web_status'})
+        self.assertEqual({item['questionId'] for item in immediate['feedback']}, {'q1', 'q2'})
+        self.assertEqual(immediate['summary']['score'], 33.33)
         grades = [{'questionId': item['questionId'], 'criteria': [
             {'criterion': '정렬 조건', 'met': True, 'feedback': '정렬 조건 충족'},
             {'criterion': '탐색 범위 변화', 'met': False, 'feedback': '범위 변화 누락'}]}
@@ -156,10 +159,10 @@ class ExamWebTests(ProjectTestBase):
         with self.assertRaises(ValueError):
             s.call({'action': 'grade_batch', 'gradeId': 'stale', 'grades': grades})
         result = s.call({'action': 'grade_batch', 'gradeId': pending['gradeId'], 'grades': grades})
-        self.assertEqual(result['summary']['score'], 50)
+        self.assertEqual(result['summary']['score'], 66.67)
         self.assertEqual(result['summary']['totalPoints'], 100)
         finished = s.call({'action': 'web_status'})
-        self.assertEqual(finished['summary']['score'], 50)
+        self.assertEqual(finished['summary']['score'], 66.67)
         self.assertEqual(finished['totalPoints'], 100)
         self.assertEqual(len(finished['feedback']), 6)
         self.assertIn('answer', finished['feedback'][0])

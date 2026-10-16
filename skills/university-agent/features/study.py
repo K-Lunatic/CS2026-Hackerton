@@ -432,6 +432,43 @@ def score_percent(state):
     return min(100, max(0, round(raw_score / total_points * 100, 2)))
 
 
+def _feedback_answer(question):
+    if question.get('responseFormat') == 'multi_choice':
+        return ', '.join(question.get('correctAnswers') or [question['answer']])
+    return question['answer']
+
+
+def _auto_web_result(question, submitted):
+    """Grade only answers whose contract already gives an unambiguous rule."""
+    response_format = question.get('responseFormat')
+    correct = None
+    if response_format == 'choice':
+        answer = submitted
+        if answer.isdigit() and 1 <= int(answer) <= len(question.get('options', [])):
+            answer = question['options'][int(answer) - 1]
+        correct = answer == question['answer']
+    elif response_format == 'multi_choice':
+        try:
+            selected = json.loads(submitted or '[]')
+        except (TypeError, ValueError):
+            selected = None
+        if isinstance(selected, list) and all(isinstance(item, int) for item in selected):
+            selected = {question['options'][item - 1] for item in selected
+                        if 1 <= item <= len(question['options'])}
+            correct = selected == set(question.get('correctAnswers') or [question['answer']])
+    elif response_format == 'ordering':
+        try:
+            correct = json.loads(submitted or '[]') == json.loads(question['answer'])
+        except (TypeError, ValueError):
+            correct = False
+    elif question.get('acceptedAnswers'):
+        answer = str(submitted or '').strip().casefold()
+        correct = any(answer == str(expected).strip().casefold() for expected in question['acceptedAnswers'])
+    if correct is None:
+        return None
+    return ('correct' if correct else 'incorrect', _feedback_answer(question))
+
+
 class StudySession:
     """One persisted state per authenticated local user and host conversation.
 
@@ -1324,15 +1361,27 @@ class StudySession:
             else:
                 if set(answers) != ids:
                     raise ValueError('모든 문항의 답안이 필요합니다. 빈 답안은 미응답으로 제출됩니다.')
-                pending = {}
+                pending, immediate = {}, []
                 for index, q in enumerate(state['questions']):
                     text = answers[q['id']]
                     if q['responseFormat'] == 'choice' and text and text not in q['options'] and text not in [str(i) for i in range(1, len(q['options']) + 1)]:
                         raise ValueError('선택지 번호를 확인해주세요.')
-                    pending[q['id']] = {'index': index, 'gradeId': secrets.token_hex(12), 'text': text, 'question': q}
+                    auto = _auto_web_result(q, text)
+                    if auto is None:
+                        pending[q['id']] = {'index': index, 'gradeId': secrets.token_hex(12), 'text': text, 'question': q}
+                        continue
+                    outcome, answer = auto
+                    item = {'questionId': q['id'], 'outcome': outcome, 'hintUsed': False,
+                            'submitted': text, 'concept': q['concept'], 'evidence': q['evidence'],
+                            'criteria': [], 'points': q.get('points', 10),
+                            'score': q.get('points', 10) if outcome == 'correct' else 0}
+                    state['history'].append(item)
+                    immediate.append({**item, 'answer': answer, 'explanation': q['explanation']})
                 self._touch_web_clock(state, freeze=True)
                 state['questionTimes'] = self._question_times(state)
-                state.update(phase='grading', drafts=answers, pendingGrades=pending, batchFeedback=[], batchGradeId=secrets.token_hex(12))
+                state.update(phase='grading' if pending else 'finished', drafts=answers,
+                             pendingGrades=pending, webFeedback=immediate, batchFeedback=[],
+                             batchGradeId=secrets.token_hex(12))
         started = state.get('webStarted', True)
         result = {'status': state['phase'] if started else 'ready', 'examId': state['examId'], 'title': ' / '.join(dict.fromkeys(s['name'] for s in state['sources'])),
                   'webStarted': started, 'questionCount': len(state['questions']),
@@ -1345,9 +1394,11 @@ class StudySession:
         if state.get('collectionId'):
             result.update(collectionId=state['collectionId'], setId=state['setId'],
                           setIndex=state['setIndex'], totalSets=state['totalSets'])
-        if state['phase'] == 'finished':
+        if state['phase'] in ('grading', 'finished'):
             result['summary'] = summary(state)
-            result['feedback'] = [{**h, 'answer': q['answer'], 'explanation': q['explanation']} for h in state['history'] for q in state['questions'] if h['questionId'] == q['id']]
+            result['feedback'] = state.get('webFeedback') or [{**h, 'answer': _feedback_answer(q), 'explanation': q['explanation']} for h in state['history'] for q in state['questions'] if h['questionId'] == q['id']]
+            if state['phase'] == 'grading':
+                result['pendingCount'] = len(state.get('pendingGrades', {}))
             result['referenceUse'] = state.get('referenceUse', [])
         return result
 
@@ -1377,11 +1428,13 @@ class StudySession:
                 qid = grade['questionId']; item = pending[qid]
                 state.update(index=item['index'], phase='grading', gradeId=item['gradeId'], submitted=item['text'], hinted=qid in state['hintedIds'])
                 feedback = self.practice_one(state, {**grade, 'action': 'grade', 'gradeId': item['gradeId']})
+                feedback['answer'] = _feedback_answer(item['question'])
                 feedback.pop('summary', None)
                 feedback['hasNext'] = False
                 state['batchFeedback'].append(feedback)
             state.pop('pendingGrades'); state['phase'] = 'finished'
-            return {'status': 'finished', 'feedback': state.pop('batchFeedback'), 'summary': summary(state)}
+            state['webFeedback'] = state.get('webFeedback', []) + state.pop('batchFeedback')
+            return {'status': 'finished', 'feedback': state['webFeedback'], 'summary': summary(state)}
         if state['phase'] != 'question':
             raise ValueError('답변 제출 또는 평가가 이미 끝났습니다.')
         done = {h['questionId'] for h in state['history']}

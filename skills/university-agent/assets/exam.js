@@ -82,7 +82,7 @@ function progress() {
   if (exam.readOnly) { $('progress').textContent = '지난 시험과 당시 답안을 보고 있어요'; return; }
   $('progress').textContent = exam.webStarted === false ? exam.questionCount + '문항을 준비했어요'
     : exam.status === 'question' ? exam.questions.length + '문항 중 ' + count + '문항에 답했어요'
-    : exam.status === 'grading' ? '채점을 기다리고 있어요' : '채점이 끝났어요';
+    : exam.status === 'grading' ? (exam.feedback?.length ? '확인 가능한 결과가 있어요' : '채점을 기다리고 있어요') : '채점이 끝났어요';
 }
 function formatDuration(seconds) {
   seconds = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -236,7 +236,7 @@ function result(q, feedback) {
   box.append(node('p', OUTCOME[feedback.outcome] + ' ' + feedback.score + '/' + feedback.points + '점', 'outcome'));
   if (q.responseFormat !== 'choice' && q.responseFormat !== 'multi_choice') define(list, '내 답', answered(q) ? displayAnswer(q, drafts[q.id]) : '답을 쓰지 않았어요.', q.responseFormat === 'code' && answered(q) ? 'code' : '');
   else if (!chosen(q)) define(list, '내 답', '답을 고르지 않았어요.');
-  if (q.responseFormat !== 'choice' && q.responseFormat !== 'multi_choice') define(list, '모범 답안', feedback.answer, q.responseFormat === 'code' ? 'code' : '');
+  define(list, '정답', feedback.answer, q.responseFormat === 'code' ? 'code' : '');
   define(list, '해설', feedback.explanation);
   box.append(list);
   if (feedback.criteria.length) {
@@ -325,10 +325,11 @@ function render(data) {
   syncClock(data);
   $('notice').classList.toggle('grading', data.status === 'grading');
   if (data.status === 'grading') $('notice').textContent = '답안을 잘 받았어요. Codex가 평가 기준을 확인해 채점하면 이 화면에 결과가 나타나요. 채점이 시작되지 않으면 대화에서 “시험 채점해줘”라고 말해주세요.';
-  $('score').hidden = !finished; $('review').hidden = true;
-  if (finished) {
+  const provisional = data.status === 'grading' && data.summary;
+  $('score').hidden = !(finished || provisional); $('review').hidden = true;
+  if (finished || provisional) {
     const counts = data.summary.counts;
-    $('notice').textContent = '맞은 문항 ' + counts.correct + '개, 일부만 맞은 문항 ' + counts.partial + '개, 틀린 문항 ' + counts.incorrect + '개예요. 기준별 평가와 수업자료 근거를 함께 확인해보세요.';
+    $('notice').textContent = (provisional ? '현재 자동 채점된 결과예요. ' + (data.pendingCount || 0) + '개 문항은 추가 채점 중이에요. ' : '') + '맞은 문항 ' + counts.correct + '개, 일부만 맞은 문항 ' + counts.partial + '개, 틀린 문항 ' + counts.incorrect + '개예요. 기준별 평가와 수업자료 근거를 함께 확인해보세요.';
     $('score-got').textContent = data.summary.score; $('score-total').textContent = '/100';
     $('score').setAttribute('aria-label', '100점 만점에 ' + data.summary.score + '점');
     $('score').style.setProperty('--i', data.questions.length);
